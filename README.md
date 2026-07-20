@@ -1,22 +1,25 @@
 # GLLAM: Go Lightweight Local Agentic Memory
 
-A high-performance, single-file local memory engine for AI agents, backed by SQLite with WAL mode for concurrent access.
+A fast single-file agentic-memory engine: 
+- Karpathy's LLM-Wiki plus some temporal-semantics
+- Backed by SQLite in WAL for concurrent access
+- In Go for speed of execution
 
 ## Architecture
 
-GLLAM replaces abstract, latency-heavy Python pipelines (such as `cognee` or LangChain memory modules) with a streamlined, concurrent Go architecture. All data is stored in a single local SQLite file with three memory types:
+Concurrent Go. All data is stored in a single SQLite file with three memory types:
 
-- **Episodic** — Session summaries with temporal rolling-window queries
-- **Procedural** — Reusable step-by-step workflow recipes with helpfulness scoring
-- **Semantic** — Caveat-qualified entity graph with explicit contradiction tracking
+- **Episodic**  Session summaries with temporal rolling-window queries
+- **Procedural**  Reusable step-by-step workflow recipes with helpfulness scoring
+- **Semantic**  Caveat-qualified entity graph, with explicit contradiction tracking
 
 ### Key Design Decisions
 
 - **Zero Bloat**: No multi-layered ECL pipelines, nested async generators, or runtime schema generation
 - **Consolidated Storage**: Single SQLite file with `PRAGMA journal_mode = WAL` for concurrent reads
 - **Caveat-Qualified Graph**: Every relationship carries explicit conditions/constraints/exceptions
-- **Explicit Contradictions**: Conflicts are tracked as first-class relationships, not boolean flags
-- **Temporal Bounds**: Knowledge has `valid_from` / `valid_until` for automatic expiration
+- **Explicit Contradictions**: Conflicts are tracked as first-class relationships
+- **Temporal Bounds**: Knowledge has `valid_from` / `valid_until`
 - **Tiered Intent Routing**: Heuristic classification into Procedural / Semantic / Episodic retrieval paths
 
 ## Package Structure
@@ -161,7 +164,7 @@ Connection pool: `SetMaxOpenConns(1)` (single-writer model prevents SQLite table
 
 ## Contradiction Model
 
-Unlike boolean flags, contradictions are first-class relationships:
+Contradictions that remain stored will be of a temporal nature, eg. only version x of some software supports feature y.
 
 ```
 contradictions
@@ -178,4 +181,4 @@ When `AddEdge()` detects an existing active link with the same `source_id` and `
 
 ## License
 
-MIT
+All rights reserved
