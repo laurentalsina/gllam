@@ -61,7 +61,7 @@ func (e *GllamEngine) RetrieveProcedure(ctx context.Context, taskType string) (*
     return &pk, nil
 }
 
-// GetTopProcedures retrieves procedures ordered by helpfulness and usage
+// GetTopProcedures retrieves procedures ordered by helpfulness and usage (read-only → dbRO)
 func (e *GllamEngine) GetTopProcedures(ctx context.Context, limit int) ([]memory.ProceduralKnowledge, error) {
     query := `
         SELECT id, task_type, instructions, user_feedback_rules, times_applied, is_highly_helpful, version, superseded_by, updated_at
@@ -69,9 +69,87 @@ func (e *GllamEngine) GetTopProcedures(ctx context.Context, limit int) ([]memory
         ORDER BY is_highly_helpful DESC, times_applied DESC
         LIMIT ?`
 
-    rows, err := e.db.QueryContext(ctx, query, limit)
+    rows, err := e.dbRO.QueryContext(ctx, query, limit)
     if err != nil {
         return nil, fmt.Errorf("failed to get top procedures: %w", err)
+    }
+    defer rows.Close()
+
+    var procedures []memory.ProceduralKnowledge
+    for rows.Next() {
+        var pk memory.ProceduralKnowledge
+        if err := rows.Scan(
+            &pk.ID, &pk.TaskType, &pk.Instructions, &pk.UserFeedbackRules,
+            &pk.TimesApplied, &pk.IsHighlyHelpful, &pk.Version, &pk.SupersededBy, &pk.UpdatedAt); err != nil {
+            return nil, fmt.Errorf("failed to scan procedure: %w", err)
+        }
+        procedures = append(procedures, pk)
+    }
+
+    return procedures, rows.Err()
+}
+
+// StoreProcedureEmbedding generates and stores an embedding vector for a procedural knowledge entry.
+func (e *GllamEngine) StoreProcedureEmbedding(ctx context.Context, id string) error {
+    if e.embedder == nil {
+        return fmt.Errorf("no embedder configured")
+    }
+
+    var taskType, instructions string
+    err := e.db.QueryRowContext(ctx, "SELECT task_type, instructions FROM procedural_knowledge WHERE id = ?", id).Scan(&taskType, &instructions)
+    if err != nil {
+        return fmt.Errorf("failed to fetch procedure %s: %w", id, err)
+    }
+
+    textToEmbed := fmt.Sprintf("Task: %s\n%s", taskType, instructions)
+    embedding, err := e.embedder.Embed(ctx, textToEmbed)
+    if err != nil {
+        return fmt.Errorf("failed to generate embedding for %s: %w", id, err)
+    }
+
+    embeddingBlob, err := serializeEmbedding(embedding)
+    if err != nil {
+        return fmt.Errorf("failed to serialize embedding: %w", err)
+    }
+
+    _, err = e.db.ExecContext(ctx, `
+        INSERT INTO procedural_embeddings (id, embedding)
+        VALUES (?, vec_f32(?))
+        ON CONFLICT(id) DO UPDATE SET embedding = excluded.embedding
+    `, id, embeddingBlob)
+    if err != nil {
+        return fmt.Errorf("failed to store embedding for procedure %s: %w", id, err)
+    }
+    return nil
+}
+
+// SearchSimilarProcedures finds procedures with similar embeddings to the given query text.
+func (e *GllamEngine) SearchSimilarProcedures(ctx context.Context, queryText string, limit int) ([]memory.ProceduralKnowledge, error) {
+    if e.embedder == nil {
+        return nil, fmt.Errorf("no embedder configured")
+    }
+
+    queryEmbedding, err := e.embedder.Embed(ctx, queryText)
+    if err != nil {
+        return nil, fmt.Errorf("failed to generate query embedding: %w", err)
+    }
+
+    queryBlob, err := serializeEmbedding(queryEmbedding)
+    if err != nil {
+        return nil, fmt.Errorf("failed to serialize query embedding: %w", err)
+    }
+
+    query := `
+        SELECT pk.id, pk.task_type, pk.instructions, pk.user_feedback_rules, pk.times_applied, pk.is_highly_helpful, pk.version, pk.superseded_by, pk.updated_at
+        FROM procedural_embeddings pe
+        JOIN procedural_knowledge pk ON pe.id = pk.id
+        WHERE pe.embedding MATCH vec_f32(?)
+        ORDER BY pe.distance
+        LIMIT ?`
+
+    rows, err := e.dbRO.QueryContext(ctx, query, queryBlob, limit)
+    if err != nil {
+        return nil, fmt.Errorf("failed to search similar procedures: %w", err)
     }
     defer rows.Close()
 

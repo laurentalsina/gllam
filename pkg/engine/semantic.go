@@ -94,7 +94,7 @@ func (e *GllamEngine) ResolveContradiction(ctx context.Context, contradictionID,
     return nil
 }
 
-// GetUnresolvedContradictions retrieves all unresolved contradictions
+// GetUnresolvedContradictions retrieves all unresolved contradictions (read-only → dbRO)
 func (e *GllamEngine) GetUnresolvedContradictions(ctx context.Context) ([]memory.Contradiction, error) {
     query := `
         SELECT id, link1_source_id, link1_target_id, link1_relationship,
@@ -104,7 +104,7 @@ func (e *GllamEngine) GetUnresolvedContradictions(ctx context.Context) ([]memory
         WHERE resolved = 0
         ORDER BY detected_at DESC`
 
-    rows, err := e.db.QueryContext(ctx, query)
+    rows, err := e.dbRO.QueryContext(ctx, query)
     if err != nil {
         return nil, fmt.Errorf("failed to get unresolved contradictions: %w", err)
     }
@@ -138,4 +138,97 @@ func (e *GllamEngine) InvalidateObsoleteEdge(ctx context.Context, sourceID, rela
     }
 
     return nil
+}
+
+// StoreNodeEmbedding generates and stores an embedding vector for a semantic node.
+// The embedding is generated from the node's name using the configured embedder.
+func (e *GllamEngine) StoreNodeEmbedding(ctx context.Context, nodeID string) error {
+    if e.embedder == nil {
+        return fmt.Errorf("no embedder configured")
+    }
+
+    // Fetch the node to get its name
+    var name string
+    err := e.db.QueryRowContext(ctx, "SELECT name FROM semantic_nodes WHERE id = ?", nodeID).Scan(&name)
+    if err != nil {
+        return fmt.Errorf("failed to fetch node %s: %w", nodeID, err)
+    }
+
+    // Generate embedding
+    embedding, err := e.embedder.Embed(ctx, name)
+    if err != nil {
+        return fmt.Errorf("failed to generate embedding for %s: %w", nodeID, err)
+    }
+
+    // Serialize embedding to blob
+    embeddingBlob, err := serializeEmbedding(embedding)
+    if err != nil {
+        return fmt.Errorf("failed to serialize embedding: %w", err)
+    }
+
+    // Upsert into vec0 virtual table
+    _, err = e.db.ExecContext(ctx, `
+        INSERT INTO semantic_embeddings (node_id, embedding)
+        VALUES (?, vec_f32(?))
+        ON CONFLICT(node_id) DO UPDATE SET embedding = excluded.embedding
+    `, nodeID, embeddingBlob)
+    if err != nil {
+        return fmt.Errorf("failed to store embedding for node %s: %w", nodeID, err)
+    }
+
+    return nil
+}
+
+// SearchSimilarNodes finds nodes with similar embeddings to the given query text.
+func (e *GllamEngine) SearchSimilarNodes(ctx context.Context, queryText string, limit int) ([]struct {
+    NodeID   string
+    Distance float32
+}, error) {
+    if e.embedder == nil {
+        return nil, fmt.Errorf("no embedder configured")
+    }
+
+    // Generate query embedding
+    queryEmbedding, err := e.embedder.Embed(ctx, queryText)
+    if err != nil {
+        return nil, fmt.Errorf("failed to generate query embedding: %w", err)
+    }
+
+    // Serialize query embedding
+    queryBlob, err := serializeEmbedding(queryEmbedding)
+    if err != nil {
+        return nil, fmt.Errorf("failed to serialize query embedding: %w", err)
+    }
+
+    // Search using vec0 MATCH
+    query := `
+        SELECT se.node_id, se.distance
+        FROM semantic_embeddings se
+        JOIN semantic_nodes sn ON se.node_id = sn.id
+        WHERE se.embedding MATCH vec_f32(?)
+        ORDER BY se.distance
+        LIMIT ?`
+
+    rows, err := e.dbRO.QueryContext(ctx, query, queryBlob, limit)
+    if err != nil {
+        return nil, fmt.Errorf("failed to search similar nodes: %w", err)
+    }
+    defer rows.Close()
+
+    var results []struct {
+        NodeID   string
+        Distance float32
+    }
+    for rows.Next() {
+        var r struct {
+            NodeID   string
+            Distance float32
+        }
+        if err := rows.Scan(&r.NodeID, &r.Distance); err != nil {
+            return nil, fmt.Errorf("failed to scan result: %w", err)
+        }
+        results = append(results, r)
+    }
+
+    return results, rows.Err()
 }

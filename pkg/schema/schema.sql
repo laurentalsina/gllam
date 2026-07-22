@@ -68,3 +68,15 @@ CREATE TABLE IF NOT EXISTS contradictions (
 );
 
 CREATE INDEX IF NOT EXISTS idx_contradictions_unresolved ON contradictions(resolved, detected_at DESC);
+
+-- 6. SEMANTIC EMBEDDINGS (sqlite-vec virtual table for SIMD-optimized vector search)
+CREATE VIRTUAL TABLE IF NOT EXISTS semantic_embeddings USING vec0(
+    node_id TEXT PRIMARY KEY,
+    embedding float[1536]
+);
+
+-- 7. PROCEDURAL EMBEDDINGS (sqlite-vec virtual table for intent routing)
+CREATE VIRTUAL TABLE IF NOT EXISTS procedural_embeddings USING vec0(
+    id TEXT PRIMARY KEY,
+    embedding float[1536]
+);

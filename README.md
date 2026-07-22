@@ -1,25 +1,30 @@
 # GLLAM: Go Lightweight Local Agentic Memory
 
-A fast single-file agentic-memory engine
-- Karpathy's LLM-Wiki idea plus some temporal semantics
+A fast single-file agentic-memory engine with vector similarity search:
+- Karpathy's LLM-Wiki idea plus some temporal-semantics
 - Backed by SQLite in WAL for concurrent access
+- sqlite-vec for SIMD-optimized vector similarity search
 - In Go for speed of execution
 
 ## Architecture
 
-All data is stored in a single SQLite file with three memory types:
+Concurrent Go. All data is stored in a single SQLite file with three memory types plus vector search:
 
 - **Episodic**  Session summaries with temporal rolling-window queries
 - **Procedural**  Reusable step-by-step workflow recipes with helpfulness scoring
 - **Semantic**  Caveat-qualified entity graph, with explicit temporal contradiction tracking
+- **Vector**  Embedding similarity search via sqlite-vec (SIMD-optimized)
 
 ### Key Design Decisions
 
 - **Avoid Bloat**: No multi-layered ECL pipelines, no nested async generators, no runtime schema generation
-- **Consolidated Storage**: Single SQLite file, inclusive of vector-search on embeddings 
-- **Caveat-Qualified**: Semantic relationships carry explicit conditions/constraints/exceptions
-- **Temporal Bounds**: Semantic relationships include validity date-time information
-- **Tiered Intent Routing**: Heuristic for memory access from Procedural, Semantic, or Episodic stores
+- **Dual-Handle Concurrency**: Write handle (`SetMaxOpenConns(1)`) serializes mutations; read handle (`mode=ro`, `SetMaxOpenConns(8)`) enables concurrent queries without contention
+- **Consolidated Storage**: Single SQLite file with `PRAGMA journal_mode = WAL` for concurrent reads
+- **Caveat-Qualified Graph**: Semantic relationships carry explicit conditions/constraints/exceptions
+- **Explicit Contradictions**: Conflicts are tracked as first-class relationships
+- **Temporal Bounds**: Semantic relationships include validity date-time information (`valid_from` / `valid_until`)
+- **Tiered Intent Routing**: Heuristic classification and vector similarity search for memory access from Procedural, Semantic, or Episodic stores
+- **Vector Search**: sqlite-vec provides SIMD-optimized distance functions for embedding similarity
 
 ## Package Structure
 
@@ -47,28 +52,64 @@ gllam/
 ```bash
 go mod init github.com/laurentalsina/gllam
 go get github.com/mattn/go-sqlite3
+go get github.com/asg017/sqlite-vec-go-bindings/cgo
+```
+
+### Build Requirements
+
+sqlite-vec CGO bindings require `sqlite3.h`. Install system-wide or set `CGO_CFLAGS`:
+
+```bash
+# Option 1: System-wide (recommended)
+sudo dnf install sqlite-devel  # Fedora/RHEL
+# sudo apt-get install libsqlite3-dev  # Ubuntu/Debian
+# sudo apk add sqlite-dev  # Alpine
+
+# Option 2: Temporary include path
+curl -sL https://www.sqlite.org/2024/sqlite-amalgamation-3470200.zip -o /tmp/sqlite.zip
+unzip -qo /tmp/sqlite.zip -d /tmp
+export CGO_CFLAGS="-I/tmp/sqlite-amalgamation-3470200"
+```
+
+Then build with CGO enabled:
+```bash
+CGO_ENABLED=1 go build ./...
 ```
 
 ## Quick Start
 
 ```bash
+# Start embeddings server (separate process)
+llama-server -m your-embedding-model.gguf --port 8080
+
 # Seed sample data
 go run ./cmd/gllam -seed
 
-# Query with auto-routing
-go run ./cmd/gllam -query "how to deploy caddy" -entity "caddy"
+# Recall with auto-routing
+go run ./cmd/gllam --recall "how to deploy caddy" --entity "caddy"
+
+# Recall with embeddings
+go run ./cmd/gllam --embeddings-server http://localhost:8080 --recall "web server" --entity "caddy"
 
 # Interactive REPL
-go run ./cmd/gllam
+go run ./cmd/gllam --embeddings-server http://localhost:8080
 ```
 
 ## Usage as a Library
 
 ```go
-import "github.com/laurentalsina/gllam/pkg/engine"
+import (
+    "context"
+    "log"
+    "time"
 
-// Initialize
-gllam, err := engine.NewGllamEngine("./data.db")
+    "github.com/laurentalsina/gllam/pkg/engine"
+    "github.com/laurentalsina/gllam/pkg/memory"
+)
+
+// Initialize with llama.cpp embedder
+embedder := engine.NewLlamaEmbedder("http://localhost:8080")
+gllam, err := engine.NewGllamEngine("./data.db", embedder)
 if err != nil { log.Fatal(err) }
 defer gllam.Close()
 
@@ -76,6 +117,11 @@ if err := gllam.InitSchema(); err != nil { log.Fatal(err) }
 
 // Store a semantic node
 gllam.UpsertNode(ctx, memory.SemanticNode{ID: "caddy", Name: "Caddy", Type: "service"})
+
+// Generate and store embedding for the node
+if err := gllam.StoreNodeEmbedding(ctx, "caddy"); err != nil {
+    log.Fatal(err)
+}
 
 // Store a caveat-qualified link
 gllam.AddEdge(ctx, memory.SemanticLink{
@@ -92,6 +138,13 @@ if err != nil { log.Fatal(err) }
 // Format for LLM consumption
 prompt := engine.FormatSystemPrompt(ctxResult)
 fmt.Print(prompt)
+
+// Semantic similarity search
+results, err := gllam.SearchSimilarNodes(ctx, "web server", 5)
+if err != nil { log.Fatal(err) }
+for _, r := range results {
+    fmt.Printf("Node: %s (distance: %.4f)\n", r.NodeID, r.Distance)
+}
 ```
 
 ## Database Schema
@@ -103,6 +156,7 @@ fmt.Print(prompt)
 | `contradictions` | `memory.Contradiction` | Explicit conflict relationships between links |
 | `procedural_knowledge` | `memory.ProceduralKnowledge` | Reusable workflow recipes |
 | `episodic_summaries` | `memory.EpisodicSummary` | Session summaries with timestamps |
+| `semantic_embeddings` | *vec0 virtual table* | Embedding vectors for similarity search (sqlite-vec) |
 
 ### SQLite Configuration
 
@@ -114,7 +168,11 @@ PRAGMA foreign_keys = ON;
 PRAGMA busy_timeout = 5000;
 ```
 
-Connection pool: `SetMaxOpenConns(1)` (single-writer model prevents SQLite table-lock contention).
+Connection architecture: dual-handle design for true read concurrency:
+- **Write handle**: `SetMaxOpenConns(1)` — serializes all mutations through a single connection
+- **Read handle**: opened with `mode=ro` DSN flag, `SetMaxOpenConns(8)` — concurrent read-only queries never contend with the writer
+
+WAL-mode readers don't block each other, and the read-only file descriptor is completely independent of the writer.
 
 ## API Reference
 
@@ -122,9 +180,19 @@ Connection pool: `SetMaxOpenConns(1)` (single-writer model prevents SQLite table
 
 | Method | Description |
 |--------|-------------|
-| `NewGllamEngine(dbPath)` | Open/configure SQLite connection |
+| `NewGllamEngine(dbPath, embedder)` | Open dual-handle SQLite connection with sqlite-vec and embedder |
 | `InitSchema()` | Execute `schema.sql` DDL |
-| `Close()` | Close database connection |
+| `Close()` | Close both database handles |
+| `DB()` | Return write handle for direct SQL access |
+| `DBRO()` | Return read-only handle for concurrent queries |
+
+### Embedding
+
+| Method | Description |
+|--------|-------------|
+| `StoreNodeEmbedding(ctx, nodeID)` | Generate and store embedding for a node |
+| `SearchSimilarNodes(ctx, query, limit)` | Find nodes similar to query text |
+| `NewLlamaEmbedder(baseURL)` | Create embedder for llama.cpp server |
 
 ### Semantic (Graph)
 
@@ -161,6 +229,29 @@ Connection pool: `SetMaxOpenConns(1)` (single-writer model prevents SQLite table
 | `RouteAndAssemble(ctx, prompt, entities)` | Classify intent, retrieve relevant data |
 | `FormatSystemPrompt(ctx)` | Format compiled context as Markdown |
 
+### Vector Search
+
+sqlite-vec is registered globally via `sqlite_vec.Auto()` and provides SIMD-optimized vector operations. Use directly in SQL queries:
+
+```sql
+-- Create a vector virtual table
+CREATE VIRTUAL TABLE semantic_embeddings USING vec0(
+    node_id INTEGER PRIMARY KEY,
+    embedding float[1536]
+);
+
+-- Insert embeddings
+INSERT INTO semantic_embeddings(node_id, embedding)
+VALUES (?, vec_f32(?));
+
+-- Similarity search (lower distance = more similar)
+SELECT node_id, distance
+FROM semantic_embeddings
+WHERE embedding MATCH vec_f32(?)
+ORDER BY distance
+LIMIT 10;
+```
+
 ## Contradiction Model
 
 Contradictions that remain stored will be of a temporal nature, eg. only version x of some software supports feature y.
@@ -177,6 +268,48 @@ contradictions
 ```
 
 When `AddEdge()` detects an existing active link with the same `source_id` and `relationship` but a different `target_id`, it automatically creates a contradiction entry. The router surfaces unresolved contradictions in the grilling prompt for user clarification.
+
+## Embedding Architecture
+
+GLLAM uses a pluggable embedder interface for generating vector embeddings:
+
+```go
+type Embedder interface {
+    Embed(ctx context.Context, text string) ([]float32, error)
+}
+```
+
+### Default: Embeddings Server
+
+The `LlamaEmbedder` connects to a running embeddings server (e.g., `llama-server`):
+
+```bash
+# Start embeddings server with an embedding model
+llama-server -m nomic-embed-text.gguf --port 8080
+```
+
+```go
+embedder := engine.NewLlamaEmbedder("http://localhost:8080")
+gllam, err := engine.NewGllamEngine("./data.db", embedder)
+```
+
+**Behavior:**
+- Hard fail if server is unreachable (no fallback)
+- 30-second timeout per request
+- Embeddings generated on-demand via `StoreNodeEmbedding()` or `SearchSimilarNodes()`
+
+### Custom Embedders
+
+Implement the `Embedder` interface for other sources:
+
+```go
+type MyEmbedder struct { /* ... */ }
+
+func (m *MyEmbedder) Embed(ctx context.Context, text string) ([]float32, error) {
+    // Your embedding logic
+    return vector, nil
+}
+```
 
 ## License
 

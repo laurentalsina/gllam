@@ -14,16 +14,23 @@ import (
 )
 
 func main() {
-    query := flag.String("query", "", "Query to process")
+    recall := flag.String("recall", "", "Recall context for LLM (natural language query)")
     entity := flag.String("entity", "", "Entity to query (comma-separated)")
     dbPath := flag.String("db", "./gllam_data.db", "Path to SQLite database")
+    embeddingsServer := flag.String("embeddings-server", "", "Embeddings server URL (e.g., http://localhost:8080)")
     seed := flag.Bool("seed", false, "Seed sample data and exit")
     flag.Parse()
 
     ctx := context.Background()
 
+    // Create embedder if embeddings server is provided
+    var embedder engine.Embedder
+    if *embeddingsServer != "" {
+        embedder = engine.NewLlamaEmbedder(*embeddingsServer)
+    }
+
     // Initialize engine
-    gllam, err := engine.NewGllamEngine(*dbPath)
+    gllam, err := engine.NewGllamEngine(*dbPath, embedder)
     if err != nil {
         fmt.Fprintf(os.Stderr, "Failed to initialize engine: %v\n", err)
         os.Exit(1)
@@ -43,8 +50,8 @@ func main() {
         return
     }
 
-    // If -query flag is set, process and exit
-    if *query != "" {
+    // If -recall flag is set, process and exit
+    if *recall != "" {
         var entities []string
         if *entity != "" {
             entities = strings.Split(*entity, ",")
@@ -53,7 +60,7 @@ func main() {
             }
         }
 
-        compiled, err := gllam.RouteAndAssemble(ctx, *query, entities)
+        compiled, err := gllam.RouteAndAssemble(ctx, *recall, entities)
         if err != nil {
             fmt.Fprintf(os.Stderr, "Failed to route and assemble: %v\n", err)
             os.Exit(1)

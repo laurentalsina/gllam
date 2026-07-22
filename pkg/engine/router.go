@@ -8,40 +8,67 @@ import (
     "github.com/laurentalsina/gllam/pkg/memory"
 )
 
-// RouteAndAssemble classifies the user prompt and assembles a structured context
+// RouteAndAssemble classifies the user prompt and assembles a structured context (read-only → dbRO)
 func (e *GllamEngine) RouteAndAssemble(ctx context.Context, userPrompt string, entities []string) (*memory.CompiledContext, error) {
     ctxResult := &memory.CompiledContext{}
 
-    // Heuristic: detect action keywords for procedural retrieval
-    actionKeywords := []string{"how", "deploy", "fix", "build", "configure", "setup", "install", "create", "implement"}
-    isProcedural := false
-    for _, kw := range actionKeywords {
-        if strings.Contains(strings.ToLower(userPrompt), kw) {
-            isProcedural = true
-            break
+    // 1. Procedural Knowledge: Try Vector Search first, fallback to heuristic
+    var procedures []memory.ProceduralKnowledge
+    if e.embedder != nil {
+        procs, err := e.SearchSimilarProcedures(ctx, userPrompt, 2)
+        if err == nil && len(procs) > 0 {
+            procedures = procs
         }
     }
 
-    // Retrieve procedural knowledge if action keywords detected
-    if isProcedural {
-        procedures, err := e.GetTopProcedures(ctx, 5)
-        if err != nil {
-            return nil, fmt.Errorf("failed to retrieve procedures: %w", err)
+    if len(procedures) == 0 {
+        actionKeywords := []string{"how", "deploy", "fix", "build", "configure", "setup", "install", "create", "implement"}
+        isProcedural := false
+        for _, kw := range actionKeywords {
+            if strings.Contains(strings.ToLower(userPrompt), kw) {
+                isProcedural = true
+                break
+            }
         }
-        ctxResult.Procedural = procedures
+        if isProcedural {
+            procs, err := e.GetTopProcedures(ctx, 3)
+            if err == nil {
+                procedures = procs
+            }
+        }
+    }
+    ctxResult.Procedural = procedures
+
+    // 2. Semantic Entities: Auto-discover from prompt via vector search
+    if e.embedder != nil {
+        similarNodes, err := e.SearchSimilarNodes(ctx, userPrompt, 3)
+        if err == nil {
+            for _, node := range similarNodes {
+                // Ensure we don't duplicate explicitly provided entities
+                isDup := false
+                for _, ent := range entities {
+                    if ent == node.NodeID {
+                        isDup = true
+                        break
+                    }
+                }
+                if !isDup {
+                    entities = append(entities, node.NodeID)
+                }
+            }
+        }
     }
 
-    // Retrieve semantic links for requested entities
+    // Retrieve semantic links for requested and discovered entities
     if len(entities) > 0 {
         var links []memory.SemanticLink
         for _, entity := range entities {
-            // Query active links where entity is source or target
             query := `
                 SELECT source_id, target_id, relationship, caveats, valid_from, valid_until, updated_at
                 FROM semantic_links
                 WHERE valid_until IS NULL AND (source_id = ? OR target_id = ?)`
 
-            rows, err := e.db.QueryContext(ctx, query, entity, entity)
+            rows, err := e.dbRO.QueryContext(ctx, query, entity, entity)
             if err != nil {
                 return nil, fmt.Errorf("failed to query links for entity %s: %w", entity, err)
             }

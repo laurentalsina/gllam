@@ -20,7 +20,7 @@ func (e *GllamEngine) SaveEpisodicSummary(ctx context.Context, summary memory.Ep
     return nil
 }
 
-// GetRecentEpisodes retrieves the most recent episodic summaries
+// GetRecentEpisodes retrieves the most recent episodic summaries (read-only → dbRO)
 func (e *GllamEngine) GetRecentEpisodes(ctx context.Context, limit int) ([]memory.EpisodicSummary, error) {
     query := `
         SELECT id, session_id, summary_text, created_at
@@ -28,7 +28,7 @@ func (e *GllamEngine) GetRecentEpisodes(ctx context.Context, limit int) ([]memor
         ORDER BY created_at DESC
         LIMIT ?`
 
-    rows, err := e.db.QueryContext(ctx, query, limit)
+    rows, err := e.dbRO.QueryContext(ctx, query, limit)
     if err != nil {
         return nil, fmt.Errorf("failed to get recent episodes: %w", err)
     }
@@ -46,7 +46,7 @@ func (e *GllamEngine) GetRecentEpisodes(ctx context.Context, limit int) ([]memor
     return episodes, rows.Err()
 }
 
-// GetEpisodesInWindow retrieves episodic summaries within a temporal window
+// GetEpisodesInWindow retrieves episodic summaries within a temporal window (read-only → dbRO)
 func (e *GllamEngine) GetEpisodesInWindow(ctx context.Context, startTime, endTime int64) ([]memory.EpisodicSummary, error) {
     query := `
         SELECT id, session_id, summary_text, created_at
@@ -54,7 +54,7 @@ func (e *GllamEngine) GetEpisodesInWindow(ctx context.Context, startTime, endTim
         WHERE created_at >= ? AND created_at <= ?
         ORDER BY created_at DESC`
 
-    rows, err := e.db.QueryContext(ctx, query, startTime, endTime)
+    rows, err := e.dbRO.QueryContext(ctx, query, startTime, endTime)
     if err != nil {
         return nil, fmt.Errorf("failed to get episodes in window: %w", err)
     }
