@@ -1,26 +1,25 @@
 # GLLAM: Go Lightweight Local Agentic Memory
 
-A fast single-file agentic-memory engine: 
-- Karpathy's LLM-Wiki plus some temporal-semantics
+A fast single-file agentic-memory engine
+- Karpathy's LLM-Wiki idea plus some temporal semantics
 - Backed by SQLite in WAL for concurrent access
 - In Go for speed of execution
 
 ## Architecture
 
-Concurrent Go. All data is stored in a single SQLite file with three memory types:
+All data is stored in a single SQLite file with three memory types:
 
 - **Episodic**  Session summaries with temporal rolling-window queries
 - **Procedural**  Reusable step-by-step workflow recipes with helpfulness scoring
-- **Semantic**  Caveat-qualified entity graph, with explicit contradiction tracking
+- **Semantic**  Caveat-qualified entity graph, with explicit temporal contradiction tracking
 
 ### Key Design Decisions
 
-- **Zero Bloat**: No multi-layered ECL pipelines, nested async generators, or runtime schema generation
-- **Consolidated Storage**: Single SQLite file with `PRAGMA journal_mode = WAL` for concurrent reads
-- **Caveat-Qualified Graph**: Every relationship carries explicit conditions/constraints/exceptions
-- **Explicit Contradictions**: Conflicts are tracked as first-class relationships
-- **Temporal Bounds**: Knowledge has `valid_from` / `valid_until`
-- **Tiered Intent Routing**: Heuristic classification into Procedural / Semantic / Episodic retrieval paths
+- **Avoid Bloat**: No multi-layered ECL pipelines, no nested async generators, no runtime schema generation
+- **Consolidated Storage**: Single SQLite file, inclusive of vector-search on embeddings 
+- **Caveat-Qualified**: Semantic relationships carry explicit conditions/constraints/exceptions
+- **Temporal Bounds**: Semantic relationships include validity date-time information
+- **Tiered Intent Routing**: Heuristic for memory access from Procedural, Semantic, or Episodic stores
 
 ## Package Structure
 
@@ -181,4 +180,4 @@ When `AddEdge()` detects an existing active link with the same `source_id` and `
 
 ## License
 
-All rights reserved
+(C) Laurent Alsina Blackmore 2026 -  All rights reserved
