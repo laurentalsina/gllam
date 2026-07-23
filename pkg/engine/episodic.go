@@ -23,7 +23,8 @@ func (e *GllamEngine) SaveEpisodicSummary(ctx context.Context, summary memory.Ep
         if err == nil {
             embBytes, err := serializeEmbedding(emb)
             if err == nil {
-                qVec := `INSERT INTO episodic_embeddings (id, embedding) VALUES (?, ?)`
+                e.db.ExecContext(ctx, "DELETE FROM episodic_embeddings WHERE session_id = ?", summary.ID)
+                qVec := `INSERT INTO episodic_embeddings (session_id, embedding) VALUES (?, vec_f32(?))`
                 e.db.ExecContext(ctx, qVec, summary.ID, embBytes)
             }
         }
@@ -97,10 +98,13 @@ func (e *GllamEngine) SearchSimilarEpisodes(ctx context.Context, queryText strin
 
     query := `
         SELECT es.id, es.session_id, es.summary_text, es.created_at
-        FROM episodic_embeddings ee
-        JOIN episodic_summaries es ON ee.id = es.id
-        WHERE ee.embedding MATCH ? AND k = ?
-        ORDER BY distance ASC`
+        FROM (
+            SELECT session_id, distance
+            FROM episodic_embeddings
+            WHERE embedding MATCH vec_f32(?) AND k = ?
+        ) ee
+        JOIN episodic_summaries es ON +ee.session_id = es.id
+        ORDER BY ee.distance ASC`
 
     embBytes, err := serializeEmbedding(emb)
     if err != nil {

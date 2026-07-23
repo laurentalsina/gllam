@@ -52,18 +52,18 @@ CREATE INDEX IF NOT EXISTS idx_links_lookup ON semantic_links(source_id, target_
 
 -- 6. SEMANTIC EMBEDDINGS (sqlite-vec virtual table for SIMD-optimized vector search)
 CREATE VIRTUAL TABLE IF NOT EXISTS semantic_embeddings USING vec0(
-    node_id TEXT PRIMARY KEY,
-    embedding float[1536]
+    +node_id TEXT,
+    embedding float[1024]
 );
 
 -- 7. PROCEDURAL EMBEDDINGS (sqlite-vec virtual table for intent routing)
 CREATE VIRTUAL TABLE IF NOT EXISTS procedural_embeddings USING vec0(
-    id TEXT PRIMARY KEY,
-    embedding float[1536]
+    +id TEXT,
+    embedding float[1024]
 );
 
 -- 8. EPISODIC EMBEDDINGS (sqlite-vec virtual table for semantic retrieval of memory sessions)
 CREATE VIRTUAL TABLE IF NOT EXISTS episodic_embeddings USING vec0(
-    id TEXT PRIMARY KEY,
-    embedding float[1536]
+    +session_id TEXT,
+    embedding float[1024]
 );

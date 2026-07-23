@@ -112,10 +112,14 @@ func (e *GllamEngine) StoreProcedureEmbedding(ctx context.Context, id string) er
         return fmt.Errorf("failed to serialize embedding: %w", err)
     }
 
+    _, err = e.db.ExecContext(ctx, "DELETE FROM procedural_embeddings WHERE id = ?", id)
+    if err != nil {
+        return fmt.Errorf("failed to delete old procedural embedding: %w", err)
+    }
+
     _, err = e.db.ExecContext(ctx, `
         INSERT INTO procedural_embeddings (id, embedding)
         VALUES (?, vec_f32(?))
-        ON CONFLICT(id) DO UPDATE SET embedding = excluded.embedding
     `, id, embeddingBlob)
     if err != nil {
         return fmt.Errorf("failed to store embedding for procedure %s: %w", id, err)
@@ -141,11 +145,13 @@ func (e *GllamEngine) SearchSimilarProcedures(ctx context.Context, queryText str
 
     query := `
         SELECT pk.id, pk.task_type, pk.instructions, pk.user_feedback_rules, pk.times_applied, pk.is_highly_helpful, pk.version, pk.superseded_by, pk.updated_at
-        FROM procedural_embeddings pe
-        JOIN procedural_knowledge pk ON pe.id = pk.id
-        WHERE pe.embedding MATCH vec_f32(?)
-        ORDER BY pe.distance
-        LIMIT ?`
+        FROM (
+            SELECT id, distance
+            FROM procedural_embeddings
+            WHERE embedding MATCH vec_f32(?) AND k = ?
+        ) pe
+        JOIN procedural_knowledge pk ON +pe.id = pk.id
+        ORDER BY pe.distance`
 
     rows, err := e.dbRO.QueryContext(ctx, query, queryBlob, limit)
     if err != nil {

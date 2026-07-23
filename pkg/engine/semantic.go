@@ -146,10 +146,15 @@ func (e *GllamEngine) StoreNodeEmbedding(ctx context.Context, nodeID string) err
     }
 
     // Upsert into vec0 virtual table
+    // sqlite-vec does not support ON CONFLICT (UPSERT), so we DELETE then INSERT
+    _, err = e.db.ExecContext(ctx, "DELETE FROM semantic_embeddings WHERE node_id = ?", nodeID)
+    if err != nil {
+        return fmt.Errorf("failed to delete old embedding for node %s: %w", nodeID, err)
+    }
+
     _, err = e.db.ExecContext(ctx, `
         INSERT INTO semantic_embeddings (node_id, embedding)
         VALUES (?, vec_f32(?))
-        ON CONFLICT(node_id) DO UPDATE SET embedding = excluded.embedding
     `, nodeID, embeddingBlob)
     if err != nil {
         return fmt.Errorf("failed to store embedding for node %s: %w", nodeID, err)
@@ -181,15 +186,14 @@ func (e *GllamEngine) SearchSimilarNodes(ctx context.Context, queryText string, 
 
     // Search using vec0 MATCH
     query := `
-        SELECT se.node_id, se.distance
-        FROM semantic_embeddings se
-        JOIN semantic_nodes sn ON se.node_id = sn.id
-        WHERE se.embedding MATCH vec_f32(?)
-        ORDER BY se.distance
-        LIMIT ?`
+        SELECT node_id, distance
+        FROM semantic_embeddings
+        WHERE embedding MATCH vec_f32(?) AND k = ?
+        ORDER BY distance`
 
     rows, err := e.dbRO.QueryContext(ctx, query, queryBlob, limit)
     if err != nil {
+        fmt.Printf("SQL Error in SearchSimilarNodes: %v\n", err)
         return nil, fmt.Errorf("failed to search similar nodes: %w", err)
     }
     defer rows.Close()
@@ -209,5 +213,6 @@ func (e *GllamEngine) SearchSimilarNodes(ctx context.Context, queryText string, 
         results = append(results, r)
     }
 
+    fmt.Printf("SearchSimilarNodes found %d nodes\n", len(results))
     return results, rows.Err()
 }

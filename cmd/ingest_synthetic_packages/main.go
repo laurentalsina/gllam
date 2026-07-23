@@ -55,7 +55,9 @@ func main() {
 		if err := gllam.UpsertNode(ctx, n); err != nil {
 			fmt.Printf("Error saving node %s: %v\n", n.ID, err)
 		} else {
-			_ = gllam.StoreNodeEmbedding(ctx, n.ID) // Store embedding for searchability
+			if err := gllam.StoreNodeEmbedding(ctx, n.ID); err != nil {
+				fmt.Printf("Error storing embedding for node %s: %v\n", n.ID, err)
+			}
 		}
 	}
 
