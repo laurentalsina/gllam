@@ -66,7 +66,8 @@ func (e *GllamEngine) RouteAndAssemble(ctx context.Context, userPrompt string, e
             query := `
                 SELECT source_id, target_id, relationship, caveats, valid_from, valid_until, updated_at
                 FROM semantic_links
-                WHERE valid_until IS NULL AND (source_id = ? OR target_id = ?)`
+                WHERE valid_until IS NULL AND (source_id = ? OR target_id = ?)
+                LIMIT 15`
 
             rows, err := e.dbRO.QueryContext(ctx, query, entity, entity)
             if err != nil {
@@ -87,30 +88,18 @@ func (e *GllamEngine) RouteAndAssemble(ctx context.Context, userPrompt string, e
         ctxResult.Semantic = links
     }
 
-    // Retrieve unresolved contradictions
-    contradictions, err := e.GetUnresolvedContradictions(ctx)
-    if err != nil {
-        return nil, fmt.Errorf("failed to get contradictions: %w", err)
-    }
-    ctxResult.Contradictions = contradictions
-
-    // Build grilling prompt from contradictions
-    if len(contradictions) > 0 {
-        ctxResult.HasConflicts = true
-        var prompts []string
-        for _, c := range contradictions {
-            prompts = append(prompts, fmt.Sprintf(
-                "⚠️ Contradiction %s: (%s) -[%s]-> (%s) vs (%s) -[%s]-> (%s). Please clarify.",
-                c.ID, c.Link1SourceID, c.Link1Relationship, c.Link1TargetID,
-                c.Link2SourceID, c.Link2Relationship, c.Link2TargetID))
+    // Append relevant episodic summaries
+    var episodes []memory.EpisodicSummary
+    if e.embedder != nil {
+        eps, err := e.SearchSimilarEpisodes(ctx, userPrompt, 5)
+        if err == nil {
+            episodes = eps
         }
-        ctxResult.GrillingPrompt = strings.Join(prompts, "\n")
-    }
-
-    // Always append recent episodic summaries for continuity
-    episodes, err := e.GetRecentEpisodes(ctx, 3)
-    if err != nil {
-        return nil, fmt.Errorf("failed to get recent episodes: %w", err)
+    } else {
+        eps, err := e.GetRecentEpisodes(ctx, 3)
+        if err == nil {
+            episodes = eps
+        }
     }
     ctxResult.Episodic = episodes
 
@@ -123,23 +112,13 @@ func FormatSystemPrompt(ctx *memory.CompiledContext) string {
 
     sb.WriteString("# GLLAM Context\n\n")
 
-    // Grilling prompt first if conflicts exist
-    if ctx.HasConflicts && ctx.GrillingPrompt != "" {
-        sb.WriteString(ctx.GrillingPrompt + "\n\n")
-    }
-
-    // Contradictions detail
-    if len(ctx.Contradictions) > 0 {
-        sb.WriteString("## Active Contradictions\n\n")
-        for _, c := range ctx.Contradictions {
-            sb.WriteString(fmt.Sprintf("### %s\n", c.ID))
-            sb.WriteString(fmt.Sprintf("- Link 1: (%s) -[%s]-> (%s)\n", c.Link1SourceID, c.Link1Relationship, c.Link1TargetID))
-            sb.WriteString(fmt.Sprintf("- Link 2: (%s) -[%s]-> (%s)\n", c.Link2SourceID, c.Link2Relationship, c.Link2TargetID))
-            sb.WriteString(fmt.Sprintf("- Detected: %s\n", formatTimestamp(c.DetectedAt)))
-            if c.ResolutionNotes != "" {
-                sb.WriteString(fmt.Sprintf("- Resolution: %s\n", c.ResolutionNotes))
+    // Dynamic warning if conflicts are present in the retrieved graph
+    if len(ctx.Semantic) > 0 {
+        for _, link := range ctx.Semantic {
+            if link.Relationship == "has_unresolved_conflict" {
+                sb.WriteString("⚠️ Warning: The semantic graph contains unresolved conflicts. Please ask the user to clarify which conflicting claim is correct.\n\n")
+                break
             }
-            sb.WriteString("\n")
         }
     }
 

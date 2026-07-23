@@ -48,26 +48,7 @@ CREATE TABLE IF NOT EXISTS semantic_links (
 
 CREATE INDEX IF NOT EXISTS idx_links_lookup ON semantic_links(source_id, target_id);
 
--- 5. CONTRADICTIONS (Explicit relationships between conflicting SemanticLinks)
-CREATE TABLE IF NOT EXISTS contradictions (
-    id TEXT PRIMARY KEY,
-    link1_source_id TEXT NOT NULL,
-    link1_target_id TEXT NOT NULL,
-    link1_relationship TEXT NOT NULL,
-    link2_source_id TEXT NOT NULL,
-    link2_target_id TEXT NOT NULL,
-    link2_relationship TEXT NOT NULL,
-    detected_at INTEGER NOT NULL,         -- Unix timestamp
-    resolved BOOLEAN DEFAULT 0,           -- 1 if user resolved the conflict
-    resolved_at INTEGER,                  -- Unix timestamp when resolved
-    resolution_notes TEXT,                -- User's clarification
-    FOREIGN KEY (link1_source_id) REFERENCES semantic_nodes(id),
-    FOREIGN KEY (link1_target_id) REFERENCES semantic_nodes(id),
-    FOREIGN KEY (link2_source_id) REFERENCES semantic_nodes(id),
-    FOREIGN KEY (link2_target_id) REFERENCES semantic_nodes(id)
-);
 
-CREATE INDEX IF NOT EXISTS idx_contradictions_unresolved ON contradictions(resolved, detected_at DESC);
 
 -- 6. SEMANTIC EMBEDDINGS (sqlite-vec virtual table for SIMD-optimized vector search)
 CREATE VIRTUAL TABLE IF NOT EXISTS semantic_embeddings USING vec0(
@@ -77,6 +58,12 @@ CREATE VIRTUAL TABLE IF NOT EXISTS semantic_embeddings USING vec0(
 
 -- 7. PROCEDURAL EMBEDDINGS (sqlite-vec virtual table for intent routing)
 CREATE VIRTUAL TABLE IF NOT EXISTS procedural_embeddings USING vec0(
+    id TEXT PRIMARY KEY,
+    embedding float[1536]
+);
+
+-- 8. EPISODIC EMBEDDINGS (sqlite-vec virtual table for semantic retrieval of memory sessions)
+CREATE VIRTUAL TABLE IF NOT EXISTS episodic_embeddings USING vec0(
     id TEXT PRIMARY KEY,
     embedding float[1536]
 );

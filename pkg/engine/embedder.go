@@ -70,16 +70,14 @@ func (l *LlamaEmbedder) Embed(ctx context.Context, text string) ([]float32, erro
         return nil, fmt.Errorf("llama.cpp server returned %d: %s", resp.StatusCode, string(respBody))
     }
 
-    var embedResp struct {
-        Embedding []float32 `json:"embedding"`
-    }
-    if err := json.NewDecoder(resp.Body).Decode(&embedResp); err != nil {
+    var embedding []float32
+    if err := json.NewDecoder(resp.Body).Decode(&embedding); err != nil {
         return nil, fmt.Errorf("failed to decode embedding response: %w", err)
     }
 
-    if len(embedResp.Embedding) == 0 {
+    if len(embedding) == 0 {
         return nil, fmt.Errorf("empty embedding returned from server")
     }
 
-    return embedResp.Embedding, nil
+    return embedding, nil
 }

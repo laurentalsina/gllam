@@ -18,15 +18,25 @@ func main() {
     entity := flag.String("entity", "", "Entity to query (comma-separated)")
     dbPath := flag.String("db", "./gllam_data.db", "Path to SQLite database")
     embeddingsServer := flag.String("embeddings-server", "", "Embeddings server URL (e.g., http://localhost:8080)")
+    textServer := flag.String("text-server", "", "Text-to-text server URL")
+    configPath := flag.String("config", "", "Path to YAML config file")
     seed := flag.Bool("seed", false, "Seed sample data and exit")
     flag.Parse()
 
     ctx := context.Background()
 
+    cfg := LoadConfig(*configPath)
+    if *embeddingsServer != "" {
+        cfg.EmbeddingEndpoint = *embeddingsServer
+    }
+    if *textServer != "" {
+        cfg.TextEndpoint = *textServer
+    }
+
     // Create embedder if embeddings server is provided
     var embedder engine.Embedder
-    if *embeddingsServer != "" {
-        embedder = engine.NewLlamaEmbedder(*embeddingsServer)
+    if cfg.EmbeddingEndpoint != "" {
+        embedder = engine.NewLlamaEmbedder(cfg.EmbeddingEndpoint)
     }
 
     // Initialize engine
@@ -50,6 +60,11 @@ func main() {
         return
     }
 
+    var llmClient *engine.LLMClient
+    if cfg.TextEndpoint != "" {
+        llmClient = engine.NewLLMClient(cfg.TextEndpoint)
+    }
+
     // If -recall flag is set, process and exit
     if *recall != "" {
         var entities []string
@@ -67,7 +82,19 @@ func main() {
         }
 
         prompt := engine.FormatSystemPrompt(compiled)
-        fmt.Print(prompt)
+        if llmClient != nil {
+            fmt.Println("--- Retrieved Context ---")
+            fmt.Println(prompt)
+            fmt.Println("\n--- Waiting for LLM ---")
+            answer, err := llmClient.Generate(ctx, prompt, *recall)
+            if err != nil {
+                fmt.Fprintf(os.Stderr, "LLM error: %v\n", err)
+                os.Exit(1)
+            }
+            fmt.Printf("\nAnswer:\n%s\n", answer)
+        } else {
+            fmt.Print(prompt)
+        }
         return
     }
 
@@ -94,7 +121,17 @@ func main() {
         }
 
         prompt := engine.FormatSystemPrompt(compiled)
-        fmt.Print(prompt)
+        if llmClient != nil {
+            fmt.Println("--- Waiting for LLM ---")
+            answer, err := llmClient.Generate(ctx, prompt, input)
+            if err != nil {
+                fmt.Fprintf(os.Stderr, "LLM error: %v\n", err)
+            } else {
+                fmt.Printf("\n%s\n", answer)
+            }
+        } else {
+            fmt.Print(prompt)
+        }
     }
 }
 

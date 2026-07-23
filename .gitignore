@@ -1,0 +1,12 @@
+# Database files
+*.db
+*.db-shm
+*.db-wal
+
+# Dataset files
+corpus_sessions.jsonl
+d7_qa.jsonl
+sbom_compliance_en.json
+
+# Binaries
+/gllam

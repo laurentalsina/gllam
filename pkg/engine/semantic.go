@@ -39,17 +39,56 @@ func (e *GllamEngine) AddEdge(ctx context.Context, link memory.SemanticLink) err
         return fmt.Errorf("failed to query existing edges: %w", err)
     }
 
-    // If an existing active link was found and it points to a different target, create a contradiction
-    if err == nil && existingTargetID != link.TargetID {
-        if err := e.CreateContradiction(ctx, existingTargetID, link.TargetID, link.SourceID, link.Relationship); err != nil {
-            return fmt.Errorf("failed to create contradiction: %w", err)
-        }
+    // Relationships that are strictly 1:1 (mutually exclusive targets)
+    isMutuallyExclusive := map[string]bool{
+        "has_state":  true,
+        "located_in": true,
     }
 
-    // Insert the new link
+    // If an existing active link was found, it points to a different target, and the relationship is mutually exclusive, create a contradiction node
+    if err == nil && existingTargetID != link.TargetID && isMutuallyExclusive[link.Relationship] {
+        conflictID := fmt.Sprintf("conflict-%s-%s", link.SourceID, link.Relationship)
+        conflictNode := memory.SemanticNode{
+            ID:   conflictID,
+            Name: fmt.Sprintf("Conflict regarding %s for %s", link.Relationship, link.SourceID),
+            Type: "contradiction",
+        }
+        _ = e.UpsertNode(ctx, conflictNode)
+        _ = e.StoreNodeEmbedding(ctx, conflictNode.ID)
+
+        // Add edge from source to conflict
+        now := time.Now().Unix()
+        _ = e.AddEdge(ctx, memory.SemanticLink{
+            SourceID:     link.SourceID,
+            TargetID:     conflictID,
+            Relationship: "has_unresolved_conflict",
+            ValidFrom:    now,
+        })
+
+        // Add edges from conflict to targets
+        _ = e.AddEdge(ctx, memory.SemanticLink{
+            SourceID:     conflictID,
+            TargetID:     existingTargetID,
+            Relationship: "conflicting_claim",
+            ValidFrom:    now,
+        })
+        _ = e.AddEdge(ctx, memory.SemanticLink{
+            SourceID:     conflictID,
+            TargetID:     link.TargetID,
+            Relationship: "conflicting_claim",
+            ValidFrom:    now,
+        })
+    }
+
+    // Insert the new link (idempotent update if it already exists)
     insertQuery := `
         INSERT INTO semantic_links (source_id, target_id, relationship, caveats, valid_from, valid_until, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)`
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(source_id, target_id, relationship) DO UPDATE SET 
+            caveats = excluded.caveats,
+            valid_from = excluded.valid_from,
+            valid_until = excluded.valid_until,
+            updated_at = excluded.updated_at`
 
     now := time.Now().Unix()
     _, err = e.db.ExecContext(ctx, insertQuery,
@@ -62,67 +101,7 @@ func (e *GllamEngine) AddEdge(ctx context.Context, link memory.SemanticLink) err
     return nil
 }
 
-// CreateContradiction records a contradiction between two semantic links
-func (e *GllamEngine) CreateContradiction(ctx context.Context, targetID1, targetID2, sourceID, relationship string) error {
-    query := `
-        INSERT INTO contradictions (id, link1_source_id, link1_target_id, link1_relationship,
-                                    link2_source_id, link2_target_id, link2_relationship, detected_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
 
-    id := fmt.Sprintf("contradiction-%s-%s-%s", sourceID, targetID1, targetID2)
-    now := time.Now().Unix()
-    _, err := e.db.ExecContext(ctx, query, id, sourceID, targetID1, relationship,
-        sourceID, targetID2, relationship, now)
-    if err != nil {
-        return fmt.Errorf("failed to create contradiction: %w", err)
-    }
-    return nil
-}
-
-// ResolveContradiction marks a contradiction as resolved with optional notes
-func (e *GllamEngine) ResolveContradiction(ctx context.Context, contradictionID, notes string) error {
-    query := `
-        UPDATE contradictions 
-        SET resolved = 1, resolved_at = ?, resolution_notes = ?
-        WHERE id = ?`
-
-    now := time.Now().Unix()
-    _, err := e.db.ExecContext(ctx, query, now, notes, contradictionID)
-    if err != nil {
-        return fmt.Errorf("failed to resolve contradiction: %w", err)
-    }
-    return nil
-}
-
-// GetUnresolvedContradictions retrieves all unresolved contradictions (read-only → dbRO)
-func (e *GllamEngine) GetUnresolvedContradictions(ctx context.Context) ([]memory.Contradiction, error) {
-    query := `
-        SELECT id, link1_source_id, link1_target_id, link1_relationship,
-               link2_source_id, link2_target_id, link2_relationship,
-               detected_at, resolved, resolved_at, resolution_notes
-        FROM contradictions
-        WHERE resolved = 0
-        ORDER BY detected_at DESC`
-
-    rows, err := e.dbRO.QueryContext(ctx, query)
-    if err != nil {
-        return nil, fmt.Errorf("failed to get unresolved contradictions: %w", err)
-    }
-    defer rows.Close()
-
-    var contradictions []memory.Contradiction
-    for rows.Next() {
-        var c memory.Contradiction
-        if err := rows.Scan(&c.ID, &c.Link1SourceID, &c.Link1TargetID, &c.Link1Relationship,
-            &c.Link2SourceID, &c.Link2TargetID, &c.Link2Relationship,
-            &c.DetectedAt, &c.Resolved, &c.ResolvedAt, &c.ResolutionNotes); err != nil {
-            return nil, fmt.Errorf("failed to scan contradiction: %w", err)
-        }
-        contradictions = append(contradictions, c)
-    }
-
-    return contradictions, rows.Err()
-}
 
 // InvalidateObsoleteEdge marks an older link as expired when a new preference supersedes it
 func (e *GllamEngine) InvalidateObsoleteEdge(ctx context.Context, sourceID, relationship, targetID string) error {
