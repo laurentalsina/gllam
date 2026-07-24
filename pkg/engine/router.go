@@ -41,7 +41,7 @@ func (e *GllamEngine) RouteAndAssemble(ctx context.Context, userPrompt string, e
 
     // 2. Semantic Entities: Auto-discover from prompt via vector search
     if e.embedder != nil {
-        similarNodes, err := e.SearchSimilarNodes(ctx, userPrompt, 3)
+        similarNodes, err := e.SearchSimilarNodes(ctx, userPrompt, 20)
         if err == nil {
             for _, node := range similarNodes {
                 // Ensure we don't duplicate explicitly provided entities
@@ -104,7 +104,7 @@ func (e *GllamEngine) RouteAndAssemble(ctx context.Context, userPrompt string, e
     // Append relevant episodic summaries
     var episodes []memory.EpisodicSummary
     if e.embedder != nil {
-        eps, err := e.SearchSimilarEpisodes(ctx, userPrompt, 25)
+        eps, err := e.SearchSimilarEpisodes(ctx, userPrompt, 3)
         if err == nil {
             episodes = eps
         }
