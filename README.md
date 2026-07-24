@@ -263,7 +263,9 @@ The router detects the presence of `has_unresolved_conflict` edges and surfaces 
 
 GLLAM provides robust scripts to evaluate retrieval accuracy over large-scale, long-term memory scenarios:
 - **MemArena**: Evaluated via `cmd/eval_d7_qa` to test accurate multi-hop retrieval.
-- **BEAM 100K**: Handled by `cmd/ingest_beam` to chunk massive 100,000-token multi-session conversations natively using session boundaries.
+- **BEAM 100K**: 
+  - **Ingestion**: Handled by `cmd/ingest_beam` to chunk massive 100,000-token multi-session conversations natively using session boundaries.
+  - **Evaluation**: Handled by `cmd/eval_beam` which queries the LLM over the full 100K-token episodic context retrieved. Evaluates cognitive memory dimensions like *Contradiction Resolution* and *Abstention*. We use random sampling over the 400 total questions to accelerate test cycles while preserving the extreme context window challenge.
 
 ## Embedding Architecture
 
