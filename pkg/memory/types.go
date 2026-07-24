@@ -39,8 +39,9 @@ type SemanticLink struct {
 }
 
 type CompiledContext struct {
-    Procedural    []ProceduralKnowledge
-    SemanticNodes []SemanticNode
-    SemanticLinks []SemanticLink
-    Episodic      []EpisodicSummary
+	Procedural    []ProceduralKnowledge
+	SemanticNodes []SemanticNode
+	SemanticLinks []SemanticLink
+	Episodic      []EpisodicSummary
+	PlannerOutput string
 }
