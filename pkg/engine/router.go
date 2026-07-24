@@ -91,7 +91,7 @@ func (e *GllamEngine) RouteAndAssemble(ctx context.Context, userPrompt string, e
     // Append relevant episodic summaries
     var episodes []memory.EpisodicSummary
     if e.embedder != nil {
-        eps, err := e.SearchSimilarEpisodes(ctx, userPrompt, 5)
+        eps, err := e.SearchSimilarEpisodes(ctx, userPrompt, 25)
         if err == nil {
             episodes = eps
         }
