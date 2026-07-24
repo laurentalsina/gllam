@@ -41,7 +41,7 @@ func (e *GllamEngine) RouteAndAssemble(ctx context.Context, userPrompt string, e
 
     // 2. Semantic Entities: Auto-discover from prompt via vector search
     if e.embedder != nil {
-        similarNodes, err := e.SearchSimilarNodes(ctx, userPrompt, 20)
+        similarNodes, err := e.SearchSimilarNodes(ctx, userPrompt, 100)
         if err == nil {
             for _, node := range similarNodes {
                 // Ensure we don't duplicate explicitly provided entities
