@@ -10,6 +10,8 @@ type EpisodicSummary struct {
 type ProceduralKnowledge struct {
     ID                string `json:"id"`
     TaskType          string `json:"task_type"`
+    Scope             string `json:"scope"`
+    TriggerContext    string `json:"trigger_context"`
     Instructions      string `json:"instructions"`
     UserFeedbackRules string `json:"user_feedback_rules"`
     TimesApplied      int    `json:"times_applied"`
@@ -20,9 +22,10 @@ type ProceduralKnowledge struct {
 }
 
 type SemanticNode struct {
-    ID   string `json:"id"`
-    Name string `json:"name"`
-    Type string `json:"type"`
+    ID            string `json:"id"`
+    Name          string `json:"name"`
+    Type          string `json:"type"`
+    ContextPrompt string `json:"context_prompt"`
 }
 
 type SemanticLink struct {
@@ -36,7 +39,8 @@ type SemanticLink struct {
 }
 
 type CompiledContext struct {
-    Procedural     []ProceduralKnowledge
-    Semantic       []SemanticLink
-    Episodic       []EpisodicSummary
+    Procedural    []ProceduralKnowledge
+    SemanticNodes []SemanticNode
+    SemanticLinks []SemanticLink
+    Episodic      []EpisodicSummary
 }

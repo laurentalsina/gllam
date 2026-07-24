@@ -151,9 +151,8 @@ for _, r := range results {
 
 | Table | Go Type | Purpose |
 |-------|---------|---------|
-| `semantic_nodes` | `memory.SemanticNode` | Entities (services, IPs, configs...) |
+| `semantic_nodes` | `memory.SemanticNode` | Entities (services, IPs, configs...), includes `context_prompt` |
 | `semantic_links` | `memory.SemanticLink` | Caveat-qualified, temporally bounded relationships |
-| `contradictions` | `memory.Contradiction` | Explicit conflict relationships between links |
 | `procedural_knowledge` | `memory.ProceduralKnowledge` | Reusable workflow recipes |
 | `episodic_summaries` | `memory.EpisodicSummary` | Session summaries with timestamps |
 | `semantic_embeddings` | *vec0 virtual table* | Embedding vectors for similarity search (sqlite-vec) |
@@ -198,11 +197,8 @@ WAL-mode readers don't block each other, and the read-only file descriptor is co
 
 | Method | Description |
 |--------|-------------|
-| `UpsertNode(ctx, node)` | Insert or update a node |
-| `AddEdge(ctx, link)` | Insert link; auto-creates contradiction on conflict |
-| `CreateContradiction(ctx, ...)` | Record a contradiction between two links |
-| `ResolveContradiction(ctx, id, notes)` | Mark contradiction resolved |
-| `GetUnresolvedContradictions(ctx)` | List all active conflicts |
+| `UpsertNode(ctx, node)` | Insert or update a node (including its `context_prompt`) |
+| `AddEdge(ctx, link)` | Insert link; auto-creates contradiction nodes/edges on conflict |
 | `InvalidateObsoleteEdge(ctx, ...)` | Set `valid_until` for temporal expiration |
 
 ### Procedural
@@ -256,18 +252,18 @@ LIMIT 10;
 
 Contradictions that remain stored will be of a temporal nature, eg. only version x of some software supports feature y.
 
-```
-contradictions
-├── id: "contradiction-caddy-0.0.0.0-100.64.0.1"
-├── link1: (caddy) -[binds_to]-> (0.0.0.0)
-├── link2: (caddy) -[binds_to]-> (100.64.0.1)
-├── detected_at: 1784567140
-├── resolved: false
-├── resolved_at: NULL
-└── resolution_notes: NULL
-```
+When `AddEdge()` detects an existing active link with the same `source_id` and a mutually exclusive `relationship` (e.g. `has_state`, `located_in`) but a different `target_id`, it automatically shifts to a graph-native contradiction model:
+1. It creates a new `SemanticNode` of type `contradiction`.
+2. It adds a `has_unresolved_conflict` edge from the source to the contradiction node.
+3. It adds `conflicting_claim` edges from the contradiction node to all mutually exclusive targets.
 
-When `AddEdge()` detects an existing active link with the same `source_id` and `relationship` but a different `target_id`, it automatically creates a contradiction entry. The router surfaces unresolved contradictions in the grilling prompt for user clarification.
+The router detects the presence of `has_unresolved_conflict` edges and surfaces a warning to the LLM to ask the user for clarification.
+
+## Benchmarking Tools
+
+GLLAM provides robust scripts to evaluate retrieval accuracy over large-scale, long-term memory scenarios:
+- **MemArena**: Evaluated via `cmd/eval_d7_qa` to test accurate multi-hop retrieval.
+- **BEAM 100K**: Handled by `cmd/ingest_beam` to chunk massive 100,000-token multi-session conversations natively using session boundaries.
 
 ## Embedding Architecture
 

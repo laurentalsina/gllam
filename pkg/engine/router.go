@@ -62,7 +62,19 @@ func (e *GllamEngine) RouteAndAssemble(ctx context.Context, userPrompt string, e
     // Retrieve semantic links for requested and discovered entities
     if len(entities) > 0 {
         var links []memory.SemanticLink
+        var nodes []memory.SemanticNode
         for _, entity := range entities {
+            // Fetch node
+            var node memory.SemanticNode
+            var ctxPrompt *string
+            err := e.dbRO.QueryRowContext(ctx, "SELECT id, name, type, context_prompt FROM semantic_nodes WHERE id = ?", entity).
+                Scan(&node.ID, &node.Name, &node.Type, &ctxPrompt)
+            if err == nil {
+                if ctxPrompt != nil {
+                    node.ContextPrompt = *ctxPrompt
+                }
+                nodes = append(nodes, node)
+            }
             query := `
                 SELECT source_id, target_id, relationship, caveats, valid_from, valid_until, updated_at
                 FROM semantic_links
@@ -85,7 +97,8 @@ func (e *GllamEngine) RouteAndAssemble(ctx context.Context, userPrompt string, e
             }
             rows.Close()
         }
-        ctxResult.Semantic = links
+        ctxResult.SemanticLinks = links
+        ctxResult.SemanticNodes = nodes
     }
 
     // Append relevant episodic summaries
@@ -103,6 +116,21 @@ func (e *GllamEngine) RouteAndAssemble(ctx context.Context, userPrompt string, e
     }
     ctxResult.Episodic = episodes
 
+    // 4. Internal Cognitive Procedures
+    // Collect unique triggers based on what was retrieved
+    triggers := make(map[string]bool)
+    for _, node := range ctxResult.SemanticNodes {
+        triggers[node.Type] = true
+    }
+    // E.g., if we retrieved a 'contradiction' node, we look for a procedural recipe for it.
+    
+    for trigger := range triggers {
+        procs, err := e.GetInternalProceduresByTrigger(ctx, "internal_semantic", trigger)
+        if err == nil && len(procs) > 0 {
+            ctxResult.Procedural = append(ctxResult.Procedural, procs...)
+        }
+    }
+
     return ctxResult, nil
 }
 
@@ -113,8 +141,8 @@ func FormatSystemPrompt(ctx *memory.CompiledContext) string {
     sb.WriteString("# GLLAM Context\n\n")
 
     // Dynamic warning if conflicts are present in the retrieved graph
-    if len(ctx.Semantic) > 0 {
-        for _, link := range ctx.Semantic {
+    if len(ctx.SemanticLinks) > 0 {
+        for _, link := range ctx.SemanticLinks {
             if link.Relationship == "has_unresolved_conflict" {
                 sb.WriteString("⚠️ Warning: The semantic graph contains unresolved conflicts. Please ask the user to clarify which conflicting claim is correct.\n\n")
                 break
@@ -135,10 +163,24 @@ func FormatSystemPrompt(ctx *memory.CompiledContext) string {
         }
     }
 
+    // Entity Profiles (Context)
+    if len(ctx.SemanticNodes) > 0 {
+        hasContext := false
+        for _, node := range ctx.SemanticNodes {
+            if node.ContextPrompt != "" {
+                if !hasContext {
+                    sb.WriteString("## Entity Profiles\n\n")
+                    hasContext = true
+                }
+                sb.WriteString(fmt.Sprintf("### %s (%s)\n%s\n\n", node.Name, node.Type, node.ContextPrompt))
+            }
+        }
+    }
+
     // Semantic links
-    if len(ctx.Semantic) > 0 {
+    if len(ctx.SemanticLinks) > 0 {
         sb.WriteString("## Semantic Graph\n\n")
-        for _, link := range ctx.Semantic {
+        for _, link := range ctx.SemanticLinks {
             sb.WriteString(fmt.Sprintf("- (%s) -[%s]-> (%s)\n",
                 link.SourceID, link.Relationship, link.TargetID))
             if link.Caveats != "" {

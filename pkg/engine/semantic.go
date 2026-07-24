@@ -12,11 +12,11 @@ import (
 // UpsertNode inserts or updates a semantic node
 func (e *GllamEngine) UpsertNode(ctx context.Context, node memory.SemanticNode) error {
     query := `
-        INSERT INTO semantic_nodes (id, name, type)
-        VALUES (?, ?, ?)
-        ON CONFLICT(id) DO UPDATE SET name = excluded.name, type = excluded.type`
+        INSERT INTO semantic_nodes (id, name, type, context_prompt)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET name = excluded.name, type = excluded.type, context_prompt = excluded.context_prompt`
 
-    _, err := e.db.ExecContext(ctx, query, node.ID, node.Name, node.Type)
+    _, err := e.db.ExecContext(ctx, query, node.ID, node.Name, node.Type, node.ContextPrompt)
     if err != nil {
         return fmt.Errorf("failed to upsert node: %w", err)
     }

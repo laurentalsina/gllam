@@ -15,7 +15,9 @@ CREATE INDEX IF NOT EXISTS idx_episodic_created ON episodic_summaries(created_at
 -- 2. PROCEDURAL KNOWLEDGE (Validated, Reusable Step-by-Step Recipes)
 CREATE TABLE IF NOT EXISTS procedural_knowledge (
     id TEXT PRIMARY KEY,
-    task_type TEXT NOT NULL UNIQUE,       -- e.g., "deploy_caddy_reverse_proxy"
+    task_type TEXT NOT NULL UNIQUE,       -- e.g., "deploy_caddy_reverse_proxy" or "handle_contradiction"
+    scope TEXT NOT NULL DEFAULT 'external', -- 'external', 'internal_semantic', 'internal_episodic'
+    trigger_context TEXT,                 -- specific trigger string, e.g. "contradiction", "bug_report"
     instructions TEXT NOT NULL,           -- Markdown/Text step-by-step method
     user_feedback_rules TEXT,             -- Specific constraints/preferences
     times_applied INTEGER DEFAULT 0,
@@ -29,7 +31,8 @@ CREATE TABLE IF NOT EXISTS procedural_knowledge (
 CREATE TABLE IF NOT EXISTS semantic_nodes (
     id TEXT PRIMARY KEY,
     name TEXT UNIQUE NOT NULL,
-    type TEXT NOT NULL
+    type TEXT NOT NULL,
+    context_prompt TEXT
 );
 
 -- 4. SEMANTIC LINKS (Caveat-qualified, temporally bounded relationships)

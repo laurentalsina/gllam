@@ -2,6 +2,7 @@ package engine
 
 import (
     "context"
+    "database/sql"
     "fmt"
     "time"
 
@@ -11,15 +12,17 @@ import (
 // UpsertProceduralKnowledge inserts or updates a procedural knowledge entry
 func (e *GllamEngine) UpsertProceduralKnowledge(ctx context.Context, pk memory.ProceduralKnowledge) error {
     query := `
-        INSERT INTO procedural_knowledge (id, task_type, instructions, user_feedback_rules, times_applied, is_highly_helpful, version, superseded_by, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO procedural_knowledge (id, task_type, scope, trigger_context, instructions, user_feedback_rules, times_applied, is_highly_helpful, version, superseded_by, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(task_type) DO UPDATE SET
+            scope = excluded.scope,
+            trigger_context = excluded.trigger_context,
             instructions = excluded.instructions,
             user_feedback_rules = excluded.user_feedback_rules,
             version = version + 1,
             updated_at = excluded.updated_at`
 
-    _, err := e.db.ExecContext(ctx, query, pk.ID, pk.TaskType, pk.Instructions, pk.UserFeedbackRules, pk.TimesApplied, pk.IsHighlyHelpful, pk.Version, pk.SupersededBy, pk.UpdatedAt)
+    _, err := e.db.ExecContext(ctx, query, pk.ID, pk.TaskType, pk.Scope, pk.TriggerContext, pk.Instructions, pk.UserFeedbackRules, pk.TimesApplied, pk.IsHighlyHelpful, pk.Version, pk.SupersededBy, pk.UpdatedAt)
     if err != nil {
         return fmt.Errorf("failed to upsert procedural knowledge: %w", err)
     }
@@ -41,12 +44,12 @@ func (e *GllamEngine) MarkProcedureHelpful(ctx context.Context, taskType string,
 func (e *GllamEngine) RetrieveProcedure(ctx context.Context, taskType string) (*memory.ProceduralKnowledge, error) {
     var pk memory.ProceduralKnowledge
     query := `
-        SELECT id, task_type, instructions, user_feedback_rules, times_applied, is_highly_helpful, version, superseded_by, updated_at
+        SELECT id, task_type, scope, trigger_context, instructions, user_feedback_rules, times_applied, is_highly_helpful, version, superseded_by, updated_at
         FROM procedural_knowledge
         WHERE task_type = ?`
 
     err := e.db.QueryRowContext(ctx, query, taskType).Scan(
-        &pk.ID, &pk.TaskType, &pk.Instructions, &pk.UserFeedbackRules,
+        &pk.ID, &pk.TaskType, &pk.Scope, &pk.TriggerContext, &pk.Instructions, &pk.UserFeedbackRules,
         &pk.TimesApplied, &pk.IsHighlyHelpful, &pk.Version, &pk.SupersededBy, &pk.UpdatedAt)
     if err != nil {
         return nil, fmt.Errorf("failed to retrieve procedure: %w", err)
@@ -64,8 +67,9 @@ func (e *GllamEngine) RetrieveProcedure(ctx context.Context, taskType string) (*
 // GetTopProcedures retrieves procedures ordered by helpfulness and usage (read-only → dbRO)
 func (e *GllamEngine) GetTopProcedures(ctx context.Context, limit int) ([]memory.ProceduralKnowledge, error) {
     query := `
-        SELECT id, task_type, instructions, user_feedback_rules, times_applied, is_highly_helpful, version, superseded_by, updated_at
+        SELECT id, task_type, scope, trigger_context, instructions, user_feedback_rules, times_applied, is_highly_helpful, version, superseded_by, updated_at
         FROM procedural_knowledge
+        WHERE scope = 'external'
         ORDER BY is_highly_helpful DESC, times_applied DESC
         LIMIT ?`
 
@@ -79,7 +83,7 @@ func (e *GllamEngine) GetTopProcedures(ctx context.Context, limit int) ([]memory
     for rows.Next() {
         var pk memory.ProceduralKnowledge
         if err := rows.Scan(
-            &pk.ID, &pk.TaskType, &pk.Instructions, &pk.UserFeedbackRules,
+            &pk.ID, &pk.TaskType, &pk.Scope, &pk.TriggerContext, &pk.Instructions, &pk.UserFeedbackRules,
             &pk.TimesApplied, &pk.IsHighlyHelpful, &pk.Version, &pk.SupersededBy, &pk.UpdatedAt); err != nil {
             return nil, fmt.Errorf("failed to scan procedure: %w", err)
         }
@@ -144,13 +148,14 @@ func (e *GllamEngine) SearchSimilarProcedures(ctx context.Context, queryText str
     }
 
     query := `
-        SELECT pk.id, pk.task_type, pk.instructions, pk.user_feedback_rules, pk.times_applied, pk.is_highly_helpful, pk.version, pk.superseded_by, pk.updated_at
+        SELECT pk.id, pk.task_type, pk.scope, pk.trigger_context, pk.instructions, pk.user_feedback_rules, pk.times_applied, pk.is_highly_helpful, pk.version, pk.superseded_by, pk.updated_at
         FROM (
             SELECT id, distance
             FROM procedural_embeddings
             WHERE embedding MATCH vec_f32(?) AND k = ?
         ) pe
         JOIN procedural_knowledge pk ON +pe.id = pk.id
+        WHERE pk.scope = 'external'
         ORDER BY pe.distance`
 
     rows, err := e.dbRO.QueryContext(ctx, query, queryBlob, limit)
@@ -163,9 +168,41 @@ func (e *GllamEngine) SearchSimilarProcedures(ctx context.Context, queryText str
     for rows.Next() {
         var pk memory.ProceduralKnowledge
         if err := rows.Scan(
-            &pk.ID, &pk.TaskType, &pk.Instructions, &pk.UserFeedbackRules,
+            &pk.ID, &pk.TaskType, &pk.Scope, &pk.TriggerContext, &pk.Instructions, &pk.UserFeedbackRules,
             &pk.TimesApplied, &pk.IsHighlyHelpful, &pk.Version, &pk.SupersededBy, &pk.UpdatedAt); err != nil {
             return nil, fmt.Errorf("failed to scan procedure: %w", err)
+        }
+        procedures = append(procedures, pk)
+    }
+
+    return procedures, rows.Err()
+}
+
+// GetInternalProceduresByTrigger retrieves cognitive procedures for a specific internal scope and trigger context
+func (e *GllamEngine) GetInternalProceduresByTrigger(ctx context.Context, scope string, triggerContext string) ([]memory.ProceduralKnowledge, error) {
+    query := `
+        SELECT id, task_type, scope, trigger_context, instructions, user_feedback_rules, times_applied, is_highly_helpful, version, superseded_by, updated_at
+        FROM procedural_knowledge
+        WHERE scope = ? AND trigger_context = ?
+        ORDER BY is_highly_helpful DESC, times_applied DESC`
+
+    rows, err := e.dbRO.QueryContext(ctx, query, scope, triggerContext)
+    if err != nil {
+        return nil, fmt.Errorf("failed to get internal procedures: %w", err)
+    }
+    defer rows.Close()
+
+    var procedures []memory.ProceduralKnowledge
+    for rows.Next() {
+        var pk memory.ProceduralKnowledge
+        var tc sql.NullString
+        if err := rows.Scan(
+            &pk.ID, &pk.TaskType, &pk.Scope, &tc, &pk.Instructions, &pk.UserFeedbackRules,
+            &pk.TimesApplied, &pk.IsHighlyHelpful, &pk.Version, &pk.SupersededBy, &pk.UpdatedAt); err != nil {
+            return nil, fmt.Errorf("failed to scan internal procedure: %w", err)
+        }
+        if tc.Valid {
+            pk.TriggerContext = tc.String
         }
         procedures = append(procedures, pk)
     }
