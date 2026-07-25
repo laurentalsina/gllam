@@ -143,13 +143,27 @@ func (e *GllamEngine) RouteAndAssemble(ctx context.Context, userPrompt string, e
     }
 
     if requiresPlanning {
-        // TODO: In GLLAM 0.2, compile ctxResult.SemanticNodes and ctxResult.SemanticLinks into PDDL
-        // For now, we invoke the dual-tier engine via the interface with dummy data to prove the wiring
+        // 1. LLM Goal Extraction Prompt Mockup
+        _ = fmt.Sprintf(`You are a PDDL logic translator. Your ONLY job is to extract the goal state from the user's question.
+Output ONLY the raw PDDL predicate string representing the target goal state, nothing else. Do not wrap in markdown blocks.
+Example output: (and (deployed app) (secured db))
+
+User Question: %s
+PDDL Goal:`, userPrompt)
+
+        // In GLLAM 0.2 we would run: goalPredicate, _ := llmClient.Generate(ctx, goalPrompt, "")
+        // For now, we mock the extracted output:
+        mockedGoalPredicate := "(and (resolved user_conflict))"
+
+        // 2. Compile the retrieved graph into PDDL strings using our new compiler
+        domainStr, problemStr := CompileGraphToPDDL(ctxResult.SemanticNodes, ctxResult.SemanticLinks, mockedGoalPredicate)
+
+        // 3. Invoke the dual-tier planning engine
         planner := NewNativePlanner()
-        _, err := planner.Solve(ctx, "(domain stub)", "(problem stub)")
+        _, err := planner.Solve(ctx, domainStr, problemStr)
         if err != nil {
             // Native planner fell back or failed, you would optionally invoke FastDownwardPlanner here
-            ctxResult.PlannerOutput = fmt.Sprintf("Planning Engine triggered for timeline analysis. Native solver status: %v", err)
+            ctxResult.PlannerOutput = fmt.Sprintf("Planning Engine triggered for timeline analysis.\n\nExtracted Goal: %s\n\nGenerated PDDL Domain:\n%s\nNative solver status: %v", mockedGoalPredicate, domainStr, err)
         } else {
             ctxResult.PlannerOutput = "Planning Engine triggered. Sequence mathematically verified."
         }
