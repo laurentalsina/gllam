@@ -55,8 +55,14 @@ The `FormatSystemPrompt` string builder appends this as a `## Mathematical Seque
 
 ---
 
-## 4. Next Steps for Implementation
-1. **Build the PDDL Compiler:** Write a function `CompileGraphToPDDL(nodes, links)` that safely formats the SQLite objects into LISP-like strings.
-2. **Implement Native STRIPS BFS:** Finish the stubbed `NativePlanner.Solve()` method in `pkg/engine/planner.go` with a <200 line Go state-space search algorithm.
-3. **LLM Goal Translation:** Write a prompt template to convert user questions (e.g., "Could I have deployed?") into strict PDDL goals.
-4. **Testing:** Write unit tests feeding known contradictions to the `NativePlanner` to verify it correctly returns "No valid plan found."
+## 4. Current Status (GLLAM 0.2 Alpha)
+✅ **Dual-Tier Architecture Defined:** `PlanningEngine` interface created with `NativePlanner` and `FastDownwardPlanner` structs.
+✅ **Native STRIPS Solver Implemented:** A <150 line pure Go Propositional BFS solver is fully operational in `planner.go`. It parses initial states, goal states, and action blocks, and mathematically explores the state-space.
+✅ **Graph-to-PDDL Compiler:** `pddl_compiler.go` successfully sanitizes SQLite semantic nodes into `(:objects)` and semantic links into `(:init)` states. It dynamically injects `(:action)` blocks retrieved from procedural memory.
+✅ **Cognitive Trigger Wired:** `router.go` now detects chronological keywords (`before`, `timeline`, etc.), mocks an LLM Goal Extraction, compiles the graph, runs the planner, and injects the mathematical proof directly into the LLM system prompt.
+
+## 5. Next Steps for Implementation
+1. **Un-Mock the LLM Goal Extraction:** Replace the hardcoded `mockedGoalPredicate` in `router.go` with an actual fast LLM inference call using the constructed `goalPrompt`.
+2. **Populate Procedural Actions:** Write and insert actual PDDL `(:action)` recipes into the SQLite `procedural_knowledge` table so the BFS planner has operations to execute.
+3. **Run the Benchmark:** Execute `eval_beam` against the new logic engine to verify if the 0% scores on Contradiction Resolution and Event Ordering are resolved.
+4. **Fast Downward Integration (Optional):** Ensure the `FastDownwardPlanner` subprocess is ready to take over if the `NativePlanner` encounters a problem space too large for BFS.

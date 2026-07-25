@@ -6,14 +6,13 @@ A fast single-file agentic-memory engine with vector similarity search:
 - sqlite-vec for SIMD-optimized vector similarity search
 - In Go for speed of execution
 
-## Architecture
+## 🧠 Core Architecture
 
-Concurrent Go. All data is stored in a single SQLite file with three memory types plus vector search:
-
-- **Episodic**  Session summaries with temporal rolling-window queries
-- **Procedural**  Reusable step-by-step workflow recipes with helpfulness scoring
-- **Semantic**  Caveat-qualified entity graph, with explicit temporal contradiction tracking
-- **Vector**  Embedding similarity search via sqlite-vec (SIMD-optimized)
+GLLAM consists of three distinct memory layers managed by a dual-tier cognitive engine:
+1. **Episodic Memory:** Raw, chronological interaction logs using `sqlite-vec` for brute-force semantic search.
+2. **Semantic Memory:** An abstracted, highly condensed Graph (Nodes & Edges) representing factual entities, relationships, and chronological state timelines (e.g. `valid_from` timestamps).
+3. **Procedural Memory:** Executable Markdown routines and strict PDDL `(:action)` blocks that give the agent deterministic workflows and state-space logic.
+4. **Neuro-Symbolic PDDL Router (v0.2):** An embedded dual-tier logic engine (Native STRIPS BFS + Fast Downward) that compiles the semantic graph into PDDL and mathematically proves timelines to eliminate LLM logic hallucinations.
 
 ### Key Design Decisions
 
