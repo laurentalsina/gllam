@@ -308,6 +308,17 @@ func (m *MyEmbedder) Embed(ctx context.Context, text string) ([]float32, error) 
 }
 ```
 
+## 🧠 Local Model Requirements
+
+When running the full GLLAM suite locally, it requires an LLM and an embedding model. These can be served locally via your local LLaMA/vLLM server. 
+
+For the current development environment, start the models by navigating to the `phurba_lora` project:
+```bash
+cd ~/Projects/phurba_lora
+./serve_Ornith-1.0.sh
+./serve_qwen3.6_embeddings.sh
+```
+
 ## License
 
 (C) Laurent Alsina Blackmore 2026 -  All rights reserved
