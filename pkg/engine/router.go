@@ -156,7 +156,7 @@ PDDL Goal:`, userPrompt)
         mockedGoalPredicate := "(and (resolved user_conflict))"
 
         // 2. Compile the retrieved graph into PDDL strings using our new compiler
-        domainStr, problemStr := CompileGraphToPDDL(ctxResult.SemanticNodes, ctxResult.SemanticLinks, mockedGoalPredicate)
+        domainStr, problemStr := CompileGraphToPDDL(ctxResult.SemanticNodes, ctxResult.SemanticLinks, mockedGoalPredicate, ctxResult.Procedural)
 
         // 3. Invoke the dual-tier planning engine
         planner := NewNativePlanner()

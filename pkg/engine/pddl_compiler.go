@@ -19,7 +19,7 @@ func SanitizePDDLName(name string) string {
 
 // CompileGraphToPDDL takes semantic nodes and links and dynamically generates
 // a PDDL domain and problem definition.
-func CompileGraphToPDDL(nodes []memory.SemanticNode, links []memory.SemanticLink, goalPredicate string) (string, string) {
+func CompileGraphToPDDL(nodes []memory.SemanticNode, links []memory.SemanticLink, goalPredicate string, procedures []memory.ProceduralKnowledge) (string, string) {
 	// 1. Gather unique objects and dynamically infer predicates
 	objects := make(map[string]bool)
 	predicates := make(map[string]bool)
@@ -58,9 +58,13 @@ func CompileGraphToPDDL(nodes []memory.SemanticNode, links []memory.SemanticLink
 	}
 	domain.WriteString("  )\n\n")
 
-	// TODO: Loop through memory.ProceduralKnowledge and inject (:action) blocks here.
-	// For GLLAM 0.2, this is where the dynamic recipes will live.
-	domain.WriteString("  ;; Dynamic Procedural Actions will be injected here\n")
+	// Inject dynamic (:action) blocks from ProceduralKnowledge
+	for _, proc := range procedures {
+		if strings.Contains(proc.Instructions, "(:action") {
+			domain.WriteString(proc.Instructions)
+			domain.WriteString("\n\n")
+		}
+	}
 
 	domain.WriteString(")\n")
 

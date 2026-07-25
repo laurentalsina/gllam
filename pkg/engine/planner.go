@@ -52,10 +52,8 @@ func (p *NativePlanner) Solve(ctx context.Context, domain string, problem string
 		return []PlannerAction{}, nil // Goal already met or empty
 	}
 
-	// 2. Parse Actions from domain (Stubbed for now until Procedural actions are injected)
-	// We will extract (:action ...) blocks using a similar naive parser.
-	var actions []StripsAction
-	// TODO: Parse 'domain' string for actual actions. 
+	// 2. Parse Actions from domain
+	actions := p.parseActions(domain)
 	
 	// 3. Execute Breadth-First-Search (BFS)
 	plan := p.bfs(initialState, goalState, actions)
@@ -92,6 +90,87 @@ func extractPredicates(pddl string, blockStart string, blockEnd string) map[stri
 		}
 	}
 	return state
+}
+
+func (p *NativePlanner) parseActions(domain string) []StripsAction {
+	var actions []StripsAction
+	parts := strings.Split(domain, "(:action ")
+	
+	for i := 1; i < len(parts); i++ {
+		block := parts[i]
+		
+		fields := strings.Fields(block)
+		if len(fields) == 0 {
+			continue
+		}
+		name := fields[0]
+		
+		preIdx := strings.Index(block, ":precondition")
+		effIdx := strings.Index(block, ":effect")
+		
+		var preBlock, effBlock string
+		if preIdx != -1 {
+			if effIdx != -1 {
+				preBlock = block[preIdx:effIdx]
+				effBlock = block[effIdx:]
+			} else {
+				preBlock = block[preIdx:]
+			}
+		} else if effIdx != -1 {
+			effBlock = block[effIdx:]
+		}
+
+		preconds := extractPredicatesRaw(preBlock)
+		
+		var addEffects, delEffects []string
+		
+		rawEffs := strings.Split(effBlock, "(")
+		inNot := false
+		for _, p := range rawEffs {
+			idx := strings.Index(p, ")")
+			if idx != -1 {
+				pred := strings.TrimSpace(p[:idx])
+				if pred == "" || strings.HasPrefix(pred, "and") {
+					continue
+				}
+				// We expect (not (predicate)) which parses as ["not ", "predicate)"]
+				if strings.HasPrefix(pred, "not") {
+					inNot = true
+					continue
+				}
+				
+				if inNot {
+					delEffects = append(delEffects, pred)
+					inNot = false // assumes only one predicate inside not
+				} else {
+					addEffects = append(addEffects, pred)
+				}
+			}
+		}
+
+		actions = append(actions, StripsAction{
+			Name:          name,
+			Preconditions: preconds,
+			AddEffects:    addEffects,
+			DelEffects:    delEffects,
+		})
+	}
+	return actions
+}
+
+func extractPredicatesRaw(block string) []string {
+	var preds []string
+	parts := strings.Split(block, "(")
+	for _, p := range parts {
+		idx := strings.Index(p, ")")
+		if idx != -1 {
+			pred := strings.TrimSpace(p[:idx])
+			if pred != "" && !strings.HasPrefix(pred, "and") {
+				preds = append(preds, pred)
+			}
+		}
+	}
+	return preds
 }
 
 func (p *NativePlanner) bfs(initial map[string]bool, goals map[string]bool, actions []StripsAction) []PlannerAction {
