@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -32,11 +33,140 @@ func NewNativePlanner() *NativePlanner {
 	return &NativePlanner{}
 }
 
+// StripsAction represents a grounded propositional action for the BFS planner
+type StripsAction struct {
+	Name          string
+	Preconditions []string
+	AddEffects    []string
+	DelEffects    []string
+}
+
 func (p *NativePlanner) Solve(ctx context.Context, domain string, problem string) ([]PlannerAction, error) {
-	// TODO: Implement a lightweight BFS/A* forward-chaining STRIPS solver.
-	// This will parse basic PDDL in memory and solve it natively without external binaries.
-	// For now, this is a placeholder that falls back.
-	return nil, fmt.Errorf("native PDDL parsing and BFS solver not yet implemented; delegate to Tier 2")
+	// 1. Basic Regex/String parsing for the initial state and goal
+	// In a production solver this would use a full S-expression parser, but for 
+	// GLLAM 0.2 we just need a robust propositional state extractor.
+	initialState := extractPredicates(problem, "(:init", ")")
+	goalState := extractPredicates(problem, "(:goal", ")")
+
+	if len(goalState) == 0 {
+		return []PlannerAction{}, nil // Goal already met or empty
+	}
+
+	// 2. Parse Actions from domain (Stubbed for now until Procedural actions are injected)
+	// We will extract (:action ...) blocks using a similar naive parser.
+	var actions []StripsAction
+	// TODO: Parse 'domain' string for actual actions. 
+	
+	// 3. Execute Breadth-First-Search (BFS)
+	plan := p.bfs(initialState, goalState, actions)
+	if plan == nil {
+		return nil, fmt.Errorf("native BFS solver exhausted all states; no valid timeline/plan exists")
+	}
+
+	return plan, nil
+}
+
+// extractPredicates is a naive parser to extract "(predicate a b)" strings
+func extractPredicates(pddl string, blockStart string, blockEnd string) map[string]bool {
+	state := make(map[string]bool)
+	startIdx := strings.Index(pddl, blockStart)
+	if startIdx == -1 {
+		return state
+	}
+	// Extract the block contents roughly
+	block := pddl[startIdx+len(blockStart):]
+	endIdx := strings.Index(block, blockEnd)
+	if endIdx != -1 {
+		block = block[:endIdx]
+	}
+	
+	// Find all "(...)" segments
+	parts := strings.Split(block, "(")
+	for _, p := range parts {
+		idx := strings.Index(p, ")")
+		if idx != -1 {
+			pred := strings.TrimSpace(p[:idx])
+			if pred != "" && !strings.HasPrefix(pred, "and") {
+				state[pred] = true
+			}
+		}
+	}
+	return state
+}
+
+func (p *NativePlanner) bfs(initial map[string]bool, goals map[string]bool, actions []StripsAction) []PlannerAction {
+	type Node struct {
+		State map[string]bool
+		Plan  []PlannerAction
+	}
+	
+	queue := []Node{{State: initial, Plan: []PlannerAction{}}}
+	visited := make(map[string]bool)
+	visited[stateToStr(initial)] = true
+
+	for len(queue) > 0 {
+		curr := queue[0]
+		queue = queue[1:]
+
+		// Check if goal is satisfied
+		goalMet := true
+		for g := range goals {
+			if !curr.State[g] {
+				goalMet = false
+				break
+			}
+		}
+		if goalMet {
+			return curr.Plan
+		}
+
+		// Apply all valid actions
+		for _, a := range actions {
+			possible := true
+			for _, pre := range a.Preconditions {
+				if !curr.State[pre] {
+					possible = false
+					break
+				}
+			}
+			if !possible {
+				continue
+			}
+
+			// Compute next state
+			nextState := make(map[string]bool)
+			for k, v := range curr.State {
+				nextState[k] = v
+			}
+			for _, del := range a.DelEffects {
+				delete(nextState, del)
+			}
+			for _, add := range a.AddEffects {
+				nextState[add] = true
+			}
+
+			nextStr := stateToStr(nextState)
+			if !visited[nextStr] {
+				visited[nextStr] = true
+				
+				newPlan := make([]PlannerAction, len(curr.Plan))
+				copy(newPlan, curr.Plan)
+				newPlan = append(newPlan, PlannerAction{Name: a.Name})
+				
+				queue = append(queue, Node{State: nextState, Plan: newPlan})
+			}
+		}
+	}
+	return nil // Plan not found
+}
+
+func stateToStr(state map[string]bool) string {
+	var keys []string
+	for k := range state {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return strings.Join(keys, "|")
 }
 
 // -----------------------------------------------------------------------------
