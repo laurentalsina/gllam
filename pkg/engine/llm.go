@@ -23,7 +23,7 @@ func NewLLMClient(baseURL string) *LLMClient {
 	return &LLMClient{
 		BaseURL: baseURL,
 		client: &http.Client{
-			Timeout: 300 * time.Second,
+			Timeout: 900 * time.Second,
 		},
 	}
 }
