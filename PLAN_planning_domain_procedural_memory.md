@@ -65,4 +65,4 @@ The `FormatSystemPrompt` string builder appends this as a `## Mathematical Seque
 1. **Un-Mock the LLM Goal Extraction:** Replace the hardcoded `mockedGoalPredicate` in `router.go` with an actual fast LLM inference call using the constructed `goalPrompt`.
 2. **Populate Procedural Actions:** Write and insert actual PDDL `(:action)` recipes into the SQLite `procedural_knowledge` table so the BFS planner has operations to execute.
 3. **Run the Benchmark:** Execute `eval_beam` against the new logic engine to verify if the 0% scores on Contradiction Resolution and Event Ordering are resolved.
-4. **Fast Downward Integration (Optional):** Ensure the `FastDownwardPlanner` subprocess is ready to take over if the `NativePlanner` encounters a problem space too large for BFS.
+4. ✅ **Fast Downward Integration:** The `FastDownwardPlanner` subprocess is ready to take over if the `NativePlanner` encounters a problem space too large for BFS. (Installed at `~/Projects/downward`).

@@ -308,16 +308,27 @@ func (m *MyEmbedder) Embed(ctx context.Context, text string) ([]float32, error) 
 }
 ```
 
-## 🧠 Local Model Requirements
+## 🧠 Local Dependencies
 
-When running the full GLLAM suite locally, it requires an LLM and an embedding model. These can be served locally via your local LLaMA/vLLM server. 
+When running the full GLLAM suite locally, it requires an LLM, an embedding model, and the Fast Downward solver. 
 
-For the current development environment, start the models by navigating to the `phurba_lora` project:
+### AI Models
+Start the models by navigating to the `phurba_lora` project:
 ```bash
 cd ~/Projects/phurba_lora
 ./serve_Ornith-1.0.sh
 ./serve_qwen3.6_embeddings.sh
 ```
+
+### Fast Downward (System 2 Planner)
+The Tier-2 PDDL planner requires the Fast Downward C++ binary:
+```bash
+cd ~/Projects
+git clone https://github.com/aibasel/downward.git
+cd downward
+./build.py
+```
+*(GLLAM's `FastDownwardPlanner` defaults to executing `~/Projects/downward/fast-downward.py`)*
 
 ## License
 
