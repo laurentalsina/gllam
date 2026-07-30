@@ -10,3 +10,6 @@ sbom_compliance_en.json
 
 # Binaries
 /gllam
+
+# Logs
+eval_output.log
