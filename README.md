@@ -5,7 +5,7 @@ A fast agentic-memory engine with vector similarity search:
 - SQLite + sqlite-vec for vector similarity search
 - Use PDDL (Plan Domain Definition Language) for event sequences
 
-## 🧠 Core Architecture
+## Architecture
 
 Memory layers:
 1. **Episodic** Interaction logs using sqlite-vec for semantic search.
