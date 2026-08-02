@@ -1,0 +1,69 @@
+Starting BEAM grading...
+[13_instruction_following_1] CORRECT
+[5_preference_following_0] CORRECT
+[8_temporal_reasoning_0] INCORRECT (Verdict: INCORRECT)
+[9_event_ordering_0] INCORRECT (Verdict: INCORRECT)
+[13_information_extraction_0] CORRECT
+[12_instruction_following_0] INCORRECT (Verdict: INCORRECT)
+[10_knowledge_update_0] INCORRECT (Verdict: INCORRECT)
+[7_contradiction_resolution_0] INCORRECT (Verdict: INCORRECT)
+[13_summarization_1] INCORRECT (Verdict: INCORRECT)
+[15_multi_session_reasoning_0] INCORRECT (Verdict: INCORRECT)
+[10_multi_session_reasoning_0] INCORRECT (Verdict: INCORRECT)
+[16_event_ordering_1] INCORRECT (Generation Error)
+[2_temporal_reasoning_0] INCORRECT (Generation Error)
+[17_temporal_reasoning_0] INCORRECT (Verdict: INCORRECT)
+[18_information_extraction_1] INCORRECT (Verdict: INCORRECT)
+[19_event_ordering_0] INCORRECT (Verdict: INCORRECT)
+[3_contradiction_resolution_1] INCORRECT (Generation Error)
+[11_summarization_1] CORRECT
+[5_temporal_reasoning_1] INCORRECT (Verdict: INCORRECT)
+[3_multi_session_reasoning_1] INCORRECT (Verdict: INCORRECT)
+[14_knowledge_update_1] INCORRECT (Verdict: INCORRECT)
+[9_instruction_following_1] CORRECT
+[13_knowledge_update_1] INCORRECT (Verdict: INCORRECT)
+[4_summarization_1] INCORRECT (Verdict: INCORRECT)
+[1_instruction_following_1] INCORRECT (Generation Error)
+[4_instruction_following_0] CORRECT
+[10_temporal_reasoning_0] CORRECT
+[1_contradiction_resolution_0] INCORRECT (Verdict: INCORRECT)
+[19_information_extraction_1] INCORRECT (Verdict: INCORRECT)
+[19_multi_session_reasoning_0] CORRECT
+[13_temporal_reasoning_1] CORRECT
+[13_multi_session_reasoning_1] CORRECT
+[13_event_ordering_0] INCORRECT (Verdict: INCORRECT)
+[11_instruction_following_1] CORRECT
+[3_preference_following_1] CORRECT
+[2_preference_following_0] CORRECT
+[18_preference_following_0] INCORRECT (Verdict: INCORRECT)
+[15_abstention_0] CORRECT
+[3_temporal_reasoning_1] INCORRECT (Verdict: INCORRECT)
+[13_contradiction_resolution_1] INCORRECT (Verdict: INCORRECT)
+[20_information_extraction_0] INCORRECT (Verdict: INCORRECT)
+[15_instruction_following_1] CORRECT
+[12_knowledge_update_0] INCORRECT (Verdict: INCORRECT)
+[20_abstention_0] INCORRECT (Verdict: INCORRECT)
+[2_instruction_following_1] CORRECT
+[17_knowledge_update_1] INCORRECT (Verdict: INCORRECT)
+[13_abstention_0] CORRECT
+[5_summarization_1] INCORRECT (Verdict: INCORRECT)
+[17_contradiction_resolution_0] INCORRECT (Verdict: INCORRECT)
+[8_contradiction_resolution_1] INCORRECT (Verdict: INCORRECT)
+
+--- Final BEAM Score ---
+Total Attempted: 50
+Generation Errors/Timeouts: 4
+Correct: 17
+Overall Accuracy: 34.00%
+
+--- Accuracy by Category ---
+abstention                     : 2/3 (66.67%)
+information_extraction         : 1/4 (25.00%)
+knowledge_update               : 0/5 (0.00%)
+contradiction_resolution       : 0/6 (0.00%)
+instruction_following          : 6/8 (75.00%)
+preference_following           : 3/4 (75.00%)
+temporal_reasoning             : 2/7 (28.57%)
+event_ordering                 : 0/4 (0.00%)
+summarization                  : 1/4 (25.00%)
+multi_session_reasoning        : 2/5 (40.00%)
