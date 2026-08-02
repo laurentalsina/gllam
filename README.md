@@ -23,11 +23,12 @@ Memory layers:
 
 ## Package Structure
 
-gllam/
+```bash
+gllam
 ├── cmd/gllam/
-│   └── main.go              # CLI / Local daemon entry point
+│   └── main.go              # CLI Local daemon entry point
 ├── pkg/
-│   ├── engine/
+│   ├── engine
 │   │   ├── engine.go        # SQLite connection, WAL, schema init
 │   │   ├── semantic.go      # Node/link CRUD, contradiction management
 │   │   ├── procedural.go    # Workflow recipes, helpfulness scoring
@@ -39,6 +40,7 @@ gllam/
 │       └── schema.sql       # Complete SQLite DDL
 ├── go.mod
 └── go.sum
+```
 
 ## Installation
 
@@ -52,7 +54,7 @@ go get github.com/asg017/sqlite-vec-go-bindings/cgo
 
 sqlite-vec CGO bindings:
 
-# Option 1: System-wide (recommended)
+# Option 1: System-wide
 sudo dnf install sqlite-devel  # Fedora/RedHat
 sudo apt-get install libsqlite3-dev  # Ubuntu/Debian
 
@@ -64,7 +66,7 @@ export CGO_CFLAGS="-I/tmp/sqlite-amalgamation-3470200"
 Then build with CGO enabled:
 CGO_ENABLED=1 go build ./...
 
-## Quick Start
+## Startup
 
 # Start embeddings server (separate process)
 llama-server -m your-embedding-model.gguf --port 8080
@@ -294,20 +296,20 @@ func (m *MyEmbedder) Embed(ctx context.Context, text string) ([]float32, error) 
 }
 ```
 
-## 🧠 Local Dependencies
+## Local Dependencies
 
-When running the full GLLAM suite locally, it requires an LLM, an embedding model, and the Fast Downward solver. 
+When running the full GLLAM locally, it requires an LLM, an embedding model, and the Fast Downward solver. 
 
 ### AI Models
-Start the models by navigating to the `phurba_lora` project:
+Start the models, for example:
 ```bash
-cd ~/Projects/phurba_lora
+cd ~/your_llm_servers_folder/
 ./serve_Ornith-1.0.sh
 ./serve_qwen3.6_embeddings.sh
 ```
 
-### Fast Downward (System 2 Planner)
-The Tier-2 PDDL planner requires the Fast Downward C++ binary:
+### Fast Downward (Full PDDL Planner)
+Requires the Fast Downward C++ binary:
 ```bash
 cd ~/Projects
 git clone https://github.com/aibasel/downward.git
