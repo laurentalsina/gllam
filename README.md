@@ -1,39 +1,34 @@
 # GLLAM: Go Lightweight Local Agentic Memory
 
-A fast single-file agentic-memory engine with vector similarity search:
-- Karpathy's LLM-Wiki idea plus some temporal-semantics
-- Backed by SQLite in WAL for concurrent access
-- sqlite-vec for SIMD-optimized vector similarity search
+A fast agentic-memory engine with vector similarity search:
 - In Go for speed of execution
+- SQLite + sqlite-vec for vector similarity search
+- Use PDDL (Plan Domain Definition Language) for event sequences
 
 ## 🧠 Core Architecture
 
-GLLAM consists of three distinct memory layers managed by a dual-tier cognitive engine:
-1. **Episodic Memory:** Raw, chronological interaction logs using `sqlite-vec` for brute-force semantic search.
-2. **Semantic Memory:** An abstracted, highly condensed Graph (Nodes & Edges) representing factual entities, relationships, and chronological state timelines (e.g. `valid_from` timestamps).
-3. **Procedural Memory:** Executable Markdown routines and strict PDDL `(:action)` blocks that give the agent deterministic workflows and state-space logic.
-4. **Neuro-Symbolic PDDL Router (v0.2):** An embedded dual-tier logic engine (Native STRIPS BFS + Fast Downward) that compiles the semantic graph into PDDL and mathematically proves timelines to eliminate LLM logic hallucinations.
+Memory layers:
+1. **Episodic** Interaction logs using sqlite-vec for semantic search.
+2. **Semantic** Entities & Relationships graph with added timeline info.
+3. **Procedural** Executable markdown, plus an embedded PDDL router with two logic engines: 1-Native STRIPS BFS, 2-delegation to Fast-Downward. Compiles the semantic graph into PDDL to remember timelines, preventing LLM's planning-logic errors.
 
-### Key Design Decisions
+### Design Decisions
 
-- **Avoid Bloat**: No multi-layered ECL pipelines, no nested async generators, no runtime schema generation
-- **Dual-Handle Concurrency**: Write handle (`SetMaxOpenConns(1)`) serializes mutations; read handle (`mode=ro`, `SetMaxOpenConns(8)`) enables concurrent queries without contention
-- **Consolidated Storage**: Single SQLite file with `PRAGMA journal_mode = WAL` for concurrent reads
+- **Avoid Bloat**: No multi-layered data-extraction pipeline, no nested async generators, no runtime schema generation
+- **Consolidate Storage**: Single SQLite file with `PRAGMA journal_mode = WAL` for concurrent reads
 - **Caveat-Qualified Graph**: Semantic relationships carry explicit conditions/constraints/exceptions
 - **Explicit Contradictions**: Conflicts are tracked as first-class relationships
-- **Temporal Bounds**: Semantic relationships include validity date-time information (`valid_from` / `valid_until`)
-- **Tiered Intent Routing**: Heuristic classification and vector similarity search for memory access from Procedural, Semantic, or Episodic stores
-- **Vector Search**: sqlite-vec provides SIMD-optimized distance functions for embedding similarity
+- **Temporal Bounds**: Semantic relationships include validity date-time information
+- **Vector Search**: sqlite-vec distance functions for episodic-memory retrieval
 
 ## Package Structure
 
-```
 gllam/
 ├── cmd/gllam/
 │   └── main.go              # CLI / Local daemon entry point
 ├── pkg/
 │   ├── engine/
-│   │   ├── engine.go        # SQLite connection, WAL pragmas, schema init
+│   │   ├── engine.go        # SQLite connection, WAL, schema init
 │   │   ├── semantic.go      # Node/link CRUD, contradiction management
 │   │   ├── procedural.go    # Workflow recipes, helpfulness scoring
 │   │   ├── episodic.go      # Session summaries, temporal windows
@@ -44,7 +39,6 @@ gllam/
 │       └── schema.sql       # Complete SQLite DDL
 ├── go.mod
 └── go.sum
-```
 
 ## Installation
 
@@ -56,28 +50,22 @@ go get github.com/asg017/sqlite-vec-go-bindings/cgo
 
 ### Build Requirements
 
-sqlite-vec CGO bindings require `sqlite3.h`. Install system-wide or set `CGO_CFLAGS`:
+sqlite-vec CGO bindings:
 
-```bash
 # Option 1: System-wide (recommended)
-sudo dnf install sqlite-devel  # Fedora/RHEL
-# sudo apt-get install libsqlite3-dev  # Ubuntu/Debian
-# sudo apk add sqlite-dev  # Alpine
+sudo dnf install sqlite-devel  # Fedora/RedHat
+sudo apt-get install libsqlite3-dev  # Ubuntu/Debian
 
 # Option 2: Temporary include path
 curl -sL https://www.sqlite.org/2024/sqlite-amalgamation-3470200.zip -o /tmp/sqlite.zip
 unzip -qo /tmp/sqlite.zip -d /tmp
 export CGO_CFLAGS="-I/tmp/sqlite-amalgamation-3470200"
-```
 
 Then build with CGO enabled:
-```bash
 CGO_ENABLED=1 go build ./...
-```
 
 ## Quick Start
 
-```bash
 # Start embeddings server (separate process)
 llama-server -m your-embedding-model.gguf --port 8080
 
@@ -96,7 +84,6 @@ go run ./cmd/gllam --embeddings-server http://localhost:8080
 
 ## Usage as a Library
 
-```go
 import (
     "context"
     "log"
@@ -144,7 +131,6 @@ if err != nil { log.Fatal(err) }
 for _, r := range results {
     fmt.Printf("Node: %s (distance: %.4f)\n", r.NodeID, r.Distance)
 }
-```
 
 ## Database Schema
 
@@ -260,11 +246,11 @@ The router detects the presence of `has_unresolved_conflict` edges and surfaces 
 
 ## Benchmarking Tools
 
-GLLAM provides robust scripts to evaluate retrieval accuracy over large-scale, long-term memory scenarios:
-- **MemArena**: Evaluated via `cmd/eval_d7_qa` to test accurate multi-hop retrieval.
+to evaluate retrieval accuracy on  memory benchmarks:
+- **MemArena**: Use cmd/eval_d7_qa to test multi-hop retrieval accuracy.
 - **BEAM 100K**: 
-  - **Ingestion**: Handled by `cmd/ingest_beam` to chunk massive 100,000-token multi-session conversations natively using session boundaries.
-  - **Evaluation**: Handled by `cmd/eval_beam` which queries the LLM over the full 100K-token episodic context retrieved. Evaluates cognitive memory dimensions like *Contradiction Resolution* and *Abstention*. We use random sampling over the 400 total questions to accelerate test cycles while preserving the extreme context window challenge.
+  - **Ingestion**: Use cmd/ingest_beam to chunk 100,000-token conversations.
+  - **Evaluation**: Use cmd/eval_beam to query the session LLM over the  episodic context retrieved. Evaluates cognitive memory dimensions like *Contradiction Resolution* and *Abstention*. We use random sampling over the 400 total..
 
 ## Embedding Architecture
 
