@@ -55,16 +55,22 @@ go get github.com/asg017/sqlite-vec-go-bindings/cgo
 sqlite-vec CGO bindings:
 
 # Option 1: System-wide
+```
 sudo dnf install sqlite-devel  # Fedora/RedHat
 sudo apt-get install libsqlite3-dev  # Ubuntu/Debian
+```
 
 # Option 2: Temporary include path
+```
 curl -sL https://www.sqlite.org/2024/sqlite-amalgamation-3470200.zip -o /tmp/sqlite.zip
 unzip -qo /tmp/sqlite.zip -d /tmp
 export CGO_CFLAGS="-I/tmp/sqlite-amalgamation-3470200"
+```
 
 Then build with CGO enabled:
+```
 CGO_ENABLED=1 go build ./...
+```
 
 ## Startup
 
