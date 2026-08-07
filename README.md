@@ -1,9 +1,10 @@
 # GLLAM: Go Lightweight Local Agentic Memory
 
-A fast agentic-memory engine with vector similarity search:
+A fast agentic-memory engine:
 - In Go for speed of execution
 - SQLite + sqlite-vec for vector similarity search
-- Use PDDL (Plan Domain Definition Language) for event sequences
+- Opinionated procedural memory: use PDDL (Plan Domain Definition Language) for event sequences
+- A semantic-graph augmented for validity-time and information-contradictions tracking 
 
 ## Architecture
 
