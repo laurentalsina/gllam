@@ -3,10 +3,12 @@ package engine
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/laurentalsina/gllam/pkg/memory"
 )
+
 
 func TestInstructionFollowingDataModelAndSourceNodes(t *testing.T) {
 	tempDir := t.TempDir()
@@ -115,3 +117,102 @@ func TestInstructionFollowingDataModelAndSourceNodes(t *testing.T) {
 		t.Errorf("Did not find both expected links in active links query")
 	}
 }
+
+func TestGetActiveConstraintsForSourceAndRevocation(t *testing.T) {
+	tempDir := t.TempDir()
+	dbPath := filepath.Join(tempDir, "test_revoke.db")
+
+	gllam, err := NewGllamEngine(dbPath, nil)
+	if err != nil {
+		t.Fatalf("Failed to create engine: %v", err)
+	}
+	defer gllam.Close()
+
+	if err := gllam.InitSchema(); err != nil {
+		t.Fatalf("Failed to init schema: %v", err)
+	}
+
+	ctx := context.Background()
+
+	_ = gllam.UpsertNode(ctx, memory.SemanticNode{ID: "user-bob", Name: "Bob", Type: memory.NodeTypeHuman})
+	_ = gllam.UpsertNode(ctx, memory.SemanticNode{ID: "rule-json", Name: "Output JSON", Type: memory.NodeTypeRule})
+	_ = gllam.UpsertNode(ctx, memory.SemanticNode{ID: "rule-yaml", Name: "Output YAML", Type: memory.NodeTypeRule})
+
+	_ = gllam.AddEdge(ctx, memory.SemanticLink{
+		SourceID:       "user-bob",
+		TargetID:       "rule-json",
+		Relationship:   "is_preference",
+		ValidFrom:      "1000",
+		OriginSourceID: "user-bob",
+		RuleContext:    "user_preference",
+	})
+
+	// 1. Check active constraints for user-bob
+	bobConstraints, err := gllam.GetActiveConstraintsForSource(ctx, "user-bob", "user_preference")
+	if err != nil {
+		t.Fatalf("GetActiveConstraintsForSource failed: %v", err)
+	}
+	if len(bobConstraints) != 1 || bobConstraints[0].TargetID != "rule-json" {
+		t.Errorf("Expected rule-json constraint for user-bob, got %v", bobConstraints)
+	}
+
+	// 2. Revoke rule-json and replace with rule-yaml
+	if err := gllam.RevokeOrSupersedeRule(ctx, "rule-json", "rule-yaml"); err != nil {
+		t.Fatalf("RevokeOrSupersedeRule failed: %v", err)
+	}
+
+	_ = gllam.AddEdge(ctx, memory.SemanticLink{
+		SourceID:       "user-bob",
+		TargetID:       "rule-yaml",
+		Relationship:   "is_preference",
+		ValidFrom:      "2000",
+		OriginSourceID: "user-bob",
+		RuleContext:    "user_preference",
+	})
+
+	// 3. Verify rule-json is expired and rule-yaml is active
+	newConstraints, err := gllam.GetActiveConstraintsForSource(ctx, "user-bob", "user_preference")
+	if err != nil {
+		t.Fatalf("GetActiveConstraintsForSource after revoke failed: %v", err)
+	}
+	hasJson := false
+	hasYaml := false
+	for _, c := range newConstraints {
+		if c.TargetID == "rule-json" {
+			hasJson = true
+		}
+		if c.TargetID == "rule-yaml" {
+			hasYaml = true
+		}
+	}
+	if hasJson {
+		t.Errorf("Expected rule-json to be revoked/expired")
+	}
+	if !hasYaml {
+		t.Errorf("Expected rule-yaml to be active")
+	}
+}
+
+func TestPDDLRuleVerification(t *testing.T) {
+	nodes := []memory.SemanticNode{
+		{ID: "rule-format-table", Name: "Format Table", Type: memory.NodeTypeRule},
+	}
+	links := []memory.SemanticLink{
+		{SourceID: "user-alice", TargetID: "rule-format-table", Relationship: "is_preference", RuleContext: "user_preference"},
+	}
+
+	goal := ExtractPDDLGoal("Did we follow the rule for table format?", nodes, links)
+	expectedGoal := "(and (rule_satisfied rule_format_table))"
+	if goal != expectedGoal {
+		t.Errorf("Expected goal %q, got %q", expectedGoal, goal)
+	}
+
+	domain, problem := CompileGraphToPDDL(nodes, links, goal, nil)
+	if !strings.Contains(domain, "must_follow_rule") || !strings.Contains(domain, "verify_instruction_rule") {
+		t.Errorf("Domain missing rule predicates/action")
+	}
+	if !strings.Contains(problem, "rule_format_table") {
+		t.Errorf("Problem missing rule_format_table object")
+	}
+}
+

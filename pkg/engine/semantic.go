@@ -496,19 +496,92 @@ func (e *GllamEngine) ExpandTemporalNeighbors(ctx context.Context, seedNodes []m
 		frontier = nextFrontier
 	}
 
-	resultNodes := make([]memory.SemanticNode, 0, len(nodeMap))
+	expNodes := make([]memory.SemanticNode, 0, len(nodeMap))
 	for _, n := range nodeMap {
-		resultNodes = append(resultNodes, n)
+		expNodes = append(expNodes, n)
 	}
-
-	resultLinks := make([]memory.SemanticLink, 0, len(linkMap))
+	expLinks := make([]memory.SemanticLink, 0, len(linkMap))
 	for _, l := range linkMap {
-		resultLinks = append(resultLinks, l)
+		expLinks = append(expLinks, l)
 	}
 
-	return resultNodes, resultLinks, nil
+	return expNodes, expLinks, nil
 }
 
+// GetActiveConstraintsForSource retrieves active rules, preferences, and constraints for a given source_id or rule_context
+func (e *GllamEngine) GetActiveConstraintsForSource(ctx context.Context, sourceID string, targetContext string) ([]memory.SemanticLink, error) {
+	query := `
+		SELECT source_id, target_id, relationship, caveats, valid_from, valid_until, temporal_anchor_id, temporal_relation, temporal_offset_seconds, temporal_granularity, temporal_note, origin_source_id, rule_context, constraint_type, updated_at
+		FROM semantic_links
+		WHERE valid_until IS NULL 
+		  AND relationship NOT IN ('supersedes_rule', 'conflicting_claim', 'has_unresolved_conflict')
+		  AND (relationship IN ('has_constraint', 'is_preference', 'applies_rule') OR target_id LIKE 'rule%' OR target_id LIKE 'constraint%')
+		  AND (origin_source_id = ? OR source_id = ? OR rule_context = 'global' OR rule_context = ?)
+		ORDER BY valid_from ASC`
 
 
+	rows, err := e.dbRO.QueryContext(ctx, query, sourceID, sourceID, targetContext)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query active constraints for source %s: %w", sourceID, err)
+	}
+	defer rows.Close()
 
+	var links []memory.SemanticLink
+	for rows.Next() {
+		var l memory.SemanticLink
+		var anchorID, tempRel, tempGran, tempNote, origSource, rCtx, cType sql.NullString
+		if err := rows.Scan(&l.SourceID, &l.TargetID, &l.Relationship, &l.Caveats, &l.ValidFrom, &l.ValidUntil, &anchorID, &tempRel, &l.TemporalOffsetSeconds, &tempGran, &tempNote, &origSource, &rCtx, &cType, &l.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("failed to scan constraint link: %w", err)
+		}
+		if anchorID.Valid {
+			l.TemporalAnchorID = anchorID.String
+		}
+		if tempRel.Valid {
+			l.TemporalRelation = tempRel.String
+		}
+		if tempGran.Valid {
+			l.TemporalGranularity = tempGran.String
+		}
+		if tempNote.Valid {
+			l.TemporalNote = tempNote.String
+		}
+		if origSource.Valid {
+			l.OriginSourceID = origSource.String
+		}
+		if rCtx.Valid {
+			l.RuleContext = rCtx.String
+		}
+		if cType.Valid {
+			l.ConstraintType = cType.String
+		}
+		links = append(links, l)
+	}
+	return links, rows.Err()
+}
+
+// RevokeOrSupersedeRule revokes a rule/constraint or marks it as superseded by a newer rule ID
+func (e *GllamEngine) RevokeOrSupersedeRule(ctx context.Context, oldRuleID string, newRuleID string) error {
+	nowStr := fmt.Sprintf("%d", time.Now().Unix())
+	now := time.Now().Unix()
+
+	query := `
+		UPDATE semantic_links
+		SET valid_until = ?, updated_at = ?
+		WHERE (target_id = ? OR source_id = ?) AND valid_until IS NULL`
+
+	_, err := e.db.ExecContext(ctx, query, nowStr, now, oldRuleID, oldRuleID)
+	if err != nil {
+		return fmt.Errorf("failed to revoke old rule %s: %w", oldRuleID, err)
+	}
+
+	if newRuleID != "" {
+		// Add supersedes link
+		_ = e.AddEdge(ctx, memory.SemanticLink{
+			SourceID:     newRuleID,
+			TargetID:     oldRuleID,
+			Relationship: "supersedes_rule",
+			ValidFrom:    nowStr,
+		})
+	}
+	return nil
+}

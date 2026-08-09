@@ -17,13 +17,104 @@ func SanitizePDDLName(name string) string {
 	return name
 }
 
+type PDDLAspect string
+
+const (
+	AspectAll             PDDLAspect = "all"
+	AspectTemporal        PDDLAspect = "temporal"
+	AspectInstruction     PDDLAspect = "instruction"
+	AspectStateTransition PDDLAspect = "state_transition"
+)
+
+// ValidatePDDL performs lightweight structural validation of generated PDDL definitions
+func ValidatePDDL(domain, problem string) error {
+	if !strings.Contains(domain, "(define (domain") {
+		return fmt.Errorf("invalid PDDL domain: missing (define (domain header")
+	}
+	if !strings.Contains(problem, "(define (problem") {
+		return fmt.Errorf("invalid PDDL problem: missing (define (problem header")
+	}
+	if !strings.Contains(domain, "(:requirements") {
+		return fmt.Errorf("invalid PDDL domain: missing (:requirements")
+	}
+	if !strings.Contains(domain, "(:predicates") {
+		return fmt.Errorf("invalid PDDL domain: missing (:predicates")
+	}
+	if !strings.Contains(problem, "(:init") {
+		return fmt.Errorf("invalid PDDL problem: missing (:init")
+	}
+	if !strings.Contains(problem, "(:goal") {
+		return fmt.Errorf("invalid PDDL problem: missing (:goal")
+	}
+	return nil
+}
+
+// FilterNodesAndLinksForAspect projects a minimal sub-graph tailored to the requested aspect
+func FilterNodesAndLinksForAspect(nodes []memory.SemanticNode, links []memory.SemanticLink, aspect PDDLAspect) ([]memory.SemanticNode, []memory.SemanticLink) {
+	if aspect == AspectAll || aspect == "" {
+		return nodes, links
+	}
+
+	subNodesMap := make(map[string]memory.SemanticNode)
+	var subLinks []memory.SemanticLink
+
+	for _, l := range links {
+		rel := strings.ToLower(l.Relationship)
+		includeLink := false
+
+		switch aspect {
+		case AspectTemporal:
+			if rel == "happened_before" || rel == "happened_after" || rel == "during_interval" || rel == "contains_interval" || l.TemporalAnchorID != "" {
+				includeLink = true
+			}
+		case AspectInstruction:
+			if rel == "has_constraint" || rel == "is_preference" || rel == "applies_rule" || rel == "supersedes_rule" || l.RuleContext != "" || l.OriginSourceID != "" {
+				includeLink = true
+			}
+		case AspectStateTransition:
+			if rel == "has_state" || rel == "causes" || rel == "introduced_state" {
+				includeLink = true
+			}
+		}
+
+		if includeLink {
+			subLinks = append(subLinks, l)
+			for _, n := range nodes {
+				if n.ID == l.SourceID || n.ID == l.TargetID || n.ID == l.TemporalAnchorID || n.ID == l.OriginSourceID {
+					subNodesMap[n.ID] = n
+				}
+			}
+		}
+	}
+
+	// Fallback if pruning was too aggressive
+	if len(subLinks) == 0 {
+		return nodes, links
+	}
+
+	subNodes := make([]memory.SemanticNode, 0, len(subNodesMap))
+	for _, n := range subNodesMap {
+		subNodes = append(subNodes, n)
+	}
+	return subNodes, subLinks
+}
+
 // CompileGraphToPDDL takes semantic nodes and links and dynamically generates
-// a typed PDDL domain and problem definition.
+// a typed PDDL domain and problem definition using default AspectAll.
 func CompileGraphToPDDL(nodes []memory.SemanticNode, links []memory.SemanticLink, goalPredicate string, procedures []memory.ProceduralKnowledge) (string, string) {
+	return CompileGraphToPDDLAspect(nodes, links, goalPredicate, procedures, AspectAll)
+}
+
+// CompileGraphToPDDLAspect dynamically projects sub-domain aspects and compiles typed PDDL definitions.
+func CompileGraphToPDDLAspect(nodes []memory.SemanticNode, links []memory.SemanticLink, goalPredicate string, procedures []memory.ProceduralKnowledge, aspect PDDLAspect) (string, string) {
+	// Project sub-graph according to requested aspect
+	nodes, links = FilterNodesAndLinksForAspect(nodes, links, aspect)
+
 	// 1. Gather unique objects with types and dynamically infer predicates
 	objectsByType := make(map[string][]string) // type -> list of sanitized node IDs
 	nodeTypeMap := make(map[string]string)     // nodeID -> type
 	predicates := make(map[string]bool)
+
 
 	// Detect temporal cycles in graph edges
 	cycleRes := DetectTemporalCycles(links)
@@ -102,13 +193,13 @@ func CompileGraphToPDDL(nodes []memory.SemanticNode, links []memory.SemanticLink
 	var domain strings.Builder
 	domain.WriteString("(define (domain gllam)\n")
 	domain.WriteString("  (:requirements :strips :typing)\n")
-	domain.WriteString("  (:types event state entity service contradiction - object)\n\n")
+	domain.WriteString("  (:types event state entity service rule constraint human agent system contradiction - object)\n\n")
 
 	domain.WriteString("  (:predicates\n")
 	for pred := range predicates {
 		domain.WriteString(fmt.Sprintf("    (%s ?a ?b)\n", pred))
 	}
-	// Standard predicates for temporal verification
+	// Standard predicates for temporal and instruction verification
 	if !predicates["verified_sequence"] {
 		domain.WriteString("    (verified_sequence ?a ?b)\n")
 	}
@@ -118,9 +209,12 @@ func CompileGraphToPDDL(nodes []memory.SemanticNode, links []memory.SemanticLink
 	if !predicates["happened_after"] {
 		domain.WriteString("    (happened_after ?a ?b)\n")
 	}
+	domain.WriteString("    (must_follow_rule ?r)\n")
+	domain.WriteString("    (rule_satisfied ?r)\n")
+	domain.WriteString("    (rule_violated ?r)\n")
 	domain.WriteString("  )\n\n")
 
-	// Inject dynamic (:action) blocks from ProceduralKnowledge or fallback temporal actions
+	// Inject dynamic (:action) blocks from ProceduralKnowledge or fallback temporal/rule actions
 	hasExplicitActions := false
 	for _, proc := range procedures {
 		if strings.Contains(proc.Instructions, "(:action") {
@@ -147,6 +241,12 @@ func CompileGraphToPDDL(nodes []memory.SemanticNode, links []memory.SemanticLink
     :parameters (?e1 - event ?e2 - event)
     :precondition (and (happened_before ?e2 ?e1))
     :effect (and (happened_after ?e1 ?e2))
+  )
+
+  (:action verify_instruction_rule
+    :parameters (?r - object)
+    :precondition (and (must_follow_rule ?r) (not (rule_violated ?r)))
+    :effect (rule_satisfied ?r)
   )
 
   (:action transition_state
@@ -186,8 +286,26 @@ func CompileGraphToPDDL(nodes []memory.SemanticNode, links []memory.SemanticLink
 	return domain.String(), problem.String()
 }
 
+// ExtractPDDLGoalAndAspect derives both the PDDL goal expression and the target PDDLAspect sub-domain.
+func ExtractPDDLGoalAndAspect(userPrompt string, nodes []memory.SemanticNode, links []memory.SemanticLink) (string, PDDLAspect) {
+	goal := ExtractPDDLGoal(userPrompt, nodes, links)
+	promptLower := strings.ToLower(userPrompt)
+
+	if strings.Contains(promptLower, "rule") || strings.Contains(promptLower, "constraint") || strings.Contains(promptLower, "follow") || strings.Contains(promptLower, "format") || strings.Contains(promptLower, "preference") {
+		return goal, AspectInstruction
+	}
+	if strings.Contains(promptLower, "state") || strings.Contains(promptLower, "version") || strings.Contains(promptLower, "causes") || strings.Contains(promptLower, "change") {
+		return goal, AspectStateTransition
+	}
+	if strings.Contains(promptLower, "before") || strings.Contains(promptLower, "after") || strings.Contains(promptLower, "sequence") || strings.Contains(promptLower, "order") || strings.Contains(promptLower, "between") || strings.Contains(promptLower, "since") || strings.Contains(promptLower, "until") {
+		return goal, AspectTemporal
+	}
+	return goal, AspectAll
+}
+
 // ExtractPDDLGoal dynamically derives a PDDL goal expression from a user prompt and retrieved context
 func ExtractPDDLGoal(userPrompt string, nodes []memory.SemanticNode, links []memory.SemanticLink) string {
+
 	promptLower := strings.ToLower(userPrompt)
 
 	// 1. Entity name and ID matching against prompt
@@ -260,8 +378,23 @@ func ExtractPDDLGoal(userPrompt string, nodes []memory.SemanticNode, links []mem
 		}
 	}
 
-	// 5. Check for general temporal event ordering queries ("before", "after", "sequence", "order")
+	// 5. Check for rule/constraint verification queries ("rule", "constraint", "follow", "format", "preference")
+	if strings.Contains(promptLower, "rule") || strings.Contains(promptLower, "constraint") || strings.Contains(promptLower, "follow") || strings.Contains(promptLower, "format") || strings.Contains(promptLower, "preference") {
+		var ruleNode string
+		for _, n := range nodes {
+			if n.Type == memory.NodeTypeRule || n.Type == memory.NodeTypeConstraint || strings.HasPrefix(n.ID, "rule") || strings.HasPrefix(n.ID, "constraint") {
+				ruleNode = SanitizePDDLName(n.ID)
+				break
+			}
+		}
+		if ruleNode != "" {
+			return fmt.Sprintf("(and (rule_satisfied %s))", ruleNode)
+		}
+	}
+
+	// 6. Check for general temporal event ordering queries ("before", "after", "sequence", "order")
 	if strings.Contains(promptLower, "before") || strings.Contains(promptLower, "after") || strings.Contains(promptLower, "sequence") || strings.Contains(promptLower, "order") {
+
 		// Prefer matched nodes if at least two were ground-matched in prompt
 		if len(matchedNodes) >= 2 {
 			if strings.Contains(promptLower, "after") && !strings.Contains(promptLower, "before") {
