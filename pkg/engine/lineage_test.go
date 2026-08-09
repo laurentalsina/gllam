@@ -53,6 +53,35 @@ func TestStrictInformationLineage(t *testing.T) {
 		t.Fatalf("AddDocumentLineage lin2 failed: %v", err)
 	}
 
+	// Add multi-author version edit history
+	ver1 := memory.DocumentVersion{
+		ID:            "ver-lin1-v1",
+		LineageID:     "lin-jira-101",
+		VersionNumber: 1,
+		AuthorID:      "alice",
+		AuthorName:    "Alice Smith",
+		ChangeSummary: "Initial draft specification",
+		StartLine:     1,
+		EndLine:       30,
+	}
+	ver2 := memory.DocumentVersion{
+		ID:            "ver-lin1-v2",
+		LineageID:     "lin-jira-101",
+		VersionNumber: 2,
+		AuthorID:      "carol_lead",
+		AuthorName:    "Carol Tech Lead",
+		ChangeSummary: "Approved production auth config on port 8080",
+		StartLine:     31,
+		EndLine:       50,
+	}
+
+	if err := gllam.AddDocumentVersion(ctx, ver1); err != nil {
+		t.Fatalf("AddDocumentVersion ver1 failed: %v", err)
+	}
+	if err := gllam.AddDocumentVersion(ctx, ver2); err != nil {
+		t.Fatalf("AddDocumentVersion ver2 failed: %v", err)
+	}
+
 	// Fetch lineage for node IDs
 	lineages, err := gllam.GetDocumentLineageForNodes(ctx, []string{"caddy-service", "port-8080"})
 	if err != nil || len(lineages) != 2 {
@@ -73,7 +102,8 @@ func TestStrictInformationLineage(t *testing.T) {
 	if !strings.Contains(prompt, "https://jira.internal.company.com/browse/PROD-101") || !strings.Contains(prompt, "https://github.company.com/infra/config/pull/55") {
 		t.Errorf("Formatted prompt missing source URIs: %s", prompt)
 	}
-	if !strings.Contains(prompt, "(Line 42)") || !strings.Contains(prompt, "(Line 12)") {
-		t.Errorf("Formatted prompt missing line numbers: %s", prompt)
+	if !strings.Contains(prompt, "Alice Smith (alice)") || !strings.Contains(prompt, "Carol Tech Lead (carol_lead)") {
+		t.Errorf("Formatted prompt missing multi-author version handles: %s", prompt)
 	}
 }
+

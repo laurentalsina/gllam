@@ -74,17 +74,33 @@ type SemanticLink struct {
 
 
 
-type DocumentLineage struct {
+type DocumentVersion struct {
 	ID            string `json:"id"`
-	NodeID        string `json:"node_id"`
-	SourceURI     string `json:"source_uri"`
-	DocumentTitle string `json:"document_title"`
-	SourceType    string `json:"source_type"`
-	LineNumber    int    `json:"line_number,omitempty"`
+	LineageID     string `json:"lineage_id"`
+	VersionNumber int    `json:"version_number"`
+	AuthorID      string `json:"author_id"`
+	AuthorName    string `json:"author_name"`
+	ChangeSummary string `json:"change_summary"`
+	StartLine     int    `json:"start_line,omitempty"`
+	EndLine       int    `json:"end_line,omitempty"`
 	CharOffset    int    `json:"char_offset,omitempty"`
-	Checksum      string `json:"checksum,omitempty"`
 	CreatedAt     int64  `json:"created_at"`
 }
+
+type DocumentLineage struct {
+	ID            string            `json:"id"`
+	NodeID        string            `json:"node_id"`
+	SourceURI     string            `json:"source_uri"`
+	DocumentTitle string            `json:"document_title"`
+	SourceType    string            `json:"source_type"`
+	LineNumber    int               `json:"line_number,omitempty"`
+	CharOffset    int               `json:"char_offset,omitempty"`
+	Checksum      string            `json:"checksum,omitempty"`
+	Authors       []string          `json:"authors,omitempty"`
+	Versions      []DocumentVersion `json:"versions,omitempty"`
+	CreatedAt     int64             `json:"created_at"`
+}
+
 
 type CompiledContext struct {
 	Procedural    []ProceduralKnowledge

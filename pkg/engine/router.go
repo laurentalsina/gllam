@@ -337,10 +337,10 @@ func FormatSystemPrompt(ctx *memory.CompiledContext) string {
         sb.WriteString("\n\n")
     }
 
-    // Strict Source Lineage Citations (Issue #8)
+    // Strict Source Lineage Citations (Issue #8 & Multi-Author Versions)
     if len(ctx.Lineage) > 0 {
         sb.WriteString("## Strict Source Lineage Citations\n\n")
-        sb.WriteString("When synthesizing facts from this context, you MUST explicitly cite source URIs:\n\n")
+        sb.WriteString("When synthesizing facts from this context, you MUST explicitly cite source URIs and author provenance:\n\n")
         for _, lin := range ctx.Lineage {
             lineStr := ""
             if lin.LineNumber > 0 {
@@ -350,10 +350,30 @@ func FormatSystemPrompt(ctx *memory.CompiledContext) string {
             if lin.DocumentTitle != "" {
                 titleStr = fmt.Sprintf(" - %s", lin.DocumentTitle)
             }
-            sb.WriteString(fmt.Sprintf("- Node `%s` [%s] %s%s%s\n", lin.NodeID, lin.SourceType, lin.SourceURI, titleStr, lineStr))
+            authorStr := ""
+            if len(lin.Authors) > 0 {
+                authorStr = fmt.Sprintf(" [Authors: %s]", strings.Join(lin.Authors, ", "))
+            }
+            sb.WriteString(fmt.Sprintf("- Node `%s` [%s] %s%s%s%s\n", lin.NodeID, lin.SourceType, lin.SourceURI, titleStr, lineStr, authorStr))
+
+            // Sub-bullet version history edits
+            if len(lin.Versions) > 0 {
+                for _, v := range lin.Versions {
+                    vAuthor := v.AuthorID
+                    if v.AuthorName != "" {
+                        vAuthor = fmt.Sprintf("%s (%s)", v.AuthorName, v.AuthorID)
+                    }
+                    lines := ""
+                    if v.StartLine > 0 && v.EndLine > 0 {
+                        lines = fmt.Sprintf(" Lines %d-%d", v.StartLine, v.EndLine)
+                    }
+                    sb.WriteString(fmt.Sprintf("  * v%d by %s%s: %s\n", v.VersionNumber, vAuthor, lines, v.ChangeSummary))
+                }
+            }
         }
         sb.WriteString("\n")
     }
+
 
     rawText := sb.String()
     return RedactProhibitedContent(rawText, ctx.SemanticLinks, ctx.SemanticNodes)

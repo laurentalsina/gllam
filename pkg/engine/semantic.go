@@ -1697,8 +1697,94 @@ func (e *GllamEngine) GetDocumentLineageForNodes(ctx context.Context, nodeIDs []
 		lineages = append(lineages, l)
 	}
 
+	// Fetch versions and multi-authors for each lineage entry
+	for i := range lineages {
+		vers, err := e.GetDocumentVersionsForLineage(ctx, lineages[i].ID)
+		if err == nil && len(vers) > 0 {
+			lineages[i].Versions = vers
+			authorMap := make(map[string]bool)
+			var authors []string
+			for _, v := range vers {
+				name := v.AuthorID
+				if v.AuthorName != "" {
+					name = fmt.Sprintf("%s (%s)", v.AuthorName, v.AuthorID)
+				}
+				if !authorMap[name] {
+					authorMap[name] = true
+					authors = append(authors, name)
+				}
+			}
+			lineages[i].Authors = authors
+		}
+	}
+
 	return lineages, nil
 }
+
+// AddDocumentVersion records a multi-author edit version history entry for a document lineage record.
+func (e *GllamEngine) AddDocumentVersion(ctx context.Context, ver memory.DocumentVersion) error {
+	now := time.Now().Unix()
+	if ver.CreatedAt == 0 {
+		ver.CreatedAt = now
+	}
+	if ver.ID == "" {
+		ver.ID = fmt.Sprintf("ver-%s-%d-%d", ver.LineageID, ver.VersionNumber, now)
+	}
+
+	query := `
+		INSERT INTO document_versions (id, lineage_id, version_number, author_id, author_name, change_summary, start_line, end_line, char_offset, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(id) DO UPDATE SET change_summary = excluded.change_summary, start_line = excluded.start_line, end_line = excluded.end_line`
+
+	_, err := e.db.ExecContext(ctx, query, ver.ID, ver.LineageID, ver.VersionNumber, ver.AuthorID, ver.AuthorName, ver.ChangeSummary, ver.StartLine, ver.EndLine, ver.CharOffset, ver.CreatedAt)
+	if err != nil {
+		return fmt.Errorf("failed to insert document version for lineage %s: %w", ver.LineageID, err)
+	}
+	return nil
+}
+
+// GetDocumentVersionsForLineage fetches all version edit entries for a given lineage ID.
+func (e *GllamEngine) GetDocumentVersionsForLineage(ctx context.Context, lineageID string) ([]memory.DocumentVersion, error) {
+	query := `
+		SELECT id, lineage_id, version_number, author_id, author_name, change_summary, start_line, end_line, char_offset, created_at
+		FROM document_versions
+		WHERE lineage_id = ?
+		ORDER BY version_number ASC, created_at ASC`
+
+	rows, err := e.dbRO.QueryContext(ctx, query, lineageID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query document versions: %w", err)
+	}
+	defer rows.Close()
+
+	var versions []memory.DocumentVersion
+	for rows.Next() {
+		var v memory.DocumentVersion
+		var authorName, changeSummary sql.NullString
+		var startLine, endLine, charOff sql.NullInt64
+		if err := rows.Scan(&v.ID, &v.LineageID, &v.VersionNumber, &v.AuthorID, &authorName, &changeSummary, &startLine, &endLine, &charOff, &v.CreatedAt); err != nil {
+			continue
+		}
+		if authorName.Valid {
+			v.AuthorName = authorName.String
+		}
+		if changeSummary.Valid {
+			v.ChangeSummary = changeSummary.String
+		}
+		if startLine.Valid {
+			v.StartLine = int(startLine.Int64)
+		}
+		if endLine.Valid {
+			v.EndLine = int(endLine.Int64)
+		}
+		if charOff.Valid {
+			v.CharOffset = int(charOff.Int64)
+		}
+		versions = append(versions, v)
+	}
+	return versions, nil
+}
+
 
 
 

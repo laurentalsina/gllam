@@ -88,7 +88,26 @@ CREATE TABLE IF NOT EXISTS document_lineage (
 CREATE INDEX IF NOT EXISTS idx_lineage_node ON document_lineage(node_id);
 CREATE INDEX IF NOT EXISTS idx_lineage_uri ON document_lineage(source_uri);
 
+-- 5b. DOCUMENT VERSIONS (Multi-author edit history and version granularity)
+CREATE TABLE IF NOT EXISTS document_versions (
+    id TEXT PRIMARY KEY,
+    lineage_id TEXT NOT NULL,
+    version_number INTEGER NOT NULL,
+    author_id TEXT NOT NULL,
+    author_name TEXT,
+    change_summary TEXT,
+    start_line INTEGER DEFAULT 0,
+    end_line INTEGER DEFAULT 0,
+    char_offset INTEGER DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    FOREIGN KEY (lineage_id) REFERENCES document_lineage(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_doc_version_lineage ON document_versions(lineage_id);
+CREATE INDEX IF NOT EXISTS idx_doc_version_author ON document_versions(author_id);
+
 CREATE INDEX IF NOT EXISTS idx_links_lookup ON semantic_links(source_id, target_id);
+
 
 
 
