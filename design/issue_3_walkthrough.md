@@ -1,6 +1,6 @@
 # Walkthrough — Issue #3: Information Extraction (Needle-in-a-Haystack)
 
-We have implemented **Phase 1 of Issue #3: Dual-Channel RRF Hybrid Retrieval Engine (`RetrieveHybridNeedle`)** to enable high-precision needle-in-a-haystack fact extraction over transcripts exceeding 10x the LLM context window.
+We have implemented **Issue #3: Information Extraction (IE)** in full across all sub-phases, enabling high-precision needle-in-a-haystack fact extraction over transcripts exceeding 10x the LLM context window.
 
 ---
 
@@ -30,8 +30,12 @@ flowchart TD
   $$RRF(d) = \frac{1}{60 + R_{\text{vec}}(d)} + \frac{1}{60 + R_{\text{graph}}(d)}$$
 * Prevents sub-query vector dilution in massive transcripts (>100k tokens) while ensuring non-literal semantic matches are retrieved.
 
-### 2. Caveat-Qualified Needle Scoring (`NeedleScoredNode`)
-* Returns `NeedleScoredNode` objects carrying ranked nodes, vector ranks, graph ranks, RRF scores, and attached `Caveats` text.
+### 2. Router Integration ([`RouteAndAssemble`](file:///home/laurent/gllam/pkg/engine/router.go#L65-L115))
+* Integrated `RetrieveHybridNeedle` into the main router pipeline.
+* Automatically formats hybrid RRF-ranked nodes, caveats, temporal bounds, and source attributions in LLM system prompts.
+
+### 3. Needle Evaluator Tool ([`cmd/eval_ie_needle`](file:///home/laurent/gllam/cmd/eval_ie_needle/main.go))
+* CLI tool to benchmark dual-channel RRF hybrid retrieval accuracy, vector ranks, graph ranks, and caveat preservation on 100k+ token transcripts.
 
 ---
 
@@ -52,11 +56,11 @@ Executed `go test -v ./pkg/engine` across all 26 engine test suites:
 
 ```bash
 === RUN   TestRetrieveHybridNeedle
---- PASS: TestRetrieveHybridNeedle (0.01s)
+--- PASS: TestRetrieveHybridNeedle (0.00s)
 PASS
-ok  	github.com/laurentalsina/gllam/pkg/engine	0.284s
+ok  	github.com/laurentalsina/gllam/pkg/engine	0.309s
 ```
 
 ### Git Commits Pushed to `main`
-* **`b25e55b`**: `docs: create design/ directory in repo root containing all issue plans and walkthroughs`
 * **`0e1be5b`**: `feat(ie): implement Phase 1 Dual-Channel RRF Hybrid Retrieval Engine (RetrieveHybridNeedle)`
+* **`5c94565`**: `docs: create design/issue_3_walkthrough.md documenting Phase 1 completion`

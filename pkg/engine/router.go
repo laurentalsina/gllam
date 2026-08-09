@@ -2,13 +2,13 @@ package engine
 
 import (
     "context"
-    "database/sql"
     "fmt"
     "regexp"
     "strings"
 
     "github.com/laurentalsina/gllam/pkg/memory"
 )
+
 
 
 
@@ -65,100 +65,42 @@ func (e *GllamEngine) RouteAndAssemble(ctx context.Context, userPrompt string, e
         }
     }
 
-    // Retrieve semantic links for requested and discovered entities
-    if len(entities) > 0 {
-        var links []memory.SemanticLink
-        var nodes []memory.SemanticNode
-        for _, entity := range entities {
-            // Fetch node
-            var node memory.SemanticNode
-            var ctxPrompt *string
-            err := e.dbRO.QueryRowContext(ctx, "SELECT id, name, type, context_prompt FROM semantic_nodes WHERE id = ?", entity).
-                Scan(&node.ID, &node.Name, &node.Type, &ctxPrompt)
-            if err == nil {
-                if ctxPrompt != nil {
-                    node.ContextPrompt = *ctxPrompt
-                }
-                nodes = append(nodes, node)
-            }
-            query := `
-                SELECT source_id, target_id, relationship, caveats, valid_from, valid_until, temporal_anchor_id, temporal_relation, temporal_offset_seconds, temporal_granularity, temporal_note, origin_source_id, rule_context, constraint_type, rule_rationale, resolution_rationale, duration_turns, remaining_turns, updated_at
-                FROM semantic_links
-                WHERE valid_until IS NULL AND (source_id = ? OR target_id = ?)
-                LIMIT 15`
+    // Retrieve semantic links and nodes via Dual-Channel RRF Hybrid Retrieval
+    if len(entities) > 0 || userPrompt != "" {
+        needleResults, err := e.RetrieveHybridNeedle(ctx, userPrompt, entities, "", 10)
+        if err == nil && len(needleResults) > 0 {
+            nodeMap := make(map[string]memory.SemanticNode)
+            linkMap := make(map[string]memory.SemanticLink)
 
-            rows, err := e.dbRO.QueryContext(ctx, query, entity, entity)
-            if err != nil {
-                return nil, fmt.Errorf("failed to query links for entity %s: %w", entity, err)
+            for _, nr := range needleResults {
+                nodeMap[nr.Node.ID] = nr.Node
+                for _, l := range nr.Links {
+                    key := fmt.Sprintf("%s-%s-%s", l.SourceID, l.TargetID, l.Relationship)
+                    linkMap[key] = l
+                }
             }
 
-            for rows.Next() {
-                var link memory.SemanticLink
-                var anchorID, tempRel, tempGran, tempNote, origSource, rCtx, cType, ratVal, resRatVal sql.NullString
-                var durTurns, remTurns sql.NullInt64
-                if err := rows.Scan(&link.SourceID, &link.TargetID, &link.Relationship, &link.Caveats,
-                    &link.ValidFrom, &link.ValidUntil, &anchorID, &tempRel, &link.TemporalOffsetSeconds, &tempGran, &tempNote, &origSource, &rCtx, &cType, &ratVal, &resRatVal, &durTurns, &remTurns, &link.UpdatedAt); err != nil {
-                    rows.Close()
-                    return nil, fmt.Errorf("failed to scan link: %w", err)
-                }
-                if anchorID.Valid {
-                    link.TemporalAnchorID = anchorID.String
-                }
-                if tempRel.Valid {
-                    link.TemporalRelation = tempRel.String
-                }
-                if tempGran.Valid {
-                    link.TemporalGranularity = tempGran.String
-                }
-                if tempNote.Valid {
-                    link.TemporalNote = tempNote.String
-                }
-                if origSource.Valid {
-                    link.OriginSourceID = origSource.String
-                }
-                if rCtx.Valid {
-                    link.RuleContext = rCtx.String
-                }
-                if cType.Valid {
-                    link.ConstraintType = cType.String
-                }
-                if ratVal.Valid {
-                    link.RuleRationale = ratVal.String
-                }
-                if resRatVal.Valid {
-                    link.ResolutionRationale = resRatVal.String
-                }
-                if durTurns.Valid {
-                    link.DurationTurns = durTurns.Int64
-                } else {
-                    link.DurationTurns = -1
-                }
-                if remTurns.Valid {
-                    link.RemainingTurns = remTurns.Int64
-                } else {
-                    link.RemainingTurns = -1
-                }
-                links = append(links, link)
+            var hybridNodes []memory.SemanticNode
+            for _, n := range nodeMap {
+                hybridNodes = append(hybridNodes, n)
+            }
+            var hybridLinks []memory.SemanticLink
+            for _, l := range linkMap {
+                hybridLinks = append(hybridLinks, l)
             }
 
-
-
-
-            rows.Close()
-
-
-        }
-
-        // Perform 2-hop temporal graph expansion to capture full transitive chains (A -> B -> C)
-        expandedNodes, expandedLinks, err := e.ExpandTemporalNeighbors(ctx, nodes, links, 2)
-        if err == nil {
-            ctxResult.SemanticNodes = expandedNodes
-            ctxResult.SemanticLinks = expandedLinks
-        } else {
-            ctxResult.SemanticLinks = links
-            ctxResult.SemanticNodes = nodes
+            // Perform 2-hop temporal graph expansion to capture full transitive chains
+            expandedNodes, expandedLinks, expErr := e.ExpandTemporalNeighbors(ctx, hybridNodes, hybridLinks, 2)
+            if expErr == nil {
+                ctxResult.SemanticNodes = expandedNodes
+                ctxResult.SemanticLinks = expandedLinks
+            } else {
+                ctxResult.SemanticNodes = hybridNodes
+                ctxResult.SemanticLinks = hybridLinks
+            }
         }
     }
+
 
 
     // Append relevant episodic summaries
