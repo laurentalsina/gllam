@@ -12,7 +12,9 @@ const (
 	NodeTypeAgent         = "agent"
 	NodeTypeSystem        = "system"
 	NodeTypeFallacy       = "fallacy"
+	NodeTypeCategory      = "category"
 )
+
 
 
 type EpisodicSummary struct {
@@ -43,6 +45,18 @@ type SemanticNode struct {
     Type          string `json:"type"`
     ContextPrompt string `json:"context_prompt"`
     TrustWeight   int    `json:"trust_weight"` // Epistemic trust weight (e.g. 900 for Jira Resolved/PR Merged, 100 for draft)
+    TaxonomyPath  string `json:"taxonomy_path"` // Materialized path (e.g. /Engineering/Infrastructure/Databases/Relational/Postgres)
+    IsCategory    bool   `json:"is_category"`   // Flag indicating if node represents a taxonomy category
+}
+
+type TaxonomyNode struct {
+	ID           string          `json:"id"`
+	Name         string          `json:"name"`
+	Path         string          `json:"path"`
+	IsCategory   bool            `json:"is_category"`
+	ParentPath   string          `json:"parent_path,omitempty"`
+	Children     []*TaxonomyNode `json:"children,omitempty"`
+	DirectMemberCount int       `json:"direct_member_count,omitempty"`
 }
 
 

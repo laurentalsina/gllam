@@ -22,18 +22,32 @@ func (e *GllamEngine) UpsertNode(ctx context.Context, node memory.SemanticNode) 
 	if node.TrustWeight <= 0 {
 		node.TrustWeight = 100 // Default trust weight
 	}
+	if node.TaxonomyPath == "" {
+		node.TaxonomyPath = "/"
+	}
+	isCatInt := 0
+	if node.IsCategory {
+		isCatInt = 1
+	}
 
 	query := `
-        INSERT INTO semantic_nodes (id, name, type, context_prompt, trust_weight)
-        VALUES (?, ?, ?, ?, ?)
-        ON CONFLICT(id) DO UPDATE SET name = excluded.name, type = excluded.type, context_prompt = excluded.context_prompt, trust_weight = excluded.trust_weight`
+        INSERT INTO semantic_nodes (id, name, type, context_prompt, trust_weight, taxonomy_path, is_category)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET 
+            name = excluded.name, 
+            type = excluded.type, 
+            context_prompt = excluded.context_prompt, 
+            trust_weight = excluded.trust_weight,
+            taxonomy_path = CASE WHEN excluded.taxonomy_path != '/' AND excluded.taxonomy_path != '' THEN excluded.taxonomy_path ELSE semantic_nodes.taxonomy_path END,
+            is_category = CASE WHEN excluded.is_category != 0 THEN excluded.is_category ELSE semantic_nodes.is_category END`
 
-	_, err := e.db.ExecContext(ctx, query, node.ID, node.Name, node.Type, node.ContextPrompt, node.TrustWeight)
+	_, err := e.db.ExecContext(ctx, query, node.ID, node.Name, node.Type, node.ContextPrompt, node.TrustWeight, node.TaxonomyPath, isCatInt)
 	if err != nil {
 		return fmt.Errorf("failed to upsert node: %w", err)
 	}
 	return nil
 }
+
 
 // AddEdge inserts a new semantic link after checking for existing active links with the same source and relationship
 func (e *GllamEngine) AddEdge(ctx context.Context, link memory.SemanticLink) error {

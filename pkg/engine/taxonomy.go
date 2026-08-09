@@ -1,0 +1,232 @@
+package engine
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+
+	"strings"
+
+	"github.com/laurentalsina/gllam/pkg/memory"
+)
+
+// UpdateNodeTaxonomyPath updates the materialized taxonomy path and category flag for a node.
+func (e *GllamEngine) UpdateNodeTaxonomyPath(ctx context.Context, nodeID string, taxonomyPath string, isCategory bool) error {
+	if taxonomyPath == "" {
+		taxonomyPath = "/"
+	}
+	// Clean taxonomy path ensuring leading slash and trailing consistency
+	cleanPath := "/" + strings.Trim(taxonomyPath, "/")
+
+	isCatInt := 0
+	if isCategory {
+		isCatInt = 1
+	}
+
+	query := `UPDATE semantic_nodes SET taxonomy_path = ?, is_category = ? WHERE id = ?`
+	res, err := e.db.ExecContext(ctx, query, cleanPath, isCatInt, nodeID)
+	if err != nil {
+		return fmt.Errorf("failed to update taxonomy path for node %s: %w", nodeID, err)
+	}
+
+	rows, _ := res.RowsAffected()
+	if rows == 0 {
+		return fmt.Errorf("node not found: %s", nodeID)
+	}
+	return nil
+}
+
+// GetNodesByTaxonomyPrefix returns all semantic nodes whose materialized path starts with pathPrefix.
+// Enables instantaneous hierarchical filtering (e.g., LIKE '/Engineering/Infrastructure/Databases/%').
+func (e *GllamEngine) GetNodesByTaxonomyPrefix(ctx context.Context, pathPrefix string) ([]memory.SemanticNode, error) {
+	cleanPrefix := "/" + strings.Trim(pathPrefix, "/")
+	pattern := cleanPrefix + "%"
+
+	query := `
+		SELECT id, name, type, context_prompt, trust_weight, taxonomy_path, is_category
+		FROM semantic_nodes
+		WHERE taxonomy_path LIKE ? OR taxonomy_path = ?
+		ORDER BY taxonomy_path ASC`
+
+	rows, err := e.dbRO.QueryContext(ctx, query, pattern, cleanPrefix)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query nodes by taxonomy prefix %s: %w", cleanPrefix, err)
+	}
+	defer rows.Close()
+
+	var nodes []memory.SemanticNode
+	for rows.Next() {
+		var n memory.SemanticNode
+		var isCatInt int
+		var ctxPrompt sql.NullString
+		if err := rows.Scan(&n.ID, &n.Name, &n.Type, &ctxPrompt, &n.TrustWeight, &n.TaxonomyPath, &isCatInt); err != nil {
+			return nil, fmt.Errorf("failed to scan taxonomy node: %w", err)
+		}
+		n.ContextPrompt = ctxPrompt.String
+		n.IsCategory = isCatInt == 1
+		nodes = append(nodes, n)
+	}
+	return nodes, nil
+}
+
+// GetUncategorizedNodes retrieves semantic nodes that currently have a root or empty taxonomy path ('/').
+func (e *GllamEngine) GetUncategorizedNodes(ctx context.Context, limit int) ([]memory.SemanticNode, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+
+	query := `
+		SELECT id, name, type, context_prompt, trust_weight, taxonomy_path, is_category
+		FROM semantic_nodes
+		WHERE (taxonomy_path IS NULL OR taxonomy_path = '/' OR taxonomy_path = '') AND is_category = 0
+		LIMIT ?`
+
+	rows, err := e.dbRO.QueryContext(ctx, query, limit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query uncategorized nodes: %w", err)
+	}
+	defer rows.Close()
+
+	var nodes []memory.SemanticNode
+	for rows.Next() {
+		var n memory.SemanticNode
+		var isCatInt int
+		var ctxPrompt sql.NullString
+		if err := rows.Scan(&n.ID, &n.Name, &n.Type, &ctxPrompt, &n.TrustWeight, &n.TaxonomyPath, &isCatInt); err != nil {
+			return nil, fmt.Errorf("failed to scan uncategorized node: %w", err)
+		}
+		n.ContextPrompt = ctxPrompt.String
+		n.IsCategory = isCatInt == 1
+		nodes = append(nodes, n)
+	}
+	return nodes, nil
+}
+
+// GetTaxonomyTree returns all active category nodes arranged in a hierarchical tree structure.
+func (e *GllamEngine) GetTaxonomyTree(ctx context.Context) ([]*memory.TaxonomyNode, error) {
+	query := `
+		SELECT id, name, taxonomy_path, is_category
+		FROM semantic_nodes
+		WHERE is_category = 1 OR type = ?
+		ORDER BY taxonomy_path ASC`
+
+	rows, err := e.dbRO.QueryContext(ctx, query, memory.NodeTypeCategory)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query taxonomy category nodes: %w", err)
+	}
+	defer rows.Close()
+
+	nodeMap := make(map[string]*memory.TaxonomyNode)
+	var rootNodes []*memory.TaxonomyNode
+
+	for rows.Next() {
+		var id, name, path string
+		var isCatInt int
+		if err := rows.Scan(&id, &name, &path, &isCatInt); err != nil {
+			return nil, fmt.Errorf("failed to scan taxonomy category node: %w", err)
+		}
+
+		cleanPath := "/" + strings.Trim(path, "/")
+		parts := strings.Split(strings.Trim(cleanPath, "/"), "/")
+		parentPath := "/"
+		if len(parts) > 1 {
+			parentPath = "/" + strings.Join(parts[:len(parts)-1], "/")
+		}
+
+		tn := &memory.TaxonomyNode{
+			ID:         id,
+			Name:       name,
+			Path:       cleanPath,
+			IsCategory: true,
+			ParentPath: parentPath,
+			Children:   make([]*memory.TaxonomyNode, 0),
+		}
+		nodeMap[cleanPath] = tn
+
+		if parentPath == "/" || parentPath == "" {
+			rootNodes = append(rootNodes, tn)
+		} else if parent, exists := nodeMap[parentPath]; exists {
+			parent.Children = append(parent.Children, tn)
+		} else {
+			rootNodes = append(rootNodes, tn)
+		}
+	}
+	return rootNodes, nil
+}
+
+// ConsolidateTaxonomyBranch performs an atomic SQLite transaction merging a duplicate/redundant category
+// branch into a target canonical category branch (rewriting all child materialized paths and updating is_a edges).
+func (e *GllamEngine) ConsolidateTaxonomyBranch(ctx context.Context, sourceCategoryPath string, targetCategoryPath string) error {
+	cleanSource := "/" + strings.Trim(sourceCategoryPath, "/")
+	cleanTarget := "/" + strings.Trim(targetCategoryPath, "/")
+
+	if cleanSource == cleanTarget {
+		return nil // Nothing to merge
+	}
+
+	tx, err := e.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("failed to start consolidation transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	// 1. Rewrite taxonomy_path for all descendant nodes matching cleanSource prefix
+	sourcePattern := cleanSource + "%"
+	rewriteQuery := `
+		UPDATE semantic_nodes
+		SET taxonomy_path = ? || SUBSTR(taxonomy_path, LENGTH(?) + 1)
+		WHERE taxonomy_path LIKE ? OR taxonomy_path = ?`
+
+	_, err = tx.ExecContext(ctx, rewriteQuery, cleanTarget, cleanSource, sourcePattern, cleanSource)
+	if err != nil {
+		return fmt.Errorf("failed to rewrite child node taxonomy paths: %w", err)
+	}
+
+	// 2. Redirect ontological semantic_links (is_a, subclass_of, instance_of, part_of) pointing to source node ID
+	var sourceID string
+	err = tx.QueryRowContext(ctx, "SELECT id FROM semantic_nodes WHERE taxonomy_path = ? AND is_category = 1 LIMIT 1", cleanSource).Scan(&sourceID)
+	if err == nil && sourceID != "" {
+		var targetID string
+		_ = tx.QueryRowContext(ctx, "SELECT id FROM semantic_nodes WHERE taxonomy_path = ? AND is_category = 1 LIMIT 1", cleanTarget).Scan(&targetID)
+
+		if targetID != "" {
+			redirectTargetQuery := `
+				UPDATE semantic_links
+				SET target_id = ?
+				WHERE target_id = ? AND relationship IN ('is_a', 'subclass_of', 'instance_of', 'part_of')`
+			_, _ = tx.ExecContext(ctx, redirectTargetQuery, targetID, sourceID)
+
+			deleteOldCategoryQuery := `DELETE FROM semantic_nodes WHERE id = ?`
+			_, _ = tx.ExecContext(ctx, deleteOldCategoryQuery, sourceID)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit taxonomy consolidation: %w", err)
+	}
+
+	return nil
+}
+
+// AutoClassifyEntityByRules applies deterministic domain heuristics to categorize an uncategorized entity.
+func AutoClassifyEntityByRules(node memory.SemanticNode) (string, string) {
+	nameLower := strings.ToLower(node.Name)
+	ctxLower := strings.ToLower(node.ContextPrompt)
+
+	switch {
+	case strings.Contains(nameLower, "postgres") || strings.Contains(nameLower, "mysql") || strings.Contains(nameLower, "sqlite") || strings.Contains(nameLower, "oracle") || strings.Contains(ctxLower, "relational database"):
+		return "/Engineering/Infrastructure/Databases/Relational", "Relational Databases"
+	case strings.Contains(nameLower, "redis") || strings.Contains(nameLower, "memcached") || strings.Contains(nameLower, "mongo") || strings.Contains(nameLower, "dynamo") || strings.Contains(ctxLower, "key-value"):
+		return "/Engineering/Infrastructure/Databases/NoSQL", "NoSQL Databases"
+	case strings.Contains(nameLower, "kubernetes") || strings.Contains(nameLower, "docker") || strings.Contains(nameLower, "caddy") || strings.Contains(nameLower, "nginx") || strings.Contains(ctxLower, "container"):
+		return "/Engineering/Infrastructure/Deployment", "Deployment Infrastructure"
+	case strings.Contains(nameLower, "jira") || strings.Contains(nameLower, "confluence") || strings.Contains(nameLower, "slack") || strings.Contains(ctxLower, "ticketing"):
+		return "/Enterprise/Tools/Communication", "Enterprise Tools"
+
+	default:
+		if node.Type == memory.NodeTypeService {
+			return "/Engineering/Services", "Engineering Services"
+		}
+		return "/General/Unclassified", "General Unclassified"
+	}
+}

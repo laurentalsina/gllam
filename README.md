@@ -322,12 +322,34 @@ gllam.RegisterRepositoryContextDirective(config.RepositoryContextDirective{
 sourceID, trustWeight, err := gllam.AttributeContainerEntryToSource(ctx, "jira", "alice", "Alice Smith", "Comment 1: DB is PostgreSQL 15.", time.Now().Unix())
 ```
 
-### Information Containers vs. Individual Sources
+### Autonomous Ontological Layer (Materialized Paths & Self-Healing Taxonomy)
 
-GLLAM enforces a strict ontological distinction between **Information Containers / Repositories** and **Individual Sources**:
-* **Containers (`document_lineage` / `document_versions`):** A Jira ticket (`PROD-101`), Confluence page, or Git repo is a multi-author container.
-* **Sources (`semantic_nodes` & `semantic_links.origin_source_id`):** Each comment, status change, or revision diff within a container is attributed directly to the specific individual source node (`src-alice` vs `src-dave`) with their individual `trust_weight` score.
-* When Alice ($W = 850$) and Dave ($W = 550$) post conflicting claims inside the same Jira ticket, Alice's claim **automatically supersedes** Dave's claim in the semantic graph.
+To prevent a flat semantic graph from devolving into an unsearchable hairball across 15,000+ Jira issues and 10,000+ Confluence pages, GLLAM features an **Autonomous Ontological Layer**:
+
+1. **Materialized Path SQLite Indexing:**
+   * Nodes store hierarchical paths in `taxonomy_path TEXT DEFAULT '/'` (e.g. `/Engineering/Infrastructure/Databases/Relational/Postgres`) and boolean `is_category INTEGER DEFAULT 0`.
+   * Enables instantaneous hierarchical filtering via `taxonomy_path LIKE '/Engineering/Infrastructure/Databases/%'`.
+2. **Asynchronous Batch Categorization (`ProcessUncategorizedBatch`):**
+   * Decoupled from bulk ingestion pipeline; pulls orphaned nodes (`taxonomy_path = '/'`) and categorizes them into category nodes (`NodeTypeCategory = "category"`) with explicit `is_a` links.
+3. **Self-Healing Taxonomy Consolidation (`ConsolidateTaxonomyBranch`):**
+   * Merges redundant categories (e.g. `/Engineering/DBs` into `/Engineering/Infrastructure/Databases`) in an atomic transaction that rewrites child node paths and redirects `is_a` edges.
+4. **Procedural Domain Binding (`GetProceduresByTaxonomyPrefix`):**
+   * Supercharges procedural knowledge retrieval by isolating operational recipes bound to target taxonomy sub-trees.
+
+```go
+// Instantaneous hierarchical filtering
+nodes, err := gllam.GetNodesByTaxonomyPrefix(ctx, "/Engineering/Infrastructure/Databases")
+
+// Asynchronous batch classification of orphaned nodes
+processedCount, err := gllam.ProcessUncategorizedBatch(ctx, 50)
+
+// Self-healing taxonomy branch consolidation
+err := gllam.ConsolidateTaxonomyBranch(ctx, "/Engineering/DBs", "/Engineering/Infrastructure/Databases")
+
+// Domain-isolated procedural recipe retrieval
+recipes, err := gllam.GetProceduresByTaxonomyPrefix(ctx, "/Engineering/Infrastructure/Databases")
+```
+
 
 
 ### Logical Fallacy Taxonomy & Terminology Guide

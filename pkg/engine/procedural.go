@@ -1,13 +1,15 @@
 package engine
 
 import (
-    "context"
-    "database/sql"
-    "fmt"
-    "time"
+	"context"
+	"database/sql"
+	"fmt"
+	"strings"
+	"time"
 
-    "github.com/laurentalsina/gllam/pkg/memory"
+	"github.com/laurentalsina/gllam/pkg/memory"
 )
+
 
 // UpsertProceduralKnowledge inserts or updates a procedural knowledge entry
 func (e *GllamEngine) UpsertProceduralKnowledge(ctx context.Context, pk memory.ProceduralKnowledge) error {
@@ -208,4 +210,40 @@ func (e *GllamEngine) GetInternalProceduresByTrigger(ctx context.Context, scope 
     }
 
     return procedures, rows.Err()
+}
+
+// GetProceduresByTaxonomyPrefix retrieves procedural knowledge bound to a specific taxonomy domain path prefix.
+func (e *GllamEngine) GetProceduresByTaxonomyPrefix(ctx context.Context, taxonomyPrefix string) ([]memory.ProceduralKnowledge, error) {
+	cleanPrefix := "/" + strings.Trim(taxonomyPrefix, "/")
+	pattern := cleanPrefix + "%"
+
+	query := `
+		SELECT pk.id, pk.task_type, pk.scope, pk.trigger_context, pk.instructions, pk.user_feedback_rules, pk.times_applied, pk.is_highly_helpful, pk.version, pk.superseded_by, pk.updated_at
+		FROM procedural_knowledge pk
+		JOIN semantic_nodes sn ON sn.name = pk.task_type OR sn.id = pk.id
+		WHERE sn.taxonomy_path LIKE ? OR sn.taxonomy_path = ?
+		ORDER BY pk.is_highly_helpful DESC, pk.times_applied DESC`
+
+	rows, err := e.dbRO.QueryContext(ctx, query, pattern, cleanPrefix)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query procedures by taxonomy prefix %s: %w", cleanPrefix, err)
+	}
+	defer rows.Close()
+
+	var procedures []memory.ProceduralKnowledge
+	for rows.Next() {
+		var pk memory.ProceduralKnowledge
+		var tc sql.NullString
+		if err := rows.Scan(
+			&pk.ID, &pk.TaskType, &pk.Scope, &tc, &pk.Instructions, &pk.UserFeedbackRules,
+			&pk.TimesApplied, &pk.IsHighlyHelpful, &pk.Version, &pk.SupersededBy, &pk.UpdatedAt); err != nil {
+			return nil, fmt.Errorf("failed to scan procedure: %w", err)
+		}
+		if tc.Valid {
+			pk.TriggerContext = tc.String
+		}
+		procedures = append(procedures, pk)
+	}
+
+	return procedures, rows.Err()
 }
