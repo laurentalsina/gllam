@@ -97,93 +97,92 @@ You must output ONLY valid JSON matching this exact structure, with no markdown 
 If the chat contains a contradiction (e.g. user changes their mind), extract the conflicting claims as distinct relationships.`
 
 	for _, ep := range episodes {
-		fmt.Printf("Processing episode: %s\n", ep.ID)
+		fmt.Printf("Processing episode: %s (length: %d chars)\n", ep.ID, len(ep.SummaryText))
 		
-		// Truncate episode text if it's too large to prevent JSON parsing issues with LLM output
-		// We'll limit it to first 30,000 chars for safety.
-		text := ep.SummaryText
-		if len(text) > 30000 {
-			text = text[:30000]
-		}
+		// Split episode text into boundary-aware overlapping chunks (6,000 chars with 2,000 overlap)
+		chunks := engine.ChunkTranscript(ep.SummaryText, 6000, 2000)
+		fmt.Printf("Split episode %s into %d semantic chunks for extraction\n", ep.ID, len(chunks))
 
-		userPrompt := fmt.Sprintf("Transcript:\n%s\n\nExtract JSON:", text)
+		totalNodesExtracted := 0
+		totalLinksExtracted := 0
 
-		response, err := llmClient.Generate(ctx, systemPrompt, userPrompt)
-		if err != nil {
-			fmt.Printf("LLM extraction failed for %s: %v\n", ep.ID, err)
-			continue
-		}
+		for _, chunk := range chunks {
+			userPrompt := fmt.Sprintf("Transcript Chunk (%d/%d):\n%s\n\nExtract JSON:", chunk.ChunkIndex+1, len(chunks), chunk.Text)
 
-		// Clean JSON output (sometimes wrapped in ```json)
-		response = strings.TrimSpace(response)
-		response = strings.TrimPrefix(response, "```json")
-		response = strings.TrimPrefix(response, "```")
-		response = strings.TrimSuffix(response, "```")
-		response = strings.TrimSpace(response)
-
-		var extraction ExtractionResponse
-		if err := json.Unmarshal([]byte(response), &extraction); err != nil {
-			fmt.Printf("Failed to parse JSON for %s: %v\n", ep.ID, err)
-			// fmt.Println("Raw response:", response)
-			continue
-		}
-
-		// Insert nodes
-		for _, node := range extraction.Nodes {
-			if node.ID == "" {
+			response, err := llmClient.Generate(ctx, systemPrompt, userPrompt)
+			if err != nil {
+				fmt.Printf("LLM extraction failed for %s chunk %d: %v\n", ep.ID, chunk.ChunkIndex+1, err)
 				continue
 			}
-			if err := gllam.UpsertNode(ctx, node); err != nil {
-				fmt.Printf("Failed to upsert node %s: %v\n", node.ID, err)
-			} else {
-				// Optionally generate embedding for semantic search
-				_ = gllam.StoreNodeEmbedding(ctx, node.ID)
-			}
-		}
 
-		// Insert links
-		for _, link := range extraction.Links {
-			if link.SourceID == "" || link.TargetID == "" || link.Relationship == "" {
+			// Clean JSON output (sometimes wrapped in ```json)
+			response = strings.TrimSpace(response)
+			response = strings.TrimPrefix(response, "```json")
+			response = strings.TrimPrefix(response, "```")
+			response = strings.TrimSuffix(response, "```")
+			response = strings.TrimSpace(response)
+
+			var extraction ExtractionResponse
+			if err := json.Unmarshal([]byte(response), &extraction); err != nil {
+				fmt.Printf("Failed to parse JSON for %s chunk %d: %v\n", ep.ID, chunk.ChunkIndex+1, err)
 				continue
 			}
-			// Default valid_from to episode timestamp if not specified by LLM
-			if link.ValidFrom == "" {
-				if link.TemporalNote != "" {
-					link.ValidFrom = "temporal_note"
+
+			// Insert nodes
+			for _, node := range extraction.Nodes {
+				if node.ID == "" {
+					continue
+				}
+				if err := gllam.UpsertNode(ctx, node); err != nil {
+					fmt.Printf("Failed to upsert node %s: %v\n", node.ID, err)
 				} else {
-					link.ValidFrom = fmt.Sprintf("%d", ep.CreatedAt)
+					_ = gllam.StoreNodeEmbedding(ctx, node.ID)
+					totalNodesExtracted++
 				}
 			}
 
-
-			if err := gllam.AddEdge(ctx, link); err != nil {
-				if strings.Contains(err.Error(), "FOREIGN KEY constraint failed") {
-					// Self-healing: Check and create missing Source node
-					var dummy int
-					if errSrc := gllam.DBRO().QueryRowContext(ctx, "SELECT 1 FROM semantic_nodes WHERE id = ?", link.SourceID).Scan(&dummy); errSrc != nil {
-						_ = gllam.UpsertNode(ctx, memory.SemanticNode{ID: link.SourceID, Name: link.SourceID, Type: "inferred"})
-						_ = gllam.StoreNodeEmbedding(ctx, link.SourceID)
-					}
-					// Check and create missing Target node
-					if errTgt := gllam.DBRO().QueryRowContext(ctx, "SELECT 1 FROM semantic_nodes WHERE id = ?", link.TargetID).Scan(&dummy); errTgt != nil {
-						_ = gllam.UpsertNode(ctx, memory.SemanticNode{ID: link.TargetID, Name: link.TargetID, Type: "inferred"})
-						_ = gllam.StoreNodeEmbedding(ctx, link.TargetID)
-					}
-					
-					// Retry
-					if retryErr := gllam.AddEdge(ctx, link); retryErr != nil {
-						fmt.Printf("Failed to add edge %s->%s after healing: %v\n", link.SourceID, link.TargetID, retryErr)
+			// Insert links
+			for _, link := range extraction.Links {
+				if link.SourceID == "" || link.TargetID == "" || link.Relationship == "" {
+					continue
+				}
+				// Default valid_from to episode timestamp if not specified by LLM
+				if link.ValidFrom == "" {
+					if link.TemporalNote != "" {
+						link.ValidFrom = "temporal_note"
 					} else {
-						fmt.Printf("Self-healed missing node(s) and added edge %s->%s\n", link.SourceID, link.TargetID)
+						link.ValidFrom = fmt.Sprintf("%d", ep.CreatedAt)
+					}
+				}
+
+				if err := gllam.AddEdge(ctx, link); err != nil {
+					if strings.Contains(err.Error(), "FOREIGN KEY constraint failed") {
+						// Self-healing: Check and create missing Source node
+						var dummy int
+						if errSrc := gllam.DBRO().QueryRowContext(ctx, "SELECT 1 FROM semantic_nodes WHERE id = ?", link.SourceID).Scan(&dummy); errSrc != nil {
+							_ = gllam.UpsertNode(ctx, memory.SemanticNode{ID: link.SourceID, Name: link.SourceID, Type: "inferred"})
+							_ = gllam.StoreNodeEmbedding(ctx, link.SourceID)
+						}
+						// Check and create missing Target node
+						if errTgt := gllam.DBRO().QueryRowContext(ctx, "SELECT 1 FROM semantic_nodes WHERE id = ?", link.TargetID).Scan(&dummy); errTgt != nil {
+							_ = gllam.UpsertNode(ctx, memory.SemanticNode{ID: link.TargetID, Name: link.TargetID, Type: "inferred"})
+							_ = gllam.StoreNodeEmbedding(ctx, link.TargetID)
+						}
+						
+						// Retry
+						if retryErr := gllam.AddEdge(ctx, link); retryErr == nil {
+							totalLinksExtracted++
+						}
 					}
 				} else {
-					fmt.Printf("Failed to add edge %s->%s: %v\n", link.SourceID, link.TargetID, err)
+					totalLinksExtracted++
 				}
 			}
 		}
 
-		fmt.Printf("Successfully ingested %d nodes and %d links from %s\n", len(extraction.Nodes), len(extraction.Links), ep.ID)
+		fmt.Printf("Successfully ingested %d nodes and %d links from %s across %d chunks\n", totalNodesExtracted, totalLinksExtracted, ep.ID, len(chunks))
 	}
+
 
 	fmt.Println("Semantic extraction complete!")
 }
