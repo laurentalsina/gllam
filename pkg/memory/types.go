@@ -6,6 +6,11 @@ const (
 	NodeTypeEntity        = "entity"
 	NodeTypeService       = "service"
 	NodeTypeContradiction = "contradiction"
+	NodeTypeRule          = "rule"
+	NodeTypeConstraint    = "constraint"
+	NodeTypeHuman         = "human"
+	NodeTypeAgent         = "agent"
+	NodeTypeSystem        = "system"
 )
 
 type EpisodicSummary struct {
@@ -38,19 +43,23 @@ type SemanticNode struct {
 }
 
 type SemanticLink struct {
-    SourceID         string  `json:"source_id"`
-    TargetID         string  `json:"target_id"`
-    Relationship     string  `json:"relationship"`
-    Caveats          string  `json:"caveats"`
-    ValidFrom        string  `json:"valid_from"`          // Unix timestamp string OR "temporal_note"
-    ValidUntil       *string `json:"valid_until"`         // Unix timestamp string OR "temporal_note" OR nil
-    TemporalAnchorID string  `json:"temporal_anchor_id"` // Grounded node ID reference for relative timing
-    TemporalRelation string  `json:"temporal_relation"` // Allen Interval Algebra: "before"|"after"|"equals"|"overlaps"|"during"|"contains"|"starts"|"finishes"|"meets"
-    TemporalOffsetSeconds int64   `json:"temporal_offset_seconds"` // Relative offset in seconds (+86400 = +1 day, -172800 = -2 days)
-    TemporalGranularity   string  `json:"temporal_granularity"`    // "day" (snap 00:00:00) | "hour" | "exact" | "month"
-    TemporalNote     string  `json:"temporal_note"`       // Qualitative phrase describing imprecise timestamp
-    UpdatedAt        int64   `json:"updated_at"`
+    SourceID              string  `json:"source_id"`
+    TargetID              string  `json:"target_id"`
+    Relationship          string  `json:"relationship"`
+    Caveats               string  `json:"caveats"`
+    ValidFrom             string  `json:"valid_from"`              // Unix timestamp string OR "temporal_note"
+    ValidUntil            *string `json:"valid_until"`             // Unix timestamp string OR "temporal_note" OR nil
+    TemporalAnchorID      string  `json:"temporal_anchor_id"`     // Grounded node ID reference for relative timing
+    TemporalRelation      string  `json:"temporal_relation"`     // Allen Interval Algebra: "before"|"after"|"equals"|...
+    TemporalOffsetSeconds int64   `json:"temporal_offset_seconds"`// Relative offset in seconds
+    TemporalGranularity   string  `json:"temporal_granularity"`   // "day" (snap 00:00:00) | "hour" | "exact" | "month"
+    TemporalNote          string  `json:"temporal_note"`           // Qualitative phrase describing imprecise timestamp
+    OriginSourceID        string  `json:"origin_source_id"`       // FK to semantic_nodes(id) for human/agent/system origin
+    RuleContext           string  `json:"rule_context"`           // "user_preference" | "session" | "source" | "global"
+    ConstraintType        string  `json:"constraint_type"`         // "positive" | "negative"
+    UpdatedAt             int64   `json:"updated_at"`
 }
+
 
 
 

@@ -48,14 +48,17 @@ CREATE TABLE IF NOT EXISTS semantic_links (
     temporal_offset_seconds INTEGER DEFAULT 0, -- Relative offset in seconds (+86400 = +1 day after anchor, -172800 = -2 days before anchor)
     temporal_granularity TEXT DEFAULT 'exact', -- Granularity leniency: 'day' (snap 00:00), 'hour' (snap XX:00), 'exact' (no snap), 'month'
     temporal_note TEXT,                   -- Qualitative phrase describing imprecise timestamp
-
-
+    origin_source_id TEXT,                -- Origin source node ID (human, agent, system)
+    rule_context TEXT DEFAULT 'global',   -- 'user_preference' | 'session' | 'source' | 'global'
+    constraint_type TEXT DEFAULT 'positive',-- 'positive' | 'negative'
     updated_at INTEGER NOT NULL,
     PRIMARY KEY (source_id, target_id, relationship),
     FOREIGN KEY (source_id) REFERENCES semantic_nodes(id),
     FOREIGN KEY (target_id) REFERENCES semantic_nodes(id),
-    FOREIGN KEY (temporal_anchor_id) REFERENCES semantic_nodes(id)
+    FOREIGN KEY (temporal_anchor_id) REFERENCES semantic_nodes(id),
+    FOREIGN KEY (origin_source_id) REFERENCES semantic_nodes(id)
 );
+
 
 
 
