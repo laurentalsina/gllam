@@ -51,36 +51,41 @@ func ValidatePDDL(domain, problem string) error {
 
 // FilterNodesAndLinksForAspect projects a minimal sub-graph tailored to the requested aspect
 func FilterNodesAndLinksForAspect(nodes []memory.SemanticNode, links []memory.SemanticLink, aspect PDDLAspect) ([]memory.SemanticNode, []memory.SemanticLink) {
-	if aspect == AspectAll || aspect == "" {
-		return nodes, links
-	}
-
 	subNodesMap := make(map[string]memory.SemanticNode)
 	var subLinks []memory.SemanticLink
 
 	for _, l := range links {
 		rel := strings.ToLower(l.Relationship)
-		includeLink := false
 
-		switch aspect {
-		case AspectTemporal:
-			if rel == "happened_before" || rel == "happened_after" || rel == "during_interval" || rel == "contains_interval" || l.TemporalAnchorID != "" {
-				includeLink = true
-			}
-		case AspectInstruction:
-			if rel == "has_constraint" || rel == "is_preference" || rel == "applies_rule" || rel == "supersedes_rule" || l.RuleContext != "" || l.OriginSourceID != "" {
-				includeLink = true
-			}
-		case AspectStateTransition:
-			if rel == "has_state" || rel == "causes" || rel == "introduced_state" {
-				includeLink = true
+		// Exclude fallacy subversion links from PDDL planning sub-graph
+		if rel == "exhibits_fallacy" || rel == "subverts_claim" {
+			continue
+		}
+
+		includeLink := false
+		if aspect == AspectAll || aspect == "" {
+			includeLink = true
+		} else {
+			switch aspect {
+			case AspectTemporal:
+				if rel == "happened_before" || rel == "happened_after" || rel == "during_interval" || rel == "contains_interval" || l.TemporalAnchorID != "" {
+					includeLink = true
+				}
+			case AspectInstruction:
+				if rel == "has_constraint" || rel == "is_preference" || rel == "applies_rule" || rel == "supersedes_rule" || l.RuleContext != "" || l.OriginSourceID != "" {
+					includeLink = true
+				}
+			case AspectStateTransition:
+				if rel == "has_state" || rel == "causes" || rel == "introduced_state" {
+					includeLink = true
+				}
 			}
 		}
 
 		if includeLink {
 			subLinks = append(subLinks, l)
 			for _, n := range nodes {
-				if n.ID == l.SourceID || n.ID == l.TargetID || n.ID == l.TemporalAnchorID || n.ID == l.OriginSourceID {
+				if (n.ID == l.SourceID || n.ID == l.TargetID || n.ID == l.TemporalAnchorID || n.ID == l.OriginSourceID) && n.Type != memory.NodeTypeFallacy {
 					subNodesMap[n.ID] = n
 				}
 			}
@@ -107,7 +112,7 @@ func CompileGraphToPDDL(nodes []memory.SemanticNode, links []memory.SemanticLink
 
 // CompileGraphToPDDLAspect dynamically projects sub-domain aspects and compiles typed PDDL definitions.
 func CompileGraphToPDDLAspect(nodes []memory.SemanticNode, links []memory.SemanticLink, goalPredicate string, procedures []memory.ProceduralKnowledge, aspect PDDLAspect) (string, string) {
-	// Project sub-graph according to requested aspect
+	// Project sub-graph according to requested aspect (isolating fallacies)
 	nodes, links = FilterNodesAndLinksForAspect(nodes, links, aspect)
 
 	// 1. Gather unique objects with types and dynamically infer predicates
@@ -119,8 +124,11 @@ func CompileGraphToPDDLAspect(nodes []memory.SemanticNode, links []memory.Semant
 	// Detect temporal cycles in graph edges
 	cycleRes := DetectTemporalCycles(links)
 
-	// Register explicit nodes
+	// Register explicit nodes (excluding fallacy nodes)
 	for _, node := range nodes {
+		if node.Type == memory.NodeTypeFallacy || strings.HasPrefix(strings.ToLower(node.ID), "fallacy_") {
+			continue
+		}
 		sanitizedID := SanitizePDDLName(node.ID)
 		nodeType := strings.ToLower(node.Type)
 		if nodeType == "" {
@@ -144,8 +152,13 @@ func CompileGraphToPDDLAspect(nodes []memory.SemanticNode, links []memory.Semant
 
 	for _, link := range links {
 		rel := SanitizePDDLName(link.Relationship)
+		if rel == "exhibits_fallacy" || rel == "subverts_claim" {
+			continue
+		}
+
 		src := SanitizePDDLName(link.SourceID)
 		tgt := SanitizePDDLName(link.TargetID)
+
 
 		predicates[rel] = true
 

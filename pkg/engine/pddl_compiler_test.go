@@ -147,8 +147,44 @@ func TestPDDLAspectProjectionsAndValidation(t *testing.T) {
 	if aspectInst != AspectInstruction {
 		t.Errorf("Expected AspectInstruction, got %s", aspectInst)
 	}
+}
 
-	// 4. ValidatePDDL
+func TestPDDLFallacyIsolation(t *testing.T) {
+	nodes := []memory.SemanticNode{
+		{ID: "event-a", Name: "Event A", Type: memory.NodeTypeEvent},
+		{ID: "event-b", Name: "Event B", Type: memory.NodeTypeEvent},
+		{ID: "fallacy_post_hoc_1", Name: "Post-Hoc Causal Fallacy", Type: memory.NodeTypeFallacy, ContextPrompt: "B after A does not imply A caused B"},
+	}
+
+	links := []memory.SemanticLink{
+		{SourceID: "event-a", TargetID: "event-b", Relationship: "happened_before"},
+		{SourceID: "event-a", TargetID: "fallacy_post_hoc_1", Relationship: "exhibits_fallacy"},
+	}
+
+	subNodes, subLinks := FilterNodesAndLinksForAspect(nodes, links, AspectAll)
+	if len(subLinks) != 1 || subLinks[0].Relationship != "happened_before" {
+		t.Errorf("Expected fallacy link to be excluded, got links: %v", subLinks)
+	}
+	if len(subNodes) != 2 {
+		t.Errorf("Expected fallacy node to be excluded from subNodes, got %d nodes", len(subNodes))
+	}
+
+	domain, problem := CompileGraphToPDDL(nodes, links, "(happened_before event_a event_b)", nil)
+	if strings.Contains(domain, "fallacy") || strings.Contains(problem, "fallacy") {
+		t.Errorf("Compiled PDDL domain/problem should not contain fallacy nodes or links:\nDomain:\n%s\nProblem:\n%s", domain, problem)
+	}
+}
+
+func TestPDDLAspectValidation(t *testing.T) {
+	nodes := []memory.SemanticNode{
+		{ID: "event-a", Name: "Event A", Type: memory.NodeTypeEvent},
+		{ID: "event-b", Name: "Event B", Type: memory.NodeTypeEvent},
+	}
+	links := []memory.SemanticLink{
+		{SourceID: "event-a", TargetID: "event-b", Relationship: "happened_before"},
+	}
+
+    // 4. ValidatePDDL
 	domain, problem := CompileGraphToPDDLAspect(nodes, links, "(and (verified_sequence event_a event_b))", nil, AspectTemporal)
 	if err := ValidatePDDL(domain, problem); err != nil {
 		t.Errorf("ValidatePDDL failed on valid domain/problem: %v", err)
@@ -159,6 +195,7 @@ func TestPDDLAspectProjectionsAndValidation(t *testing.T) {
 		t.Errorf("ValidatePDDL expected error on broken input")
 	}
 }
+
 
 
 
