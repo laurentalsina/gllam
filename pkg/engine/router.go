@@ -4,10 +4,12 @@ import (
     "context"
     "database/sql"
     "fmt"
+    "regexp"
     "strings"
 
     "github.com/laurentalsina/gllam/pkg/memory"
 )
+
 
 
 // RouteAndAssemble classifies the user prompt and assembles a structured context (read-only → dbRO)
@@ -311,8 +313,51 @@ func FormatSystemPrompt(ctx *memory.CompiledContext) string {
         sb.WriteString("\n\n")
     }
 
-    return sb.String()
+    rawText := sb.String()
+    return RedactProhibitedContent(rawText, ctx.SemanticLinks, ctx.SemanticNodes)
 }
+
+var (
+    ipRegex    = regexp.MustCompile(`\b(?:10|172\.(?:1[6-9]|2[0-9]|3[01])|192\.168)\.\d{1,3}\.\d{1,3}\b`)
+    tokenRegex = regexp.MustCompile(`(?i)\b(bearer\s+[A-Za-z0-9\-\._~\+\/]+=*|sk-[A-Za-z0-9]{16,}|ghp_[A-Za-z0-9]{20,})\b`)
+)
+
+// RedactProhibitedContent applies regex and semantic negative constraint redactions to text
+func RedactProhibitedContent(text string, links []memory.SemanticLink, nodes []memory.SemanticNode) string {
+    hasNegativeConstraint := false
+    for _, l := range links {
+        if l.ConstraintType == "negative" || strings.Contains(strings.ToLower(l.TargetID), "no_") || strings.Contains(strings.ToLower(l.TargetID), "never_") || strings.Contains(strings.ToLower(l.TargetID), "dont_") {
+            hasNegativeConstraint = true
+            targetLower := strings.ToLower(l.TargetID)
+
+            // Redact IP addresses if constraint mentions IP
+            if strings.Contains(targetLower, "ip") || strings.Contains(targetLower, "internal_ip") {
+                text = ipRegex.ReplaceAllString(text, "[REDACTED_INTERNAL_IP]")
+            }
+            // Redact tokens/passwords if constraint mentions token/password/auth/secret
+            if strings.Contains(targetLower, "token") || strings.Contains(targetLower, "password") || strings.Contains(targetLower, "secret") || strings.Contains(targetLower, "auth") {
+                text = tokenRegex.ReplaceAllString(text, "[REDACTED_SECRET]")
+            }
+
+            // If negative constraint points to a specific node, redact that node's name or ID mentions
+            for _, n := range nodes {
+                if n.ID == l.TargetID && n.Name != "" {
+                    nodeNameRegex := regexp.MustCompile(`(?i)\b` + regexp.QuoteMeta(n.Name) + `\b`)
+                    text = nodeNameRegex.ReplaceAllString(text, "[REDACTED_RESTRICTED_ENTITY]")
+                }
+            }
+        }
+    }
+
+    // Default safety pass if any negative constraint is present
+    if hasNegativeConstraint {
+        text = ipRegex.ReplaceAllString(text, "[REDACTED_INTERNAL_IP]")
+        text = tokenRegex.ReplaceAllString(text, "[REDACTED_SECRET]")
+    }
+
+    return text
+}
+
 
 // FormatUnsolvableDiagnostic analyzes why PDDL solvers failed to find a plan for a goal
 func FormatUnsolvableDiagnostic(goalPredicate string, links []memory.SemanticLink) string {

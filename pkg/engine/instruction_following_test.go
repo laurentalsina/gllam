@@ -216,3 +216,43 @@ func TestPDDLRuleVerification(t *testing.T) {
 	}
 }
 
+func TestNegativeConstraintRedaction(t *testing.T) {
+	links := []memory.SemanticLink{
+		{
+			SourceID:       "sys-security",
+			TargetID:       "constraint-no-internal-ip",
+			Relationship:   "has_constraint",
+			ConstraintType: "negative",
+		},
+		{
+			SourceID:       "sys-security",
+			TargetID:       "constraint-no-token",
+			Relationship:   "has_constraint",
+			ConstraintType: "negative",
+		},
+	}
+
+	nodes := []memory.SemanticNode{
+		{ID: "constraint-no-internal-ip", Name: "Internal Server 192.168.1.100", Type: memory.NodeTypeConstraint},
+		{ID: "constraint-no-token", Name: "Master Token", Type: memory.NodeTypeConstraint},
+	}
+
+	inputPrompt := "Deploying to 192.168.1.100 with bearer token sk-12345678901234567890."
+	redacted := RedactProhibitedContent(inputPrompt, links, nodes)
+
+	if strings.Contains(redacted, "192.168.1.100") {
+		t.Errorf("Failed to redact IP address: %s", redacted)
+	}
+	if !strings.Contains(redacted, "[REDACTED_INTERNAL_IP]") {
+		t.Errorf("Expected [REDACTED_INTERNAL_IP] in output: %s", redacted)
+	}
+
+	if strings.Contains(redacted, "sk-12345678901234567890") {
+		t.Errorf("Failed to redact secret token: %s", redacted)
+	}
+	if !strings.Contains(redacted, "[REDACTED_SECRET]") {
+		t.Errorf("Expected [REDACTED_SECRET] in output: %s", redacted)
+	}
+}
+
+
