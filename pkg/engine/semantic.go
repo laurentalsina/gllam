@@ -1635,6 +1635,44 @@ func (e *GllamEngine) DetermineDocumentIngestionStrategy(docType string) config.
 	}
 }
 
+// RegisterRepositoryContextDirective dynamically registers a documentation repository type directive (e.g. Jira, Confluence, Git).
+func (e *GllamEngine) RegisterRepositoryContextDirective(directive config.RepositoryContextDirective) {
+
+	if e.SystemPrompts == nil {
+		e.SystemPrompts = config.DefaultAgenticMemorySystemPrompts()
+	}
+	if e.SystemPrompts.RepositoryContextDirectives == nil {
+		e.SystemPrompts.RepositoryContextDirectives = make(map[string]config.RepositoryContextDirective)
+	}
+	key := strings.ToLower(directive.RepositoryType)
+	e.SystemPrompts.RepositoryContextDirectives[key] = directive
+}
+
+// BuildRepositoryEntityContext builds a structured context string for an entity from a documentation repository metadata map.
+func (e *GllamEngine) BuildRepositoryEntityContext(repoType string, metadata map[string]string) string {
+	if e.SystemPrompts == nil {
+		e.SystemPrompts = config.DefaultAgenticMemorySystemPrompts()
+	}
+	key := strings.ToLower(repoType)
+	directive, ok := e.SystemPrompts.RepositoryContextDirectives[key]
+	if !ok || directive.ContextTemplate == "" {
+		// Fallback default formatting
+		var lines []string
+		for k, v := range metadata {
+			lines = append(lines, fmt.Sprintf("%s: %s", k, v))
+		}
+		return strings.Join(lines, "\n")
+	}
+
+	result := directive.ContextTemplate
+	for k, v := range metadata {
+		placeholder := fmt.Sprintf("{{%s}}", k)
+		result = strings.ReplaceAll(result, placeholder, v)
+	}
+	return result
+}
+
+
 
 
 // GaugeAndUpsertSourceNode evaluates multi-factor trust input (document type, individual author reliability, internal coherence, temporal freshness)

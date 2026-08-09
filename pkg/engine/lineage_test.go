@@ -214,6 +214,47 @@ func TestAttributeContainerEntryToSource(t *testing.T) {
 	}
 }
 
+func TestRepositoryContextDirectives(t *testing.T) {
+	tempDir := t.TempDir()
+	dbPath := filepath.Join(tempDir, "test_repo_directives.db")
+
+	gllam, err := NewGllamEngine(dbPath, nil)
+	if err != nil {
+		t.Fatalf("Failed to create engine: %v", err)
+	}
+	defer gllam.Close()
+
+	// 1. Built-in Jira repository context building
+	jiraCtx := gllam.BuildRepositoryEntityContext("jira", map[string]string{
+		"key":        "PROD-101",
+		"type":       "Bug",
+		"status":     "Resolved",
+		"resolution": "Fixed",
+	})
+
+	if !strings.Contains(jiraCtx, "Jira Issue: PROD-101") || !strings.Contains(jiraCtx, "Status: Resolved") {
+		t.Errorf("Unexpected Jira entity context: %s", jiraCtx)
+	}
+
+	// 2. Register custom repository context directive (e.g. "sharepoint")
+	gllam.RegisterRepositoryContextDirective(config.RepositoryContextDirective{
+		RepositoryType:   "sharepoint",
+		ExtractionPrompt: "Extract SharePoint site URL, document library, and version label into entity context profiles.",
+		ContextTemplate:  "SharePoint Doc: {{doc_name}}\nLibrary: {{library}}\nSite: {{site}}",
+	})
+
+	spCtx := gllam.BuildRepositoryEntityContext("sharepoint", map[string]string{
+		"doc_name": "Architecture_V2.pdf",
+		"library":  "SystemDocs",
+		"site":     "https://sharepoint.company.com/sites/engineering",
+	})
+
+	if !strings.Contains(spCtx, "SharePoint Doc: Architecture_V2.pdf") || !strings.Contains(spCtx, "Library: SystemDocs") {
+		t.Errorf("Unexpected SharePoint entity context: %s", spCtx)
+	}
+}
+
+
 
 
 

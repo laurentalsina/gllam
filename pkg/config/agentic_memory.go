@@ -24,21 +24,29 @@ type CustomDocumentTypeRule struct {
 	Description         string            `json:"description,omitempty"`
 }
 
-type AgenticMemorySystemPrompts struct {
-	AllowUserGrilling              bool                              `json:"allow_user_grilling"` // Set false in non-interactive benchmark evaluation (e.g. BEAM)
-	TrustWeightPrompt              string                            `json:"trust_weight_prompt"`
-	SourceReliabilityPrompt        string                            `json:"source_reliability_prompt"`
-	SourceReliabilityHeuristics    map[string]int                    `json:"source_reliability_heuristics,omitempty"` // Individual source trust adjustments (e.g. "alice": +150, "dave": -150)
-	IngestionSteeringPrompt        string                            `json:"ingestion_steering_prompt"`
-
-	IngestionSteeringDirectives    map[string]IngestionStrategy      `json:"ingestion_steering_directives,omitempty"` // Per-source type ingestion steering strategies
-	CustomDocumentTypeRules        map[string]CustomDocumentTypeRule `json:"custom_document_type_rules,omitempty"`    // Dynamic custom document types with trust baselines and steering strategies
-	HistoricalContextPrompt        string                            `json:"historical_context_prompt"`
-	SemanticExtractionPrompt       string                            `json:"semantic_extraction_prompt"`
-	ProceduralGeneralizationPrompt string                            `json:"procedural_generalization_prompt"`
-	SalienceQueryPrompt            string                            `json:"salience_query_prompt"`
-	CustomCategoryPrompts          map[string]string                 `json:"custom_category_prompts,omitempty"`
+type RepositoryContextDirective struct {
+	RepositoryType     string            `json:"repository_type"`
+	ExtractionPrompt   string            `json:"extraction_prompt"`
+	MetadataFieldRules map[string]string `json:"metadata_field_rules,omitempty"`
+	ContextTemplate    string            `json:"context_template"`
 }
+
+type AgenticMemorySystemPrompts struct {
+	AllowUserGrilling              bool                                   `json:"allow_user_grilling"` // Set false in non-interactive benchmark evaluation (e.g. BEAM)
+	TrustWeightPrompt              string                                 `json:"trust_weight_prompt"`
+	SourceReliabilityPrompt        string                                 `json:"source_reliability_prompt"`
+	SourceReliabilityHeuristics    map[string]int                         `json:"source_reliability_heuristics,omitempty"` // Individual source trust adjustments (e.g. "alice": +150, "dave": -150)
+	IngestionSteeringPrompt        string                                 `json:"ingestion_steering_prompt"`
+	IngestionSteeringDirectives    map[string]IngestionStrategy           `json:"ingestion_steering_directives,omitempty"` // Per-source type ingestion steering strategies
+	CustomDocumentTypeRules        map[string]CustomDocumentTypeRule      `json:"custom_document_type_rules,omitempty"`    // Dynamic custom document types with trust baselines and steering strategies
+	RepositoryContextDirectives    map[string]RepositoryContextDirective `json:"repository_context_directives,omitempty"` // Documentation repository-specific context extraction directives
+	HistoricalContextPrompt        string                                 `json:"historical_context_prompt"`
+	SemanticExtractionPrompt       string                                 `json:"semantic_extraction_prompt"`
+	ProceduralGeneralizationPrompt string                                 `json:"procedural_generalization_prompt"`
+	SalienceQueryPrompt            string                                 `json:"salience_query_prompt"`
+	CustomCategoryPrompts          map[string]string                      `json:"custom_category_prompts,omitempty"`
+}
+
 
 
 // DefaultAgenticMemorySystemPrompts returns built-in baseline system prompts.
@@ -58,6 +66,25 @@ func DefaultAgenticMemorySystemPrompts() *AgenticMemorySystemPrompts {
 			"pull_request": {TrackBranchMerges: true, TrackCommentHistory: true, CompactAuthorEpochs: true},
 			"slack":        {TrackThreadReplies: true, CompactAuthorEpochs: true},
 		},
+
+		RepositoryContextDirectives: map[string]RepositoryContextDirective{
+			"jira": {
+				RepositoryType:   "jira",
+				ExtractionPrompt: "Extract Jira issue key, status transitions, resolution, priority, and epic linkage into entity context profiles.",
+				ContextTemplate:  "Jira Issue: {{key}}\nType: {{type}}\nStatus: {{status}}\nResolution: {{resolution}}",
+			},
+			"confluence": {
+				RepositoryType:   "confluence",
+				ExtractionPrompt: "Extract space name, page hierarchy, parent page, and approval status into entity context profiles.",
+				ContextTemplate:  "Confluence Space: {{space}}\nParent Page: {{parent}}\nApproval Status: {{status}}",
+			},
+			"git": {
+				RepositoryType:   "git",
+				ExtractionPrompt: "Extract branch name, commit hash, pull request ID, and review approval state into entity context profiles.",
+				ContextTemplate:  "Git Repo: {{repo}}\nBranch: {{branch}}\nPR: #{{pr_id}}",
+			},
+		},
+
 
 		TrustWeightPrompt: `EVALUATION RULESET FOR SOURCE TRUST WEIGHTING (W in [10, 1000]):
 

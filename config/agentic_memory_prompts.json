@@ -22,6 +22,24 @@
       "description": "SharePoint legacy PDFs and uploaded office drafts"
     }
   },
+  "repository_context_directives": {
+    "jira": {
+      "repository_type": "jira",
+      "extraction_prompt": "Extract Jira issue key, status transitions, resolution, priority, and epic linkage into entity context profiles.",
+      "context_template": "Jira Issue: {{key}}\nType: {{type}}\nStatus: {{status}}\nResolution: {{resolution}}"
+    },
+    "confluence": {
+      "repository_type": "confluence",
+      "extraction_prompt": "Extract space name, page hierarchy, parent page, and approval status into entity context profiles.",
+      "context_template": "Confluence Space: {{space}}\nParent Page: {{parent}}\nApproval Status: {{status}}"
+    },
+    "git": {
+      "repository_type": "git",
+      "extraction_prompt": "Extract branch name, commit hash, pull request ID, and review approval state into entity context profiles.",
+      "context_template": "Git Repo: {{repo}}\nBranch: {{branch}}\nPR: #{{pr_id}}"
+    }
+  },
+
 
   "trust_weight_prompt": "EVALUATION RULESET FOR SOURCE TRUST WEIGHTING (W in [10, 1000]):\n1. Formal resolved ticketing systems (e.g. Jira Resolved, GitHub Merged PRs, Git commits) carry baseline weight 800.\n2. Approved architecture and design documents carry baseline weight 700.\n3. Open tickets, Slack channels, and incident logs carry baseline weight 500.\n4. Unstructured meeting notes, support tickets, and email threads carry baseline weight 400.\n5. Drafts and personal scratchpads carry baseline weight 200.\n6. Individual source reliability heuristics adjust scores per source/person (e.g. Alice +150, Dave -150).\n7. Penalize incoherent or high-entropy gibberish text (-250).",
   "source_reliability_prompt": "INDIVIDUAL SOURCE RELIABILITY HEURISTICS:\nEvaluate individual source track records based on past documentation completeness. Specific sources/individuals who consistently deliver verified, complete implementations receive positive trust adjustments (+100 to +200). Sources with histories of incomplete drafts, unverified claims, or abandoned proposals receive negative trust adjustments (-100 to -200).",
