@@ -54,3 +54,22 @@ func min(a, b int) int {
 	}
 	return b
 }
+
+func TestValidateTranscriptSemanticCoherence(t *testing.T) {
+	// 1. Natural English prose -> valid
+	validProse := "The deployment of Caddy web server on port 8080 was completed successfully on May 15. All TLS certificates were provisioned."
+	if !ValidateTranscriptSemanticCoherence(validProse) {
+		t.Errorf("Expected valid prose to pass coherence check")
+	}
+
+	// 2. High-entropy random gibberish / DoS word salad -> invalid
+	gibberish := "q9f!kL@z#pW$mX^vN&bC*yT(uO)iP_aS+dF~gH=jK[zX]cV{bN}nM<aB>sD?fG:hJ;kL'qW\"eR|tY/uI\\oP"
+	for len(gibberish) < 200 {
+		gibberish += " " + gibberish
+	}
+
+	if ValidateTranscriptSemanticCoherence(gibberish) {
+		t.Errorf("Expected high-entropy gibberish to fail coherence check")
+	}
+}
+

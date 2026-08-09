@@ -1,9 +1,72 @@
 package engine
 
 import (
+	"math"
 	"strings"
 	"unicode"
 )
+
+// ValidateTranscriptSemanticCoherence detects adversarial nonsense / high-entropy gibberish text (Trap 9),
+// returning false if the text exhibits non-lexical entropy or DoS word-salad characteristics.
+func ValidateTranscriptSemanticCoherence(text string) bool {
+	cleanText := strings.TrimSpace(text)
+	if len(cleanText) < 50 {
+		return true // Too short to evaluate
+	}
+
+	// 1. Calculate Unigram Shannon Entropy (in bits/char)
+	charCounts := make(map[rune]int)
+	totalChars := 0
+	for _, r := range cleanText {
+		if !unicode.IsSpace(r) {
+			charCounts[r]++
+			totalChars++
+		}
+	}
+
+	if totalChars == 0 {
+		return false
+	}
+
+	var entropy float64
+	for _, count := range charCounts {
+		p := float64(count) / float64(totalChars)
+		entropy -= p * (math.Log2(p))
+	}
+
+	// Abnormally high unigram character entropy (> 6.2 bits/char) indicates synthetic DoS noise
+	if entropy > 6.2 {
+		return false
+	}
+
+	// 2. Average Word Length & Non-alphanumeric Ratio
+	words := strings.Fields(cleanText)
+	if len(words) == 0 {
+		return false
+	}
+
+	totalRuneLen := 0
+	nonAlphaRunes := 0
+	for _, w := range words {
+		for _, r := range w {
+			totalRuneLen++
+			if !unicode.IsLetter(r) && !unicode.IsNumber(r) {
+				nonAlphaRunes++
+			}
+		}
+	}
+
+	avgWordLen := float64(totalRuneLen) / float64(len(words))
+	nonAlphaRatio := float64(nonAlphaRunes) / float64(totalRuneLen)
+
+	// Natural prose has avg word length ~3-10 runes and non-alpha ratio < 0.40
+	if avgWordLen > 25 || avgWordLen < 1.5 || nonAlphaRatio > 0.40 {
+		return false
+	}
+
+	return true
+}
+
 
 type Chunk struct {
 	Text       string

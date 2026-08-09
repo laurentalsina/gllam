@@ -137,7 +137,15 @@ If the chat contains a contradiction (e.g. user changes their mind), extract the
 		totalLinksExtracted := 0
 
 		for _, chunk := range chunks {
+			// Trap 9 Guard: Pre-filter adversarial nonsense / DoS gibberish before LLM extraction
+			if !engine.ValidateTranscriptSemanticCoherence(chunk.Text) {
+				fmt.Printf("⚠️ BYZANTINE SEMANTIC POISONING GUARD: Chunk (%d/%d) of episode %s failed semantic coherence check (Adversarial Nonsense/DoS text). Skipping extraction.\n",
+					chunk.ChunkIndex+1, len(chunks), ep.ID)
+				continue
+			}
+
 			userPrompt := fmt.Sprintf("Transcript Chunk (%d/%d):\n%s\n\nExtract JSON:", chunk.ChunkIndex+1, len(chunks), chunk.Text)
+
 
 			response, err := llmClient.Generate(ctx, systemPrompt, userPrompt)
 			if err != nil {
