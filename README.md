@@ -362,9 +362,10 @@ recipes, err := gllam.GetProceduresByTaxonomyPrefix(ctx, "/Engineering/Infrastru
 High-scale memory systems require a periodic offline **Memory Maintenance Cycle** (`EnterMemorySleepCycle`) to prevent memory degradation and measure graph consistency:
 
 1. **Maintenance Compaction & Pruning:**
-   * Automatically purges expired temporal links (`valid_until <= now`).
+   * Runs Hub Node Caveat Compaction (`BatchCompactHubCaveats`) to condense historical caveats while **preserving all expired temporal links forever in SQLite for bi-temporal lineage and historical RAG queries**.
    * Runs self-healing taxonomy branch consolidation (`ConsolidateTaxonomyBranch`).
-   * Processes orphaned entity nodes (`ProcessUncategorizedBatch`).
+   * Processes uncategorized entity nodes (`ProcessUncategorizedBatch`).
+
 2. **Synthetic Random Trace Tests & Memory Exercise (`SimulateRandomTraceTests`):**
    * Generates synthetic question/answer trace scenarios across randomly sampled entity pairs.
    * Exercises multi-hop graph retrieval (`FindMultiHopPath`).

@@ -26,13 +26,13 @@ func (e *GllamEngine) EnterMemorySleepCycle(ctx context.Context, numTraceTests i
 		SimulatedTraceTests: make([]memory.SyntheticTraceTestScenario, 0),
 	}
 
-	// Phase 1: Prune Stale / Expired Links
-	pruneQuery := `DELETE FROM semantic_links WHERE valid_until IS NOT NULL AND valid_until <= ?`
-	res, err := e.db.ExecContext(ctx, pruneQuery, fmt.Sprintf("%d", nowTS))
+	// Phase 1: Hub Node Caveat Compaction (Historical facts are PRESERVED forever for temporal RAG, never deleted!)
+	compactedHubs, err := e.BatchCompactHubCaveats(ctx, 10, 5)
 	if err == nil {
-		rows, _ := res.RowsAffected()
-		report.PrunedStaleLinksCount = int(rows)
+		report.CompactedRevisionsCount = compactedHubs
 	}
+	report.PrunedStaleLinksCount = 0 // Historical links are preserved with valid_until timestamps for temporal lineage!
+
 
 	// Phase 2: Consolidate Taxonomy Branches
 	consolidatedCount, _ := e.RunTaxonomyConsolidationPass(ctx)

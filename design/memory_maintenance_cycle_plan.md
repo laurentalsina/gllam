@@ -10,8 +10,8 @@ High-scale memory systems require a periodic offline **Memory Maintenance Cycle*
 
 ```mermaid
 flowchart TD
-    SleepTrigger[EnterMemorySleepCycle] --> Phase1[Phase 1: Compaction & Pruning]
-    Phase1 --> PruneLinks[Prune Expired Links valid_until <= now]
+    SleepTrigger[EnterMemorySleepCycle] --> Phase1[Phase 1: Compaction & Cleaning]
+    Phase1 --> CaveatCompaction[Batch Node Caveat Compaction BatchCompactHubCaveats]
     Phase1 --> TaxonomyConsolidation[Run Taxonomy Branch Consolidation]
     Phase1 --> ProcessOrphans[Process Uncategorized Node Queue]
 
@@ -25,9 +25,10 @@ flowchart TD
 ```
 
 ### 1. Phase 1: Maintenance Compaction & Cleaning
-* **Stale Link Pruning:** Deletes expired edges from `semantic_links` (`valid_until <= now`).
-* **Taxonomy Consolidation:** Merges duplicate taxonomy categories in an atomic SQLite transaction.
+* **Node Caveat Compaction:** Synthesizes historical edge caveats on hub entities while **preserving all expired temporal links (`valid_until <= now`) forever in SQLite for bi-temporal lineage and historical RAG**.
+* **Taxonomy Consolidation:** Merges duplicate taxonomy categories in chunked 500-row transactions with yield pauses.
 * **Orphan Classification:** Assigns uncategorized nodes to taxonomy paths.
+
 
 ### 2. Phase 2: Synthetic Random Trace Tests & Memory Exercise
 * Picks pairs/triples of nodes from `semantic_nodes`.

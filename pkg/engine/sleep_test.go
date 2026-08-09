@@ -51,8 +51,8 @@ func TestMemoryMaintenanceCycleAndRandomTraceTests(t *testing.T) {
 		t.Fatalf("Failed to enter memory sleep cycle: %v", err)
 	}
 
-	if sleepReport.PrunedStaleLinksCount != 1 {
-		t.Errorf("Expected 1 pruned stale link, got %d", sleepReport.PrunedStaleLinksCount)
+	if sleepReport.PrunedStaleLinksCount != 0 {
+		t.Errorf("Expected 0 deleted stale links (historical facts preserved forever), got %d", sleepReport.PrunedStaleLinksCount)
 	}
 
 	if len(sleepReport.SimulatedTraceTests) != 5 {
@@ -63,11 +63,10 @@ func TestMemoryMaintenanceCycleAndRandomTraceTests(t *testing.T) {
 		t.Errorf("Expected positive clarity and consistency scores, got clarity=%f, consistency=%f", sleepReport.MemoryClarityScore, sleepReport.MemoryConsistencyScore)
 	}
 
-
-	// 3. Verify stale link was completely pruned from database
+	// 3. Verify historical expired link is PRESERVED in database (never deleted!)
 	var count int
-	_ = gllam.dbRO.QueryRowContext(ctx, "SELECT COUNT(*) FROM semantic_links WHERE relationship = 'temporary_test'").Scan(&count)
-	if count != 0 {
-		t.Errorf("Expected 0 remaining stale links in SQLite, got %d", count)
+	_ = gllam.dbRO.QueryRowContext(ctx, "SELECT COUNT(*) FROM semantic_links WHERE relationship = 'temporary_test' AND valid_until IS NOT NULL").Scan(&count)
+	if count != 1 {
+		t.Errorf("Expected 1 historical temporal link preserved in database, got %d", count)
 	}
 }
