@@ -74,22 +74,33 @@ Node Types:
 - "human": A human user or speaker origin (e.g. user_alice)
 - "agent": An LLM agent or autonomous worker origin (e.g. agent_planner)
 - "system": An external system or API origin (e.g. sys_github)
+- "contradiction": An active or past unresolved contradiction between two claims (e.g. contradiction_db_engine)
+- "fallacy": A logical fallacy or deceptive premise from the 6 major categories:
+   1. Formal Logic Error (fallacy_affirming_consequent, fallacy_denying_antecedent, fallacy_circularity)
+   2. Improper Premise (fallacy_begging_question, fallacy_false_dilemma, fallacy_false_equivalence)
+   3. Faulty Generalization (fallacy_hasty_generalization, fallacy_cherry_picking, fallacy_anecdotal)
+   4. Questionable Cause (fallacy_post_hoc, fallacy_cum_hoc, fallacy_single_cause)
+   5. Relevance & Poisoning (fallacy_ad_hominem, fallacy_straw_man, fallacy_red_herring, fallacy_appeal_to_authority)
+   6. Ambiguity (fallacy_equivocation, fallacy_amphiboly, fallacy_composition_division)
 
-Temporal & Rule Guidelines for Links:
+Temporal, Rule, Contradiction, & Fallacy Guidelines for Links:
 - If precise timestamps or dates are mentioned (e.g. "May 2024"), extract them into valid_from / valid_until as strings or ISO dates.
 - If timing is relative to another event or entity (e.g. "3 days after the migration"), set valid_from or valid_until to "temporal_note", provide the descriptive phrase in "temporal_note", set "temporal_anchor_id" to the referenced node ID, "temporal_relation" using Allen's Interval Algebra ("before" | "after" | "equals" | "overlaps" | "during" | "contains" | "starts" | "finishes" | "meets"), AND "temporal_offset_seconds" (e.g. +259200 for 3 days after, -172800 for 2 days before).
-- If a link expresses a rule, constraint, or preference, set "rule_context" ("user_preference" | "session" | "source" | "global"), "constraint_type" ("positive" | "negative"), set "origin_source_id" to the node ID of the human/agent/system that issued it, AND if it is turn-bounded (e.g. "for the next 3 questions"), set "duration_turns" (e.g. 3) and "remaining_turns" (e.g. 3). Otherwise set -1.
+- If a link expresses a rule, constraint, or preference, set "rule_context" ("user_preference" | "session" | "source" | "global"), "constraint_type" ("positive" | "negative"), "rule_rationale" (justification / "because" clause), set "origin_source_id" to the node ID of the human/agent/system that issued it, AND if it is turn-bounded (e.g. "for the next 3 questions"), set "duration_turns" (e.g. 3) and "remaining_turns" (e.g. 3). Otherwise set -1.
+- Contradiction & Fallacy Detection:
+  * If two claims directly conflict (e.g. DB engine is Postgres vs DB engine is MySQL), extract a "contradiction" node and link both claims using relationship "has_unresolved_conflict". If one claim resolved the conflict, set "resolution_rationale" explaining why.
+  * If a premise exhibits any of the 6 logical fallacy categories, extract a "fallacy" node (e.g. fallacy_false_dilemma_1) and link the claim using relationship "exhibits_fallacy" or "subverts_claim".
 
 You must output ONLY valid JSON matching this exact structure, with no markdown formatting or extra text:
 {
   "nodes": [
-    {"id": "unique_string", "name": "Display Name", "type": "event|state|entity|service|rule|constraint|human|agent|system|contradiction", "context_prompt": "Any specific contextual notes"}
+    {"id": "unique_string", "name": "Display Name", "type": "event|state|entity|service|rule|constraint|human|agent|system|contradiction|fallacy", "context_prompt": "Any specific contextual notes or fallacy explanations"}
   ],
   "links": [
     {
       "source_id": "id1",
       "target_id": "id2",
-      "relationship": "happened_before|has_state|depends_on|has_constraint|is_preference|etc",
+      "relationship": "happened_before|has_state|depends_on|has_constraint|is_preference|has_unresolved_conflict|exhibits_fallacy|subverts_claim|resolves_conflict|etc",
       "caveats": "optional conditions",
       "valid_from": "timestamp_or_temporal_note",
       "valid_until": "timestamp_or_temporal_note_or_null",
@@ -100,11 +111,14 @@ You must output ONLY valid JSON matching this exact structure, with no markdown 
       "origin_source_id": "source_node_id_if_issued_by_human_agent_system",
       "rule_context": "user_preference|session|source|global",
       "constraint_type": "positive|negative",
+      "rule_rationale": "justification clause if applicable",
+      "resolution_rationale": "explanation when resolving a contradiction",
       "duration_turns": -1,
       "remaining_turns": -1
     }
   ]
 }
+
 
 
 
