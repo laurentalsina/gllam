@@ -246,14 +246,50 @@ LIMIT 10;
 
 Contradictions that remain stored will be of a temporal nature, eg. only version x of some software supports feature y.
 
-When `AddEdge()` detects an existing active link with the same `source_id` and a mutually exclusive `relationship` (e.g. `has_state`, `located_in`) but a different `target_id`, it automatically shifts to a graph-native contradiction model:
-1. It creates a new `SemanticNode` of type `contradiction`.
-2. It adds a `has_unresolved_conflict` edge from the source to the contradiction node.
-3. It adds `conflicting_claim` edges from the contradiction node to all mutually exclusive targets.
+When `AddEdge()` detects an existing active link with the same `source_id` and a mutually exclusive `relationship` (e.g. `has_state`, `located_in`) but a different `target_id`:
 
-The router detects the presence of `has_unresolved_conflict` edges and surfaces a warning to the LLM to ask the user for clarification.
+### Epistemic Hierarchy (Source Trust Weighting)
+
+1. It compares the `trust_weight` (integer in `[10, 1000]`) of both origin sources (`OriginSourceID`).
+2. If a highly trusted source (e.g. `Jira Resolved` or `Merged Pull Request`, $W = 900$) conflicts with a low-trust source (e.g. `Email Draft`, $W = 100$), the low-trust claim is **automatically expired** (`valid_until = now`) and superseded with a `resolves_conflict` edge.
+3. This completely bypasses the need for manual user grilling or unresolved contradiction nodes!
+4. If trust weights are equal, GLLAM falls back to creating an explicit `NodeTypeContradiction` node for planner or user resolution.
+
+### Multi-Factor Composite Trust Weight Calculation
+
+$$W_{\text{composite}} = \text{Clamp}\Big( W_{\text{doc\_type}} + W_{\text{author}} + \Delta W_{\text{coherence}} + \Delta W_{\text{temporal\_freshness}},\, 10,\, 1000 \Big)$$
+
+* **Document Type Base ($W_{\text{doc\_type}}$):** Jira Resolved / Merged PR (800), Approved Architecture Doc (700), Slack / Open Ticket (500), Email Thread / Meeting Notes (400), Draft / Scratchpad (200).
+* **Author Identity ($W_{\text{author}}$):** Admin / CI-CD Bot (+150), Tech Lead / Staff Eng (+100), Verified Eng (+50).
+* **Internal Semantic Coherence ($\Delta W_{\text{coherence}}$):** Shannon character entropy & non-lexical noise check (+50 boost for valid prose, -250 penalty for DoS / gibberish).
+* **Temporal Freshness ($\Delta W_{\text{temporal\_freshness}}$):** < 30 days old (+50), > 6 months old (-50), > 1 year old (-150).
+
+## Agentic Memory System Prompting & Configuration
+
+GLLAM provides a dedicated JSON configuration system (`config/agentic_memory_prompts.json` & `pkg/config/agentic_memory.go`) to define system prompts and domain heuristics without re-compiling code:
+
+```json
+{
+  "trust_weight_prompt": "EVALUATION RULESET FOR SOURCE TRUST WEIGHTING (W in [10, 1000])...",
+  "historical_context_prompt": "CORPUS HISTORICAL & DOMAIN CONTEXT...",
+  "semantic_extraction_prompt": "SEMANTIC EXTRACTION DIRECTIVES...",
+  "procedural_generalization_prompt": "PROCEDURAL KNOWLEDGE GENERALIZATION DIRECTIVES...",
+  "salience_query_prompt": "SALIENCE SCORING DIRECTIVES...",
+  "custom_category_prompts": {
+    "enterprise_domain": "ENTERPRISE SPECIFIC OVERRIDE..."
+  }
+}
+```
+
+```go
+// Load custom agentic memory prompts
+err := gllam.LoadSystemPromptsConfig("./config/agentic_memory_prompts.json")
+```
+
+The engine automatically injects `HistoricalContextPrompt` and `SalienceQueryPrompt` into summary context headers and query-conditioned focal salience scoring (`ComputeQueryConditionedSalience`).
 
 ### Logical Fallacy Taxonomy & Terminology Guide
+
 
 GLLAM treats logical fallacies in user or agent input as first-class cognitive nodes (`NodeTypeFallacy`) to prevent deceptive or flawed premises from corrupting automated reasoning.
 
