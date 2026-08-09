@@ -331,9 +331,11 @@ To prevent a flat semantic graph from devolving into an unsearchable hairball ac
    * Enables instantaneous hierarchical filtering via `taxonomy_path LIKE '/Engineering/Infrastructure/Databases/%'`.
 2. **Asynchronous Batch Categorization (`ProcessUncategorizedBatch`):**
    * Decoupled from bulk ingestion pipeline; pulls orphaned nodes (`taxonomy_path = '/'`) and categorizes them into category nodes (`NodeTypeCategory = "category"`) with explicit `is_a` links.
-3. **Self-Healing Taxonomy Consolidation (`ConsolidateTaxonomyBranch`):**
+3. **Cyclic Path Prevention (`DetectTaxonomyCycles` & `WouldCreateTaxonomyCycle`):**
+   * Uses **Kahn's Topological Sort Algorithm** to detect and prevent circular parent-child relationships (e.g. `/Infrastructure/Storage` $\rightarrow$ `/Storage/Databases` $\rightarrow$ `/Infrastructure/Storage`).
+4. **Self-Healing Taxonomy Consolidation (`ConsolidateTaxonomyBranch`):**
    * Merges redundant categories (e.g. `/Engineering/DBs` into `/Engineering/Infrastructure/Databases`) in an atomic transaction that rewrites child node paths and redirects `is_a` edges.
-4. **Procedural Domain Binding (`GetProceduresByTaxonomyPrefix`):**
+5. **Procedural Domain Binding (`GetProceduresByTaxonomyPrefix`):**
    * Supercharges procedural knowledge retrieval by isolating operational recipes bound to target taxonomy sub-trees.
 
 ```go
@@ -343,12 +345,16 @@ nodes, err := gllam.GetNodesByTaxonomyPrefix(ctx, "/Engineering/Infrastructure/D
 // Asynchronous batch classification of orphaned nodes
 processedCount, err := gllam.ProcessUncategorizedBatch(ctx, 50)
 
+// Detect circular taxonomy paths across is_a/subclass_of edges
+hasCycle, cyclicNodes, err := gllam.DetectTaxonomyCycles(ctx)
+
 // Self-healing taxonomy branch consolidation
 err := gllam.ConsolidateTaxonomyBranch(ctx, "/Engineering/DBs", "/Engineering/Infrastructure/Databases")
 
 // Domain-isolated procedural recipe retrieval
 recipes, err := gllam.GetProceduresByTaxonomyPrefix(ctx, "/Engineering/Infrastructure/Databases")
 ```
+
 
 ### Memory Maintenance Cycle & Synthetic Random Trace Tests
 

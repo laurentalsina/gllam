@@ -177,3 +177,44 @@ func TestAutonomousOntologicalLayer(t *testing.T) {
 		t.Errorf("Expected proc-db-migrate, got %s", domainProcedures[0].ID)
 	}
 }
+
+func TestTaxonomyCyclePrevention(t *testing.T) {
+	tempDir := t.TempDir()
+	dbPath := filepath.Join(tempDir, "test_cycle.db")
+
+	gllam, err := NewGllamEngine(dbPath, nil)
+	if err != nil {
+		t.Fatalf("Failed to create engine: %v", err)
+	}
+	defer gllam.Close()
+
+	if err := gllam.InitSchema(); err != nil {
+		t.Fatalf("Failed to init schema: %v", err)
+	}
+
+	ctx := context.Background()
+
+	// 1. Create categories A (/Infrastructure/Storage) and B (/Storage/Databases)
+	catA := memory.SemanticNode{ID: "cat-storage", Name: "Storage", Type: memory.NodeTypeCategory, IsCategory: true}
+	catB := memory.SemanticNode{ID: "cat-databases", Name: "Databases", Type: memory.NodeTypeCategory, IsCategory: true}
+	_ = gllam.UpsertNode(ctx, catA)
+	_ = gllam.UpsertNode(ctx, catB)
+
+	// Link A -> B (A is_a B)
+	_ = gllam.AddEdge(ctx, memory.SemanticLink{SourceID: "cat-storage", TargetID: "cat-databases", Relationship: "is_a"})
+
+	// 2. Check if creating reverse link B -> A would cause a cycle
+	wouldCycle, err := gllam.WouldCreateTaxonomyCycle(ctx, "cat-databases", "cat-storage")
+	if err != nil || !wouldCycle {
+		t.Errorf("Expected WouldCreateTaxonomyCycle = true for reverse link B -> A, got %v, err=%v", wouldCycle, err)
+	}
+
+	// 3. Insert cyclic edge and verify DetectTaxonomyCycles finds it
+	_ = gllam.AddEdge(ctx, memory.SemanticLink{SourceID: "cat-databases", TargetID: "cat-storage", Relationship: "subclass_of"})
+
+	hasCycle, cyclicNodes, err := gllam.DetectTaxonomyCycles(ctx)
+	if err != nil || !hasCycle || len(cyclicNodes) == 0 {
+		t.Fatalf("Expected DetectTaxonomyCycles = true, got hasCycle=%v, cyclicNodes=%v, err=%v", hasCycle, cyclicNodes, err)
+	}
+}
+

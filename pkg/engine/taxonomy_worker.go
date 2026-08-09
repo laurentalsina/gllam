@@ -31,6 +31,15 @@ func (e *GllamEngine) ProcessUncategorizedBatch(ctx context.Context, batchSize i
 
 		// 1. Ensure category parent node exists
 		catID := fmt.Sprintf("cat-%s", strings.ToLower(strings.ReplaceAll(categoryName, " ", "_")))
+
+		// Cycle Prevention Check: Verify n.ID -> catID will not form a cycle
+		if createsCycle, _ := e.WouldCreateTaxonomyCycle(ctx, n.ID, catID); createsCycle {
+			log.Printf("Cycle prevented: Attributing node %s to parent %s would create a cyclic taxonomy path! Falling back to root.", n.ID, catID)
+			targetPath = "/General/Unclassified"
+			categoryName = "General Unclassified"
+			catID = "cat-general_unclassified"
+		}
+
 		catNode := memory.SemanticNode{
 			ID:            catID,
 			Name:          categoryName,
@@ -41,6 +50,7 @@ func (e *GllamEngine) ProcessUncategorizedBatch(ctx context.Context, batchSize i
 			IsCategory:    true,
 		}
 		_ = e.UpsertNode(ctx, catNode)
+
 
 		// 2. Set node materialized taxonomy path
 		nodePath := fmt.Sprintf("%s/%s", strings.TrimRight(targetPath, "/"), strings.ReplaceAll(n.Name, " ", "_"))

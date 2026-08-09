@@ -10,8 +10,121 @@ import (
 	"github.com/laurentalsina/gllam/pkg/memory"
 )
 
+// DetectTaxonomyCycles uses Kahn's Topological Sort Algorithm to detect cyclic parent-child dependencies
+// across all is_a, subclass_of, instance_of, and part_of taxonomy edges.
+func (e *GllamEngine) DetectTaxonomyCycles(ctx context.Context) (bool, []string, error) {
+	query := `
+		SELECT source_id, target_id 
+		FROM semantic_links 
+		WHERE relationship IN ('is_a', 'subclass_of', 'instance_of', 'part_of') AND valid_until IS NULL`
+
+	rows, err := e.dbRO.QueryContext(ctx, query)
+	if err != nil {
+		return false, nil, fmt.Errorf("failed to query taxonomy links for cycle detection: %w", err)
+	}
+	defer rows.Close()
+
+	adj := make(map[string][]string)
+	inDegree := make(map[string]int)
+	allNodes := make(map[string]bool)
+
+	for rows.Next() {
+		var src, tgt string
+		if err := rows.Scan(&src, &tgt); err != nil {
+			return false, nil, fmt.Errorf("failed to scan taxonomy link: %w", err)
+		}
+		adj[src] = append(adj[src], tgt) // Directed edge: child (src) -> parent (tgt)
+		inDegree[tgt]++
+		if _, ok := inDegree[src]; !ok {
+			inDegree[src] = 0
+		}
+		allNodes[src] = true
+		allNodes[tgt] = true
+	}
+
+	queue := make([]string, 0)
+	for node, deg := range inDegree {
+		if deg == 0 {
+			queue = append(queue, node)
+		}
+	}
+
+	visitedCount := 0
+	for len(queue) > 0 {
+		curr := queue[0]
+		queue = queue[1:]
+		visitedCount++
+
+		for _, neighbor := range adj[curr] {
+			inDegree[neighbor]--
+			if inDegree[neighbor] == 0 {
+				queue = append(queue, neighbor)
+			}
+		}
+	}
+
+	if visitedCount < len(allNodes) {
+		// Cycle detected! Collect nodes involved in cycles (inDegree > 0)
+		var cyclicNodes []string
+		for node, deg := range inDegree {
+			if deg > 0 {
+				cyclicNodes = append(cyclicNodes, node)
+			}
+		}
+		return true, cyclicNodes, nil
+	}
+
+	return false, nil, nil
+}
+
+// WouldCreateTaxonomyCycle checks if adding a parent-child relationship (childID -> parentID)
+// would introduce a cycle into the taxonomy tree.
+func (e *GllamEngine) WouldCreateTaxonomyCycle(ctx context.Context, childID string, parentID string) (bool, error) {
+	if childID == parentID {
+		return true, nil // Self-loop is an immediate cycle
+	}
+
+	// Traversal: Check if childID is reachable starting from parentID via existing parent-child edges
+	visited := make(map[string]bool)
+	queue := []string{parentID}
+	visited[parentID] = true
+
+	for len(queue) > 0 {
+		curr := queue[0]
+		queue = queue[1:]
+
+		if curr == childID {
+			return true, nil // Path exists from parent to child -> adding child -> parent creates cycle!
+		}
+
+		query := `
+			SELECT target_id 
+			FROM semantic_links 
+			WHERE source_id = ? AND relationship IN ('is_a', 'subclass_of', 'instance_of', 'part_of') AND valid_until IS NULL`
+
+		rows, err := e.dbRO.QueryContext(ctx, query, curr)
+		if err != nil {
+			return false, err
+		}
+
+		for rows.Next() {
+			var tgt string
+			if err := rows.Scan(&tgt); err == nil {
+				if !visited[tgt] {
+					visited[tgt] = true
+					queue = append(queue, tgt)
+				}
+			}
+		}
+		rows.Close()
+	}
+
+	return false, nil
+}
+
 // UpdateNodeTaxonomyPath updates the materialized taxonomy path and category flag for a node.
 func (e *GllamEngine) UpdateNodeTaxonomyPath(ctx context.Context, nodeID string, taxonomyPath string, isCategory bool) error {
+
 	if taxonomyPath == "" {
 		taxonomyPath = "/"
 	}

@@ -53,11 +53,18 @@ Decouples taxonomy management from the main ingestion loop:
 * Maps entities to category profiles, generating parent category nodes as needed.
 * Upserts category nodes and creates explicit `is_a` links in `semantic_links`.
 
-### 3. Self-Healing Taxonomy Consolidation (`ConsolidateTaxonomyBranch`)
+### 3. Cyclic Parent-Child Path Prevention (`DetectTaxonomyCycles` & `WouldCreateTaxonomyCycle`)
+Prevents LLM-generated taxonomy loops (e.g. `/Infrastructure/Storage` $\rightarrow$ `/Storage/Databases` $\rightarrow$ `/Infrastructure/Storage`):
+* Uses **Kahn's Topological Sort Algorithm** to detect cycles across all `is_a`, `subclass_of`, `instance_of`, and `part_of` directed edges.
+* `WouldCreateTaxonomyCycle(childID, parentID)` verifies reachable paths before writing edges or materialized paths.
+* If a cycle is detected, the engine rejects the invalid parent assignment and routes the orphaned node to `/General/Unclassified`.
+
+### 4. Self-Healing Taxonomy Consolidation (`ConsolidateTaxonomyBranch`)
 Merges redundant categories (e.g. `/Engineering/DBs` $\rightarrow$ `/Engineering/Infrastructure/Databases`) in an atomic SQLite transaction:
 1. Rewrites `taxonomy_path` string for all descendant nodes using `SUBSTR` and `REPLACE`.
 2. Redirects `is_a`, `subclass_of`, `instance_of`, and `part_of` links to the canonical target category node.
 3. Deletes the redundant category node.
+
 
 ### 4. Domain-Bound Procedural Memory (`GetProceduresByTaxonomyPrefix`)
 Joins `procedural_knowledge` with `semantic_nodes` on `taxonomy_path LIKE '/Engineering/Infrastructure/Databases/%'` to retrieve operational recipes strictly relevant to the active domain.
