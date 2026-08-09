@@ -6,8 +6,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/laurentalsina/gllam/pkg/config"
 	"github.com/laurentalsina/gllam/pkg/memory"
 )
+
 
 func TestStrictInformationLineage(t *testing.T) {
 	tempDir := t.TempDir()
@@ -120,6 +122,11 @@ func TestIngestionSteeringDirectives(t *testing.T) {
 	}
 	defer gllam.Close()
 
+	if err := gllam.InitSchema(); err != nil {
+		t.Fatalf("Failed to init schema: %v", err)
+	}
+
+
 	// 1. Confluence strategy
 	confStrat := gllam.DetermineDocumentIngestionStrategy("confluence")
 	if !confStrat.TrackRevisionHistory || !confStrat.CompactAuthorEpochs {
@@ -137,7 +144,31 @@ func TestIngestionSteeringDirectives(t *testing.T) {
 	if !gitStrat.TrackBranchMerges || !gitStrat.TrackRevisionHistory {
 		t.Errorf("Expected Git strategy to track branch merges and revision history, got %+v", gitStrat)
 	}
+
+	// 4. Register custom document type at runtime (e.g. "notion_workspace" with 650 trust baseline)
+	gllam.RegisterCustomDocumentTypeRule(config.CustomDocumentTypeRule{
+		TypeName:            "notion_workspace",
+		BaselineTrustWeight: 650,
+		IngestionStrategy: config.IngestionStrategy{
+			TrackRevisionHistory: true,
+			CompactAuthorEpochs:  true,
+		},
+	})
+
+	notionStrat := gllam.DetermineDocumentIngestionStrategy("notion_workspace")
+	if !notionStrat.TrackRevisionHistory {
+		t.Errorf("Expected custom notion_workspace strategy to track revision history, got %+v", notionStrat)
+	}
+
+	ctx := context.Background()
+	weight, err := gllam.GaugeAndUpsertSourceNode(ctx, "notion-node-1", "Notion Spec", memory.NodeTypeEntity, SourceTrustInput{
+		DocumentType: "notion_workspace",
+	})
+	if err != nil || weight < 600 {
+		t.Errorf("Expected custom notion_workspace trust weight (>=600), got %d, err=%v", weight, err)
+	}
 }
+
 
 
 

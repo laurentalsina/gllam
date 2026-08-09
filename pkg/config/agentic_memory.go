@@ -17,19 +17,28 @@ type IngestionStrategy struct {
 	CompactAuthorEpochs    bool `json:"compact_author_epochs"`
 }
 
-type AgenticMemorySystemPrompts struct {
-	AllowUserGrilling              bool                         `json:"allow_user_grilling"` // Set false in non-interactive benchmark evaluation (e.g. BEAM)
-	TrustWeightPrompt              string                       `json:"trust_weight_prompt"`
-	AuthorReliabilityPrompt        string                       `json:"author_reliability_prompt"`
-	AuthorReliabilityHeuristics    map[string]int               `json:"author_reliability_heuristics,omitempty"` // Individual author/person trust adjustments (e.g. "alice": +150, "dave": -150)
-	IngestionSteeringPrompt        string                       `json:"ingestion_steering_prompt"`
-	IngestionSteeringDirectives    map[string]IngestionStrategy `json:"ingestion_steering_directives,omitempty"` // Per-source type ingestion steering strategies
-	HistoricalContextPrompt        string                       `json:"historical_context_prompt"`
-	SemanticExtractionPrompt       string                       `json:"semantic_extraction_prompt"`
-	ProceduralGeneralizationPrompt string                       `json:"procedural_generalization_prompt"`
-	SalienceQueryPrompt            string                       `json:"salience_query_prompt"`
-	CustomCategoryPrompts          map[string]string            `json:"custom_category_prompts,omitempty"`
+type CustomDocumentTypeRule struct {
+	TypeName            string            `json:"type_name"`
+	BaselineTrustWeight int               `json:"baseline_trust_weight"`
+	IngestionStrategy   IngestionStrategy `json:"ingestion_strategy"`
+	Description         string            `json:"description,omitempty"`
 }
+
+type AgenticMemorySystemPrompts struct {
+	AllowUserGrilling              bool                              `json:"allow_user_grilling"` // Set false in non-interactive benchmark evaluation (e.g. BEAM)
+	TrustWeightPrompt              string                            `json:"trust_weight_prompt"`
+	AuthorReliabilityPrompt        string                            `json:"author_reliability_prompt"`
+	AuthorReliabilityHeuristics    map[string]int                    `json:"author_reliability_heuristics,omitempty"` // Individual author/person trust adjustments (e.g. "alice": +150, "dave": -150)
+	IngestionSteeringPrompt        string                            `json:"ingestion_steering_prompt"`
+	IngestionSteeringDirectives    map[string]IngestionStrategy      `json:"ingestion_steering_directives,omitempty"` // Per-source type ingestion steering strategies
+	CustomDocumentTypeRules        map[string]CustomDocumentTypeRule `json:"custom_document_type_rules,omitempty"`    // Dynamic custom document types with trust baselines and steering strategies
+	HistoricalContextPrompt        string                            `json:"historical_context_prompt"`
+	SemanticExtractionPrompt       string                            `json:"semantic_extraction_prompt"`
+	ProceduralGeneralizationPrompt string                            `json:"procedural_generalization_prompt"`
+	SalienceQueryPrompt            string                            `json:"salience_query_prompt"`
+	CustomCategoryPrompts          map[string]string                 `json:"custom_category_prompts,omitempty"`
+}
+
 
 // DefaultAgenticMemorySystemPrompts returns built-in baseline system prompts.
 func DefaultAgenticMemorySystemPrompts() *AgenticMemorySystemPrompts {

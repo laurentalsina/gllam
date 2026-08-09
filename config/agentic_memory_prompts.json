@@ -8,6 +8,21 @@
     "pull_request": { "track_branch_merges": true, "track_comment_history": true, "compact_author_epochs": true },
     "slack": { "track_thread_replies": true, "compact_author_epochs": true }
   },
+  "custom_document_type_rules": {
+    "notion_workspace": {
+      "type_name": "notion_workspace",
+      "baseline_trust_weight": 600,
+      "ingestion_strategy": { "track_revision_history": true, "compact_author_epochs": true },
+      "description": "Notion team wiki pages and workspace databases"
+    },
+    "sharepoint_doc": {
+      "type_name": "sharepoint_doc",
+      "baseline_trust_weight": 350,
+      "ingestion_strategy": { "track_revision_history": false, "compact_author_epochs": false },
+      "description": "SharePoint legacy PDFs and uploaded office drafts"
+    }
+  },
+
   "trust_weight_prompt": "EVALUATION RULESET FOR SOURCE TRUST WEIGHTING (W in [10, 1000]):\n1. Formal resolved ticketing systems (e.g. Jira Resolved, GitHub Merged PRs, Git commits) carry baseline weight 800.\n2. Approved architecture and design documents carry baseline weight 700.\n3. Open tickets, Slack channels, and incident logs carry baseline weight 500.\n4. Unstructured meeting notes, support tickets, and email threads carry baseline weight 400.\n5. Drafts and personal scratchpads carry baseline weight 200.\n6. Individual author reliability heuristics adjust scores per person (e.g. Alice +150, Dave -150).\n7. Penalize incoherent or high-entropy gibberish text (-250).",
 
   "author_reliability_prompt": "INDIVIDUAL AUTHOR & SOURCE RELIABILITY HEURISTICS:\nEvaluate individual author track records based on past documentation completeness. Specific individuals who consistently deliver verified, complete implementations receive positive trust adjustments (+100 to +200). Individuals with histories of incomplete drafts, unverified claims, or abandoned proposals receive negative trust adjustments (-100 to -200).",

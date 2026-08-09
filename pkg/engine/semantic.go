@@ -1598,13 +1598,32 @@ func (e *GllamEngine) SetIndividualAuthorTrustWeight(authorID string, adjustment
 	e.SystemPrompts.AuthorReliabilityHeuristics[strings.ToLower(authorID)] = adjustment
 }
 
-// DetermineDocumentIngestionStrategy queries agentic steering directives to decide whether
+// RegisterCustomDocumentTypeRule dynamically adds or overrides an information source type with its specific trust baseline and ingestion strategy.
+func (e *GllamEngine) RegisterCustomDocumentTypeRule(rule config.CustomDocumentTypeRule) {
+	if e.SystemPrompts == nil {
+		e.SystemPrompts = config.DefaultAgenticMemorySystemPrompts()
+	}
+	if e.SystemPrompts.CustomDocumentTypeRules == nil {
+		e.SystemPrompts.CustomDocumentTypeRules = make(map[string]config.CustomDocumentTypeRule)
+	}
+	if e.SystemPrompts.IngestionSteeringDirectives == nil {
+		e.SystemPrompts.IngestionSteeringDirectives = make(map[string]config.IngestionStrategy)
+	}
+	key := strings.ToLower(rule.TypeName)
+	e.SystemPrompts.CustomDocumentTypeRules[key] = rule
+	e.SystemPrompts.IngestionSteeringDirectives[key] = rule.IngestionStrategy
+}
+
+// DetermineDocumentIngestionStrategy queries agentic steering directives and custom document type rules to decide whether
 // revision history, comment history, status transitions, or branch merges should be ingested for a document type.
 func (e *GllamEngine) DetermineDocumentIngestionStrategy(docType string) config.IngestionStrategy {
 	if e.SystemPrompts == nil {
 		e.SystemPrompts = config.DefaultAgenticMemorySystemPrompts()
 	}
 	key := strings.ToLower(docType)
+	if customRule, ok := e.SystemPrompts.CustomDocumentTypeRules[key]; ok {
+		return customRule.IngestionStrategy
+	}
 	if strat, ok := e.SystemPrompts.IngestionSteeringDirectives[key]; ok {
 		return strat
 	}
@@ -1614,6 +1633,7 @@ func (e *GllamEngine) DetermineDocumentIngestionStrategy(docType string) config.
 		CompactAuthorEpochs:  true,
 	}
 }
+
 
 
 // GaugeAndUpsertSourceNode evaluates multi-factor trust input (document type, individual author reliability, internal coherence, temporal freshness)

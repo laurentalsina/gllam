@@ -84,21 +84,33 @@ type SourceTrustInput struct {
 func CalculateCompositeTrustWeight(input SourceTrustInput, sysPrompts *config.AgenticMemorySystemPrompts, nowTS int64) int {
 	var weight int
 
-	// 1. Document Type Base Heuristic
-	switch strings.ToLower(input.DocumentType) {
-	case "jira_resolved", "pull_request_merged", "git_commit", "production_config":
-		weight = 800
-	case "confluence_approved", "architecture_doc", "design_doc":
-		weight = 700
-	case "jira_open", "slack_channel", "incident_log":
-		weight = 500
-	case "meeting_notes", "email_thread", "support_ticket":
-		weight = 400
-	case "confluence_draft", "personal_notes", "draft":
-		weight = 200
-	default:
-		weight = 100
+	// 1. Document Type Base Heuristic (Dynamic Custom Rules + Built-in Fallbacks)
+	matchedType := false
+	docTypeKey := strings.ToLower(input.DocumentType)
+	if sysPrompts != nil && len(sysPrompts.CustomDocumentTypeRules) > 0 {
+		if customRule, ok := sysPrompts.CustomDocumentTypeRules[docTypeKey]; ok && customRule.BaselineTrustWeight > 0 {
+			weight = customRule.BaselineTrustWeight
+			matchedType = true
+		}
 	}
+
+	if !matchedType {
+		switch docTypeKey {
+		case "jira_resolved", "pull_request_merged", "git_commit", "production_config":
+			weight = 800
+		case "confluence_approved", "architecture_doc", "design_doc":
+			weight = 700
+		case "jira_open", "slack_channel", "incident_log":
+			weight = 500
+		case "meeting_notes", "email_thread", "support_ticket":
+			weight = 400
+		case "confluence_draft", "personal_notes", "draft":
+			weight = 200
+		default:
+			weight = 100
+		}
+	}
+
 
 	// 2. Individual Author Reliability Check (Person-specific, NOT just role)
 	matchedIndividual := false
