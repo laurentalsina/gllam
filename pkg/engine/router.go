@@ -190,7 +190,8 @@ func (e *GllamEngine) RouteAndAssemble(ctx context.Context, userPrompt string, e
                     if cycleRes.HasCycle {
                         ctxResult.PlannerOutput = fmt.Sprintf("%sPlanning Engine failed to resolve sequence due to temporal cycle contradiction.\nExtracted Goal: %s", cycleNotice, goalPredicate)
                     } else {
-                        ctxResult.PlannerOutput = fmt.Sprintf("Planning Engine triggered for timeline analysis.\n\nExtracted Goal: %s\n\nGenerated PDDL Domain:\n%s\nNative solver status: %v\nExternal solver status: %v", goalPredicate, domainStr, err, extErr)
+                        diag := FormatUnsolvableDiagnostic(goalPredicate, ctxResult.SemanticLinks)
+                        ctxResult.PlannerOutput = fmt.Sprintf("%s\nExtracted Goal: %s", diag, goalPredicate)
                     }
                 } else {
                     ctxResult.PlannerOutput = fmt.Sprintf("%sPlanning Engine triggered via External PDDL Planner. Plan length: %d actions.", cycleNotice, len(extPlan))
@@ -199,13 +200,15 @@ func (e *GllamEngine) RouteAndAssemble(ctx context.Context, userPrompt string, e
                 if cycleRes.HasCycle {
                     ctxResult.PlannerOutput = fmt.Sprintf("%sPlanning Engine failed to resolve sequence due to temporal cycle contradiction.\nExtracted Goal: %s", cycleNotice, goalPredicate)
                 } else {
-                    ctxResult.PlannerOutput = fmt.Sprintf("Planning Engine triggered for timeline analysis.\n\nExtracted Goal: %s\n\nGenerated PDDL Domain:\n%s\nNative solver status: %v", goalPredicate, domainStr, err)
+                    diag := FormatUnsolvableDiagnostic(goalPredicate, ctxResult.SemanticLinks)
+                    ctxResult.PlannerOutput = fmt.Sprintf("%s\nExtracted Goal: %s", diag, goalPredicate)
                 }
             }
         } else {
             ctxResult.PlannerOutput = fmt.Sprintf("%sPlanning Engine triggered. Sequence mathematically verified.", cycleNotice)
         }
     }
+
 
 
     return ctxResult, nil
@@ -280,11 +283,42 @@ func FormatSystemPrompt(ctx *memory.CompiledContext) string {
     // PDDL Planner Output
     if ctx.PlannerOutput != "" {
         sb.WriteString("## Mathematical Sequence Verification (PDDL)\n\n")
-        sb.WriteString(ctx.PlannerOutput + "\n\n")
+        sb.WriteString(ctx.PlannerOutput)
+        sb.WriteString("\n\n")
     }
 
     return sb.String()
 }
+
+// FormatUnsolvableDiagnostic analyzes why PDDL solvers failed to find a plan for a goal
+func FormatUnsolvableDiagnostic(goalPredicate string, links []memory.SemanticLink) string {
+	if strings.Contains(goalPredicate, "verified_sequence") || strings.Contains(goalPredicate, "happened_before") {
+		parts := strings.Fields(strings.ReplaceAll(strings.ReplaceAll(goalPredicate, "(", " "), ")", " "))
+		if len(parts) >= 3 {
+			src := parts[len(parts)-2]
+			tgt := parts[len(parts)-1]
+
+			for _, l := range links {
+				lSrc := SanitizePDDLName(l.SourceID)
+				lTgt := SanitizePDDLName(l.TargetID)
+				lRel := strings.ToLower(l.Relationship)
+				lAnchor := SanitizePDDLName(l.TemporalAnchorID)
+				lTempRel := strings.ToLower(l.TemporalRelation)
+
+				if (lSrc == tgt && lTgt == src && lRel == "happened_before") ||
+					(lSrc == tgt && lAnchor == src && lTempRel == "before") ||
+					(lSrc == src && lTgt == tgt && lRel == "happened_after") {
+					return fmt.Sprintf("⚠️ TIMELINE CONTRADICTION: Requested sequence '%s before %s' is mathematically impossible because the graph records '%s occurred before %s'.", src, tgt, tgt, src)
+				}
+			}
+
+			return fmt.Sprintf("⚠️ TIMELINE UNPROVABLE: Requested sequence '%s before %s' cannot be verified from recorded graph links (insufficient causal/ordering links).", src, tgt)
+		}
+	}
+
+	return fmt.Sprintf("⚠️ TIMELINE UNPROVABLE: Goal predicate %s could not be verified by the planning engine.", goalPredicate)
+}
+
 
 // formatTimestamp converts a Unix timestamp to a readable format
 func formatTimestamp(ts int64) string {

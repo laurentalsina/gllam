@@ -3,11 +3,13 @@ package engine
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/laurentalsina/gllam/pkg/memory"
 )
+
 
 func TestExpandTemporalNeighborsMultiHop(t *testing.T) {
 	tempDir := t.TempDir()
@@ -105,4 +107,24 @@ func TestDetectTemporalCycles(t *testing.T) {
 		t.Errorf("Expected cycle detection to return false for acyclic links")
 	}
 }
+
+func TestFormatUnsolvableDiagnostic(t *testing.T) {
+	links := []memory.SemanticLink{
+		{SourceID: "event-b", TargetID: "event-a", Relationship: "happened_before"},
+	}
+
+	goal := "(and (verified_sequence event_a event_b))"
+	diag := FormatUnsolvableDiagnostic(goal, links)
+
+	if !strings.Contains(diag, "TIMELINE CONTRADICTION") {
+		t.Errorf("Expected TIMELINE CONTRADICTION diagnostic, got: %s", diag)
+	}
+
+	unprovableGoal := "(and (verified_sequence event_x event_y))"
+	diagUnprovable := FormatUnsolvableDiagnostic(unprovableGoal, links)
+	if !strings.Contains(diagUnprovable, "TIMELINE UNPROVABLE") {
+		t.Errorf("Expected TIMELINE UNPROVABLE diagnostic, got: %s", diagUnprovable)
+	}
+}
+
 
