@@ -13,26 +13,38 @@ import (
 
 // Embedder is the interface for generating embedding vectors from text.
 type Embedder interface {
-    // Embed generates an embedding vector for the given text.
-    // Returns an error if the embedding service is unavailable.
-    Embed(ctx context.Context, text string) ([]float32, error)
+	// Embed generates an embedding vector for the given text.
+	// Returns an error if the embedding service is unavailable.
+	Embed(ctx context.Context, text string) ([]float32, error)
+	// ModelVersion returns the unique identifier/version string of the underlying embedding model.
+	ModelVersion() string
 }
 
 // LlamaEmbedder generates embeddings via a llama.cpp server instance.
 type LlamaEmbedder struct {
-    BaseURL string
-    client  *http.Client
+	BaseURL     string
+	VersionName string
+	client      *http.Client
 }
 
 // NewLlamaEmbedder creates a new LlamaEmbedder pointing to the specified server.
 func NewLlamaEmbedder(baseURL string) *LlamaEmbedder {
-    return &LlamaEmbedder{
-        BaseURL: baseURL,
-        client: &http.Client{
-            Timeout: 30 * time.Second,
-        },
-    }
+	return &LlamaEmbedder{
+		BaseURL:     baseURL,
+		VersionName: "nomic-embed-text-v1.5",
+		client: &http.Client{
+			Timeout: 30 * time.Second,
+		},
+	}
 }
+
+func (l *LlamaEmbedder) ModelVersion() string {
+	if l.VersionName != "" {
+		return l.VersionName
+	}
+	return "nomic-embed-text-v1.5"
+}
+
 
 // serializeEmbedding converts a float32 slice to a byte slice for storage in vec0.
 func serializeEmbedding(vec []float32) ([]byte, error) {

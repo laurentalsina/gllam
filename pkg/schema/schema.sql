@@ -135,3 +135,11 @@ CREATE VIRTUAL TABLE IF NOT EXISTS episodic_embeddings USING vec0(
     +session_id TEXT,
     embedding float[1024]
 );
+
+-- 9. SYSTEM METADATA (Engine configuration, vector embedding model versions)
+CREATE TABLE IF NOT EXISTS system_metadata (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+

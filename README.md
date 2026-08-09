@@ -400,6 +400,24 @@ gllam.StartWALCheckpointManager(ctx, 5*time.Second)
 logPages, checkpointedPages, err := gllam.CheckpointWAL(ctx, "RESTART")
 ```
 
+### Vector Space Drift Prevention & Re-Embedding
+
+Swapping or upgrading the local embedding model midway through ingesting a dataset makes stored vector embeddings in `sqlite-vec` mathematically incompatible with new embeddings, degrading Reciprocal Rank Fusion (`RetrieveHybridNeedle`). GLLAM prevents vector space drift through automated version metadata tracking and background re-indexing:
+
+1. **Model Version Metadata:** Tracks `embedding_model_version` in `system_metadata`.
+2. **Drift Detection (`CheckEmbeddingModelVersion`):** Compares stored model version with active `embedder.ModelVersion()`.
+3. **Automated Re-Embedding (`ReembedAllSemanticNodes`):** Background worker re-computes vector embeddings across all `semantic_nodes` and updates `semantic_embeddings` virtual table.
+
+```go
+// Check for vector space drift on engine initialization
+drift, prevModel, activeModel, err := gllam.CheckEmbeddingModelVersion(ctx)
+if drift {
+    log.Printf("Vector space drift detected (%s -> %s). Re-embedding nodes...", prevModel, activeModel)
+    reembeddedCount, err := gllam.ReembedAllSemanticNodes(ctx)
+}
+```
+
+
 
 
 
