@@ -162,11 +162,21 @@ PDDL Goal:`, userPrompt)
         planner := NewNativePlanner()
         _, err := planner.Solve(ctx, domainStr, problemStr)
         if err != nil {
-            // Native planner fell back or failed, you would optionally invoke FastDownwardPlanner here
-            ctxResult.PlannerOutput = fmt.Sprintf("Planning Engine triggered for timeline analysis.\n\nExtracted Goal: %s\n\nGenerated PDDL Domain:\n%s\nNative solver status: %v", mockedGoalPredicate, domainStr, err)
+            if e.PlannerExecutablePath != "" {
+                extPlanner := NewFastDownwardPlanner(e.PlannerExecutablePath)
+                extPlan, extErr := extPlanner.Solve(ctx, domainStr, problemStr)
+                if extErr != nil {
+                    ctxResult.PlannerOutput = fmt.Sprintf("Planning Engine triggered for timeline analysis.\n\nExtracted Goal: %s\n\nGenerated PDDL Domain:\n%s\nNative solver status: %v\nExternal solver status: %v", mockedGoalPredicate, domainStr, err, extErr)
+                } else {
+                    ctxResult.PlannerOutput = fmt.Sprintf("Planning Engine triggered via External PDDL Planner. Plan length: %d actions.", len(extPlan))
+                }
+            } else {
+                ctxResult.PlannerOutput = fmt.Sprintf("Planning Engine triggered for timeline analysis.\n\nExtracted Goal: %s\n\nGenerated PDDL Domain:\n%s\nNative solver status: %v", mockedGoalPredicate, domainStr, err)
+            }
         } else {
             ctxResult.PlannerOutput = "Planning Engine triggered. Sequence mathematically verified."
         }
+
     }
 
     return ctxResult, nil

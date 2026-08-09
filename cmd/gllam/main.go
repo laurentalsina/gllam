@@ -47,6 +47,11 @@ func main() {
     }
     defer gllam.Close()
 
+    if cfg.PlannerExecutablePath != "" {
+        gllam.SetPlannerExecutablePath(cfg.PlannerExecutablePath)
+    }
+
+
     // Initialize schema
     if err := gllam.InitSchema(); err != nil {
         fmt.Fprintf(os.Stderr, "Failed to initialize schema: %v\n", err)

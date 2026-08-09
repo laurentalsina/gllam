@@ -1,2 +1,4 @@
 text_endpoint: http://100.96.179.19:8888
 embedding_endpoint: http://127.0.0.1:8800
+planner_executable_path: /home/laurent/Projects/downward/fast-downward.py
+

@@ -10,10 +10,16 @@ import (
 )
 
 type GllamEngine struct {
-    db       *sql.DB   // Write handle: single connection, serializes all mutations
-    dbRO     *sql.DB   // Read handle: connection pool for concurrent read-only queries
-    embedder Embedder  // Pluggable embedding generator (e.g., llama.cpp)
+    db                    *sql.DB   // Write handle: single connection, serializes all mutations
+    dbRO                  *sql.DB   // Read handle: connection pool for concurrent read-only queries
+    embedder              Embedder  // Pluggable embedding generator (e.g., llama.cpp)
+    PlannerExecutablePath string    // Path to external PDDL planner binary/script
 }
+
+func (e *GllamEngine) SetPlannerExecutablePath(path string) {
+    e.PlannerExecutablePath = path
+}
+
 
 // NewGllamEngine opens two SQLite handles with sqlite-vec support:
 //   - db:   a single-connection handle for all write mutations (prevents SQLite write serialization)

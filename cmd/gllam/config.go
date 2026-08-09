@@ -7,8 +7,9 @@ import (
 )
 
 type Config struct {
-	TextEndpoint      string `yaml:"text_endpoint"`
-	EmbeddingEndpoint string `yaml:"embedding_endpoint"`
+	TextEndpoint          string `yaml:"text_endpoint"`
+	EmbeddingEndpoint     string `yaml:"embedding_endpoint"`
+	PlannerExecutablePath string `yaml:"planner_executable_path"`
 }
 
 func LoadConfig(configPath string) *Config {
@@ -27,6 +28,10 @@ func LoadConfig(configPath string) *Config {
 	if envEmb := os.Getenv("GLLAM_EMBEDDING_ENDPOINT"); envEmb != "" {
 		cfg.EmbeddingEndpoint = envEmb
 	}
+	if envPlanner := os.Getenv("GLLAM_PLANNER_EXECUTABLE_PATH"); envPlanner != "" {
+		cfg.PlannerExecutablePath = envPlanner
+	}
 
 	return cfg
 }
+
