@@ -112,13 +112,13 @@ func CalculateCompositeTrustWeight(input SourceTrustInput, sysPrompts *config.Ag
 	}
 
 
-	// 2. Individual Author Reliability Check (Person-specific, NOT just role)
+	// 2. Individual Source Reliability Check (Source/Person-specific, NOT just role)
 	matchedIndividual := false
-	if sysPrompts != nil && len(sysPrompts.AuthorReliabilityHeuristics) > 0 {
+	if sysPrompts != nil && len(sysPrompts.SourceReliabilityHeuristics) > 0 {
 		authorKeys := []string{strings.ToLower(input.AuthorID), strings.ToLower(input.AuthorName)}
 		for _, k := range authorKeys {
 			if k != "" {
-				if adjustment, ok := sysPrompts.AuthorReliabilityHeuristics[k]; ok {
+				if adjustment, ok := sysPrompts.SourceReliabilityHeuristics[k]; ok {
 					weight += adjustment
 					matchedIndividual = true
 					break
@@ -126,6 +126,7 @@ func CalculateCompositeTrustWeight(input SourceTrustInput, sysPrompts *config.Ag
 			}
 		}
 	}
+
 
 	// Fallback to Role Identity Heuristic if no individual match found
 	if !matchedIndividual {

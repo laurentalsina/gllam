@@ -27,9 +27,10 @@ type CustomDocumentTypeRule struct {
 type AgenticMemorySystemPrompts struct {
 	AllowUserGrilling              bool                              `json:"allow_user_grilling"` // Set false in non-interactive benchmark evaluation (e.g. BEAM)
 	TrustWeightPrompt              string                            `json:"trust_weight_prompt"`
-	AuthorReliabilityPrompt        string                            `json:"author_reliability_prompt"`
-	AuthorReliabilityHeuristics    map[string]int                    `json:"author_reliability_heuristics,omitempty"` // Individual author/person trust adjustments (e.g. "alice": +150, "dave": -150)
+	SourceReliabilityPrompt        string                            `json:"source_reliability_prompt"`
+	SourceReliabilityHeuristics    map[string]int                    `json:"source_reliability_heuristics,omitempty"` // Individual source trust adjustments (e.g. "alice": +150, "dave": -150)
 	IngestionSteeringPrompt        string                            `json:"ingestion_steering_prompt"`
+
 	IngestionSteeringDirectives    map[string]IngestionStrategy      `json:"ingestion_steering_directives,omitempty"` // Per-source type ingestion steering strategies
 	CustomDocumentTypeRules        map[string]CustomDocumentTypeRule `json:"custom_document_type_rules,omitempty"`    // Dynamic custom document types with trust baselines and steering strategies
 	HistoricalContextPrompt        string                            `json:"historical_context_prompt"`
@@ -65,8 +66,19 @@ func DefaultAgenticMemorySystemPrompts() *AgenticMemorySystemPrompts {
 3. Open tickets, Slack channels, and incident logs carry baseline weight 500.
 4. Unstructured meeting notes, support tickets, and email threads carry baseline weight 400.
 5. Drafts and personal scratchpads carry baseline weight 200.
-6. Roles: Admin/CI-CD (+150), Tech Lead (+100), Verified Engineer (+50).
+6. Individual source reliability heuristics adjust scores per source/person (e.g. Alice +150, Dave -150).
 7. Penalize incoherent or high-entropy gibberish text (-250).`,
+
+		SourceReliabilityPrompt: `INDIVIDUAL SOURCE RELIABILITY HEURISTICS:
+Evaluate individual source track records based on past documentation completeness. Specific sources/individuals who consistently deliver verified, complete implementations receive positive trust adjustments (+100 to +200). Sources with histories of incomplete drafts, unverified claims, or abandoned proposals receive negative trust adjustments (-100 to -200).`,
+
+		SourceReliabilityHeuristics: map[string]int{
+			"alice":          150,
+			"carol_lead":     200,
+			"bob_contractor": -100,
+			"dave_drafts":    -150,
+		},
+
 
 		HistoricalContextPrompt: `CORPUS HISTORICAL & DOMAIN CONTEXT:
 The target document corpus contains multi-session transcripts, enterprise ticketing exports, and architectural specifications spanning system evolution. When evaluating temporal ordering or conflicting claims, prioritize verified post-migration architecture state over historical pre-migration discussion notes.`,

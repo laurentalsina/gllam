@@ -23,15 +23,15 @@
     }
   },
 
-  "trust_weight_prompt": "EVALUATION RULESET FOR SOURCE TRUST WEIGHTING (W in [10, 1000]):\n1. Formal resolved ticketing systems (e.g. Jira Resolved, GitHub Merged PRs, Git commits) carry baseline weight 800.\n2. Approved architecture and design documents carry baseline weight 700.\n3. Open tickets, Slack channels, and incident logs carry baseline weight 500.\n4. Unstructured meeting notes, support tickets, and email threads carry baseline weight 400.\n5. Drafts and personal scratchpads carry baseline weight 200.\n6. Individual author reliability heuristics adjust scores per person (e.g. Alice +150, Dave -150).\n7. Penalize incoherent or high-entropy gibberish text (-250).",
-
-  "author_reliability_prompt": "INDIVIDUAL AUTHOR & SOURCE RELIABILITY HEURISTICS:\nEvaluate individual author track records based on past documentation completeness. Specific individuals who consistently deliver verified, complete implementations receive positive trust adjustments (+100 to +200). Individuals with histories of incomplete drafts, unverified claims, or abandoned proposals receive negative trust adjustments (-100 to -200).",
-  "author_reliability_heuristics": {
+  "trust_weight_prompt": "EVALUATION RULESET FOR SOURCE TRUST WEIGHTING (W in [10, 1000]):\n1. Formal resolved ticketing systems (e.g. Jira Resolved, GitHub Merged PRs, Git commits) carry baseline weight 800.\n2. Approved architecture and design documents carry baseline weight 700.\n3. Open tickets, Slack channels, and incident logs carry baseline weight 500.\n4. Unstructured meeting notes, support tickets, and email threads carry baseline weight 400.\n5. Drafts and personal scratchpads carry baseline weight 200.\n6. Individual source reliability heuristics adjust scores per source/person (e.g. Alice +150, Dave -150).\n7. Penalize incoherent or high-entropy gibberish text (-250).",
+  "source_reliability_prompt": "INDIVIDUAL SOURCE RELIABILITY HEURISTICS:\nEvaluate individual source track records based on past documentation completeness. Specific sources/individuals who consistently deliver verified, complete implementations receive positive trust adjustments (+100 to +200). Sources with histories of incomplete drafts, unverified claims, or abandoned proposals receive negative trust adjustments (-100 to -200).",
+  "source_reliability_heuristics": {
     "alice": 150,
     "carol_lead": 200,
     "bob_contractor": -100,
     "dave_drafts": -150
   },
+
 
 
   "historical_context_prompt": "CORPUS HISTORICAL & DOMAIN CONTEXT:\nThe target document corpus contains multi-session transcripts, enterprise ticketing exports, and architectural specifications spanning system evolution. When evaluating temporal ordering or conflicting claims, prioritize verified post-migration architecture state over historical pre-migration discussion notes.",

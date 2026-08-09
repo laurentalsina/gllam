@@ -1587,16 +1587,17 @@ func ComputeQueryConditionedSalience(nodes []memory.SemanticNode, links []memory
 	return salienceScores
 }
 
-// SetIndividualAuthorTrustWeight sets a person-specific reliability adjustment bonus/penalty.
-func (e *GllamEngine) SetIndividualAuthorTrustWeight(authorID string, adjustment int) {
+// SetIndividualSourceTrustWeight sets a source/person-specific reliability adjustment bonus/penalty.
+func (e *GllamEngine) SetIndividualSourceTrustWeight(sourceID string, adjustment int) {
 	if e.SystemPrompts == nil {
 		e.SystemPrompts = config.DefaultAgenticMemorySystemPrompts()
 	}
-	if e.SystemPrompts.AuthorReliabilityHeuristics == nil {
-		e.SystemPrompts.AuthorReliabilityHeuristics = make(map[string]int)
+	if e.SystemPrompts.SourceReliabilityHeuristics == nil {
+		e.SystemPrompts.SourceReliabilityHeuristics = make(map[string]int)
 	}
-	e.SystemPrompts.AuthorReliabilityHeuristics[strings.ToLower(authorID)] = adjustment
+	e.SystemPrompts.SourceReliabilityHeuristics[strings.ToLower(sourceID)] = adjustment
 }
+
 
 // RegisterCustomDocumentTypeRule dynamically adds or overrides an information source type with its specific trust baseline and ingestion strategy.
 func (e *GllamEngine) RegisterCustomDocumentTypeRule(rule config.CustomDocumentTypeRule) {
