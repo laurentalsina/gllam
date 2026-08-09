@@ -1655,9 +1655,10 @@ func (e *GllamEngine) GaugeAndUpsertSourceNode(ctx context.Context, id string, n
 		ID:            id,
 		Name:          name,
 		Type:          nodeType,
-		ContextPrompt: fmt.Sprintf("Source Type: %s, Individual Author: %s, Trust Weight: %d", input.DocumentType, authorLabel, calculatedWeight),
+		ContextPrompt: fmt.Sprintf("Source Type: %s, Source Identity: %s, Trust Weight: %d", input.DocumentType, authorLabel, calculatedWeight),
 		TrustWeight:   calculatedWeight,
 	}
+
 
 	if err := e.UpsertNode(ctx, node); err != nil {
 		return 0, err
