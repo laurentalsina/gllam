@@ -11,7 +11,8 @@ import (
 )
 
 
-func TestEdgeCaveatCompactionAndHubWindowing(t *testing.T) {
+func TestNodeCaveatCompactionAndHubWindowing(t *testing.T) {
+
 	tempDir := t.TempDir()
 	dbPath := filepath.Join(tempDir, "test_caveats.db")
 

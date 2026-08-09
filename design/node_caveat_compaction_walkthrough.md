@@ -23,5 +23,6 @@ We have implemented **Node Caveat Compaction & Salience Windowing** (`CompactNod
 ## Automated Test Results
 
 Ran `go test -v ./pkg/engine`:
-* `TestEdgeCaveatCompactionAndHubWindowing`: **PASS (0.01s)**
+* `TestNodeCaveatCompactionAndHubWindowing`: **PASS (0.01s)**
 * All **44 engine test suites passed cleanly** (`0.594s`).
+

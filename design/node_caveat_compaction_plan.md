@@ -43,7 +43,8 @@ flowchart TD
 ## Verification Strategy
 
 * **Unit Tests (`pkg/engine/caveat_compaction_test.go`):**
-  * `TestEdgeCaveatCompactionAndHubWindowing`:
+  * `TestNodeCaveatCompactionAndHubWindowing`:
+
     * Attaches 12 distinct caveats to `"node-auth-service"`.
     * Calls `CompactNodeCaveats` with `maxInline = 5`.
     * Asserts 5 active caveats retained inline, 7 historical caveats compacted into `caveat_summary`.
