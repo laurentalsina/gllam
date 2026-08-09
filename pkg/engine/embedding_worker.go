@@ -8,9 +8,9 @@ import (
 	"time"
 )
 
-// ProcessUnembeddedNodeVectorBatch queries a batch of semantic_nodes that have not yet been indexed
+// ProcessUnembeddedNodeBatch queries a batch of semantic_nodes that have not yet been indexed
 // in semantic_embeddings and asynchronously generates and stores their vector embeddings.
-func (e *GllamEngine) ProcessUnembeddedNodeVectorBatch(ctx context.Context, batchSize int) (int, error) {
+func (e *GllamEngine) ProcessUnembeddedNodeBatch(ctx context.Context, batchSize int) (int, error) {
 	if e.embedder == nil {
 		return 0, nil
 	}
@@ -57,23 +57,23 @@ func (e *GllamEngine) ProcessUnembeddedNodeVectorBatch(ctx context.Context, batc
 	for _, task := range tasks {
 		vec, err := e.embedder.Embed(ctx, task.text)
 		if err != nil {
-			log.Printf("Vector worker failed to generate embedding for node %s (%s): %v", task.id, task.text, err)
+			log.Printf("Embedding worker failed to generate embedding for node %s (%s): %v", task.id, task.text, err)
 			continue
 		}
 
 		if err := e.IndexNodeVector(ctx, task.id, vec); err == nil {
 			indexedCount++
 		} else {
-			log.Printf("Vector worker failed to store embedding for node %s: %v", task.id, err)
+			log.Printf("Embedding worker failed to store vector for node %s: %v", task.id, err)
 		}
 	}
 
 	return indexedCount, nil
 }
 
-// StartVectorEmbeddingWorkerPool launches a background worker pool that periodically processes
+// StartEmbeddingWorkerPool launches a background worker pool that periodically processes
 // unindexed vector embedding batches, decoupling relational graph insertion from vector virtual table mutations.
-func (e *GllamEngine) StartVectorEmbeddingWorkerPool(ctx context.Context, numWorkers int, interval time.Duration) {
+func (e *GllamEngine) StartEmbeddingWorkerPool(ctx context.Context, numWorkers int, interval time.Duration) {
 	if numWorkers <= 0 {
 		numWorkers = 2
 	}
@@ -90,10 +90,10 @@ func (e *GllamEngine) StartVectorEmbeddingWorkerPool(ctx context.Context, numWor
 				select {
 				case <-ctx.Done():
 					return
-				case <-e.stopVectorWorkers:
+				case <-e.stopEmbeddingWorkers:
 					return
 				case <-ticker.C:
-					_, _ = e.ProcessUnembeddedNodeVectorBatch(ctx, 50)
+					_, _ = e.ProcessUnembeddedNodeBatch(ctx, 50)
 				}
 			}
 		}(i + 1)

@@ -25,7 +25,7 @@ type GllamEngine struct {
 	SystemPrompts         *config.AgenticMemorySystemPrompts // Agentic memory system prompting configuration
 	AllowUserGrilling     bool                               // Set false for non-interactive benchmark evaluation (e.g. BEAM)
 	stopWALManager        chan struct{}                      // Control channel for background WAL checkpoint manager
-	stopVectorWorkers     chan struct{}                      // Control channel for background vector worker pool
+	stopEmbeddingWorkers  chan struct{}                      // Control channel for background embedding worker pool
 	stopTaxonomyWorker    chan struct{}                      // Control channel for background taxonomy worker
 }
 
@@ -117,7 +117,7 @@ func NewGllamEngine(dbPath string, embedder Embedder) (*GllamEngine, error) {
 		SystemPrompts:      config.DefaultAgenticMemorySystemPrompts(),
 		AllowUserGrilling:  true,
 		stopWALManager:     make(chan struct{}),
-		stopVectorWorkers:  make(chan struct{}),
+		stopEmbeddingWorkers: make(chan struct{}),
 		stopTaxonomyWorker: make(chan struct{}),
 	}
 
@@ -174,8 +174,8 @@ func (e *GllamEngine) Close() error {
 	if e.stopWALManager != nil {
 		close(e.stopWALManager)
 	}
-	if e.stopVectorWorkers != nil {
-		close(e.stopVectorWorkers)
+	if e.stopEmbeddingWorkers != nil {
+		close(e.stopEmbeddingWorkers)
 	}
 	if e.stopTaxonomyWorker != nil {
 		close(e.stopTaxonomyWorker)

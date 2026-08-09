@@ -24,9 +24,9 @@ func (m *MockAsyncEmbedder) ModelVersion() string {
 	return "mock-async-v1.0"
 }
 
-func TestAsynchronousVectorWorkerPool(t *testing.T) {
+func TestAsynchronousEmbeddingWorkerPool(t *testing.T) {
 	tempDir := t.TempDir()
-	dbPath := filepath.Join(tempDir, "test_async_vector.db")
+	dbPath := filepath.Join(tempDir, "test_async_embedding.db")
 
 	embedder := &MockAsyncEmbedder{}
 	gllam, err := NewGllamEngine(dbPath, embedder)
@@ -65,9 +65,9 @@ func TestAsynchronousVectorWorkerPool(t *testing.T) {
 		t.Fatalf("Expected 20 unindexed vector nodes, got %d, err=%v", unindexedCount, err)
 	}
 
-	// 3. Launch background vector worker pool
+	// 3. Launch background embedding worker pool
 	subCtx, cancel := context.WithCancel(ctx)
-	gllam.StartVectorEmbeddingWorkerPool(subCtx, 2, 30*time.Millisecond)
+	gllam.StartEmbeddingWorkerPool(subCtx, 2, 30*time.Millisecond)
 
 	// 4. Wait for background workers to process the queue
 	time.Sleep(200 * time.Millisecond)
