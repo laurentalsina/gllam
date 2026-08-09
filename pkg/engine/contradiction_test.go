@@ -211,4 +211,71 @@ func TestGaugeCompositeTrustWeight(t *testing.T) {
 	}
 }
 
+func TestAllowUserGrillingDisabledBenchmarkMode(t *testing.T) {
+	tempDir := t.TempDir()
+	dbPath := filepath.Join(tempDir, "test_disallow_grilling.db")
+
+	gllam, err := NewGllamEngine(dbPath, nil)
+	if err != nil {
+		t.Fatalf("Failed to create engine: %v", err)
+	}
+	defer gllam.Close()
+
+	if err := gllam.InitSchema(); err != nil {
+		t.Fatalf("Failed to init schema: %v", err)
+	}
+
+	// Disable user grilling (BEAM benchmark mode)
+	gllam.SetAllowUserGrilling(false)
+
+	ctx := context.Background()
+
+	_ = gllam.UpsertNode(ctx, memory.SemanticNode{ID: "source-a", Name: "Source A", Type: memory.NodeTypeHuman, TrustWeight: 500})
+	_ = gllam.UpsertNode(ctx, memory.SemanticNode{ID: "source-b", Name: "Source B", Type: memory.NodeTypeHuman, TrustWeight: 500})
+	_ = gllam.UpsertNode(ctx, memory.SemanticNode{ID: "server-1", Name: "Server 1", Type: memory.NodeTypeService})
+	_ = gllam.UpsertNode(ctx, memory.SemanticNode{ID: "state-stopped", Name: "Stopped", Type: memory.NodeTypeState})
+	_ = gllam.UpsertNode(ctx, memory.SemanticNode{ID: "state-running", Name: "Running", Type: memory.NodeTypeState})
+
+	// Equal trust weight claims:
+	// Claim 1: Server 1 has_state stopped (Source A)
+	_ = gllam.AddEdge(ctx, memory.SemanticLink{
+		SourceID:       "server-1",
+		TargetID:       "state-stopped",
+		Relationship:   "has_state",
+		OriginSourceID: "source-a",
+		ValidFrom:      "1000",
+	})
+
+	// Claim 2: Server 1 has_state running (Source B)
+	_ = gllam.AddEdge(ctx, memory.SemanticLink{
+		SourceID:       "server-1",
+		TargetID:       "state-running",
+		Relationship:   "has_state",
+		OriginSourceID: "source-b",
+		ValidFrom:      "2000",
+	})
+
+	// Since AllowUserGrilling = false, Claim 1 (stopped) must be automatically expired by recency preference,
+	// and Claim 2 (running) must be active WITHOUT creating a contradiction node!
+	var expiredUntil string
+	err = gllam.dbRO.QueryRowContext(ctx, "SELECT valid_until FROM semantic_links WHERE source_id = 'server-1' AND target_id = 'state-stopped' AND relationship = 'has_state'").Scan(&expiredUntil)
+	if err != nil || expiredUntil == "" {
+		t.Errorf("Older equal-trust claim should be automatically expired when AllowUserGrilling=false, got err=%v, valid_until=%s", err, expiredUntil)
+	}
+
+	var activeTarget string
+	err = gllam.dbRO.QueryRowContext(ctx, "SELECT target_id FROM semantic_links WHERE source_id = 'server-1' AND relationship = 'has_state' AND valid_until IS NULL").Scan(&activeTarget)
+	if err != nil || activeTarget != "state-running" {
+		t.Errorf("Newer equal-trust claim state-running should be active, got target=%s", activeTarget)
+	}
+
+	// Verify no contradiction node was created
+	var count int
+	_ = gllam.dbRO.QueryRowContext(ctx, "SELECT COUNT(*) FROM semantic_nodes WHERE type = 'contradiction'").Scan(&count)
+	if count != 0 {
+		t.Errorf("No contradiction nodes should be created when AllowUserGrilling=false, got count=%d", count)
+	}
+}
+
+
 

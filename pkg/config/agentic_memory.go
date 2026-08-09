@@ -10,6 +10,7 @@ import (
 // for epistemic trust weighting, corpus historical context, semantic extraction,
 // procedural generalization, and salience scoring.
 type AgenticMemorySystemPrompts struct {
+	AllowUserGrilling              bool              `json:"allow_user_grilling"` // Set false in non-interactive benchmark evaluation (e.g. BEAM)
 	TrustWeightPrompt              string            `json:"trust_weight_prompt"`
 	HistoricalContextPrompt        string            `json:"historical_context_prompt"`
 	SemanticExtractionPrompt       string            `json:"semantic_extraction_prompt"`
@@ -21,7 +22,9 @@ type AgenticMemorySystemPrompts struct {
 // DefaultAgenticMemorySystemPrompts returns built-in baseline system prompts.
 func DefaultAgenticMemorySystemPrompts() *AgenticMemorySystemPrompts {
 	return &AgenticMemorySystemPrompts{
+		AllowUserGrilling: true,
 		TrustWeightPrompt: `EVALUATION RULESET FOR SOURCE TRUST WEIGHTING (W in [10, 1000]):
+
 1. Formal resolved ticketing systems (e.g. Jira Resolved, GitHub Merged PRs, Git commits) carry baseline weight 800.
 2. Approved architecture and design documents carry baseline weight 700.
 3. Open tickets, Slack channels, and incident logs carry baseline weight 500.

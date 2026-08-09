@@ -18,11 +18,20 @@ type GllamEngine struct {
     embedder              Embedder                           // Pluggable embedding generator (e.g., llama.cpp)
     PlannerExecutablePath string                             // Path to external PDDL planner binary/script
     SystemPrompts         *config.AgenticMemorySystemPrompts // Agentic memory system prompting configuration
+    AllowUserGrilling     bool                               // Set false for non-interactive benchmark evaluation (e.g. BEAM)
 }
 
 func (e *GllamEngine) SetPlannerExecutablePath(path string) {
     e.PlannerExecutablePath = path
 }
+
+func (e *GllamEngine) SetAllowUserGrilling(allowed bool) {
+    e.AllowUserGrilling = allowed
+    if e.SystemPrompts != nil {
+        e.SystemPrompts.AllowUserGrilling = allowed
+    }
+}
+
 
 func (e *GllamEngine) SetSystemPrompts(prompts *config.AgenticMemorySystemPrompts) {
     e.SystemPrompts = prompts
@@ -90,9 +99,11 @@ func NewGllamEngine(dbPath string, embedder Embedder) (*GllamEngine, error) {
         db:            db,
         dbRO:          dbRO,
         embedder:      embedder,
-        SystemPrompts: config.DefaultAgenticMemorySystemPrompts(),
+        SystemPrompts:     config.DefaultAgenticMemorySystemPrompts(),
+        AllowUserGrilling: true,
     }, nil
 }
+
 
 
 func (e *GllamEngine) Close() error {

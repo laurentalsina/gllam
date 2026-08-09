@@ -107,8 +107,22 @@ func (e *GllamEngine) AddEdge(ctx context.Context, link memory.SemanticLink) err
 				OriginSourceID:      existingOriginSource.String,
 			})
 			return nil
+		} else if !e.AllowUserGrilling || (e.SystemPrompts != nil && !e.SystemPrompts.AllowUserGrilling) {
+			// Equal trust weights & User Grilling is DISABLED (e.g. BEAM Benchmark Evaluation Mode):
+			// Automatically resolve by Recency Preference (newer incoming claim supersedes older claim)
+			expireQuery := `UPDATE semantic_links SET valid_until = ? WHERE source_id = ? AND target_id = ? AND relationship = ? AND valid_until IS NULL`
+			_, _ = e.db.ExecContext(ctx, expireQuery, nowStr, link.SourceID, existingTargetID, link.Relationship)
+
+			_ = e.AddEdge(ctx, memory.SemanticLink{
+				SourceID:            link.TargetID,
+				TargetID:            existingTargetID,
+				Relationship:        "resolves_conflict",
+				ResolutionRationale: fmt.Sprintf("Non-Interactive Benchmark Recency Resolution (AllowUserGrilling=false): Equal trust weights (%d)", newTrustWeight),
+				ValidFrom:           nowStr,
+				OriginSourceID:      link.OriginSourceID,
+			})
 		} else {
-			// Equal trust weights -> Fallback to unresolved contradiction node
+			// Equal trust weights & User Grilling ENABLED -> Create unresolved contradiction node for human REPL grilling
 			conflictID := fmt.Sprintf("conflict-%s-%s", link.SourceID, link.Relationship)
 			conflictNode := memory.SemanticNode{
 				ID:   conflictID,
@@ -137,6 +151,7 @@ func (e *GllamEngine) AddEdge(ctx context.Context, link memory.SemanticLink) err
 				ValidFrom:    nowStr,
 			})
 		}
+
 	}
 
 
