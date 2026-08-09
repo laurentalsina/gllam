@@ -1316,19 +1316,15 @@ func ResolveSpatialContainment(nodes []memory.SemanticNode, links []memory.Seman
 
 // FormatSalienceAnchoredSummary builds a ground-truth anchored summary (Trap 1, 2, 4, 5)
 // preserving exact entity IDs, active relationships, hard temporal boundaries, and global user directives.
-func FormatSalienceAnchoredSummary(nodes []memory.SemanticNode, links []memory.SemanticLink, episodes []memory.EpisodicSummary) string {
+func FormatSalienceAnchoredSummary(nodes []memory.SemanticNode, links []memory.SemanticLink, episodes []memory.EpisodicSummary, queryPrompt string) string {
 	// 1. Filter out obsolete state links (Trap 2 - Knowledge Update Active State Filter)
 	activeLinks := FilterActiveSummaryFacts(links)
 
 	// 2. Extract global user preferences & negative constraints (Trap 5)
 	globalDirectives := PreserveGlobalDirectives(activeLinks)
 
-	// 3. Compute node salience degree scores
-	degreeMap := make(map[string]int)
-	for _, l := range activeLinks {
-		degreeMap[l.SourceID]++
-		degreeMap[l.TargetID]++
-	}
+	// 3. Compute dynamic query-conditioned salience scores
+	salienceScores := ComputeQueryConditionedSalience(nodes, activeLinks, queryPrompt)
 
 	var sb strings.Builder
 	sb.WriteString("=== GROUND-TRUTH ANCHORED SUMMARY ===\n")
@@ -1341,19 +1337,16 @@ func FormatSalienceAnchoredSummary(nodes []memory.SemanticNode, links []memory.S
 
 	sb.WriteString("--- SALIENT GROUND-TRUTH ENTITIES & STATES ---\n")
 	for _, n := range nodes {
-		deg := degreeMap[n.ID]
-		salienceScore := float64(deg) / 10.0
-		if salienceScore > 1.0 {
-			salienceScore = 1.0
-		}
+		salienceScore := salienceScores[n.ID]
 
-		if deg >= 1 || n.ContextPrompt != "" {
-			sb.WriteString(fmt.Sprintf("• Entity: %s (ID: %s, Type: %s, Salience: %.2f)\n", n.Name, n.ID, n.Type, salienceScore))
+		if salienceScore > 0.1 || n.ContextPrompt != "" {
+			sb.WriteString(fmt.Sprintf("• Entity: %s (ID: %s, Type: %s, Query Salience: %.2f)\n", n.Name, n.ID, n.Type, salienceScore))
 			if n.ContextPrompt != "" {
 				sb.WriteString(fmt.Sprintf("  Context: %s\n", n.ContextPrompt))
 			}
 		}
 	}
+
 
 	sb.WriteString("\n--- ACTIVE FACTUAL RELATIONSHIPS & TEMPORAL BOUNDS ---\n")
 	now := time.Now().Unix()
@@ -1449,6 +1442,76 @@ func (e *GllamEngine) ExtractProceduralWorkflow(ctx context.Context, name string
 	}
 	return nil
 }
+
+// ComputeQueryConditionedSalience calculates dynamic focal salience scores (S in [0, 1])
+// for nodes based on graph degree centrality AND explicit term/focal matches in the query prompt.
+func ComputeQueryConditionedSalience(nodes []memory.SemanticNode, links []memory.SemanticLink, query string) map[string]float64 {
+	degreeMap := make(map[string]int)
+	for _, l := range links {
+		degreeMap[l.SourceID]++
+		degreeMap[l.TargetID]++
+	}
+
+	queryLower := strings.ToLower(query)
+	focalNodes := make(map[string]bool)
+
+	// Identify direct query focal matches (person, date, entity, port)
+	for _, n := range nodes {
+		nameLower := strings.ToLower(n.Name)
+		idLower := strings.ToLower(n.ID)
+		if (nameLower != "" && strings.Contains(queryLower, nameLower)) ||
+			(idLower != "" && strings.Contains(queryLower, idLower)) {
+			focalNodes[n.ID] = true
+		}
+	}
+
+	// Also check date / timing terms in query
+	dateKeywords := []string{"january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december", "yesterday", "today", "last month", "weeks ago", "days ago"}
+	hasDateQuery := false
+	for _, dk := range dateKeywords {
+		if strings.Contains(queryLower, dk) {
+			hasDateQuery = true
+			break
+		}
+	}
+
+	salienceScores := make(map[string]float64)
+	for _, n := range nodes {
+		// Base degree score (0 to 0.4)
+		score := float64(degreeMap[n.ID]) / 25.0
+		if score > 0.4 {
+			score = 0.4
+		}
+
+		// Direct focal match boost (+0.50)
+		if focalNodes[n.ID] {
+			score += 0.50
+		}
+
+		// Direct date match boost (+0.30)
+		if hasDateQuery && (n.Type == memory.NodeTypeEvent || strings.Contains(strings.ToLower(n.ContextPrompt), "date") || strings.Contains(strings.ToLower(n.Name), "202")) {
+			score += 0.30
+		}
+
+		// 1-hop focal proximity boost (+0.30)
+		if !focalNodes[n.ID] {
+			for _, l := range links {
+				if (l.SourceID == n.ID && focalNodes[l.TargetID]) || (l.TargetID == n.ID && focalNodes[l.SourceID]) {
+					score += 0.30
+					break
+				}
+			}
+		}
+
+		if score > 1.0 {
+			score = 1.0
+		}
+		salienceScores[n.ID] = score
+	}
+
+	return salienceScores
+}
+
 
 
 

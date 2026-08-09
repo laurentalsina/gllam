@@ -47,8 +47,9 @@ func TestSalienceAnchoredSummaryAndProceduralExtraction(t *testing.T) {
 		{ID: "ep-1", SummaryText: "Configured Caddy web server on port 8080 with TLS cert."},
 	}
 
-	// 1. FormatSalienceAnchoredSummary
-	summary := FormatSalienceAnchoredSummary(nodes, links, episodes)
+	// 1. FormatSalienceAnchoredSummary with query focal prompt
+	summary := FormatSalienceAnchoredSummary(nodes, links, episodes, "What port is Caddy web server running on?")
+
 
 	// Verify ground-truth entity IDs and active links are present
 	if !strings.Contains(summary, "caddy-service") || !strings.Contains(summary, "port-8080") {

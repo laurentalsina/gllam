@@ -79,7 +79,8 @@ func main() {
 		{ID: "ep-1", SummaryText: "Configured Caddy web server on port 8080 with TLS cert."},
 	}
 
-	summaryOutput := engine.FormatSalienceAnchoredSummary(nodes, links, episodes)
+	summaryOutput := engine.FormatSalienceAnchoredSummary(nodes, links, episodes, "What port is Caddy web server running on?")
+
 
 	fmt.Printf("=== GLLAM Summarization Engine (Salience & Procedural Generalization) Evaluation ===\n\n")
 	fmt.Println(summaryOutput)
