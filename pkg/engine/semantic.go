@@ -552,6 +552,12 @@ func (e *GllamEngine) resolveAnchorTimestamp(ctx context.Context, anchorID strin
 // ExpandTemporalNeighbors performs N-hop traversal over temporal links and temporal anchors
 // to ensure complete transitive ordering chains (e.g. A -> B -> C) are loaded into context.
 func (e *GllamEngine) ExpandTemporalNeighbors(ctx context.Context, seedNodes []memory.SemanticNode, existingLinks []memory.SemanticLink, maxHops int) ([]memory.SemanticNode, []memory.SemanticLink, error) {
+	return e.ExpandTemporalNeighborsWithTime(ctx, seedNodes, existingLinks, maxHops, nil)
+}
+
+// ExpandTemporalNeighborsWithTime performs N-hop traversal over temporal links active as of a specific evaluation timestamp (evalTimestamp).
+// Passing evalTimestamp enables point-in-time "time travel" RAG queries (e.g. querying active facts as of 2021).
+func (e *GllamEngine) ExpandTemporalNeighborsWithTime(ctx context.Context, seedNodes []memory.SemanticNode, existingLinks []memory.SemanticLink, maxHops int, evalTimestamp *int64) ([]memory.SemanticNode, []memory.SemanticLink, error) {
 	nodeMap := make(map[string]memory.SemanticNode)
 	linkMap := make(map[string]memory.SemanticLink)
 
@@ -574,12 +580,25 @@ func (e *GllamEngine) ExpandTemporalNeighbors(ctx context.Context, seedNodes []m
 		var nextFrontier []string
 
 		for _, currentID := range frontier {
-			query := `
-				SELECT source_id, target_id, relationship, caveats, valid_from, valid_until, temporal_anchor_id, temporal_relation, temporal_offset_seconds, temporal_granularity, temporal_note, origin_source_id, rule_context, constraint_type, rule_rationale, resolution_rationale, duration_turns, remaining_turns, updated_at
-				FROM semantic_links
-				WHERE source_id = ? OR target_id = ? OR temporal_anchor_id = ?`
+			var query string
+			var rows *sql.Rows
+			var err error
 
-			rows, err := e.dbRO.QueryContext(ctx, query, currentID, currentID, currentID)
+			if evalTimestamp == nil {
+				query = `
+					SELECT source_id, target_id, relationship, caveats, valid_from, valid_until, temporal_anchor_id, temporal_relation, temporal_offset_seconds, temporal_granularity, temporal_note, origin_source_id, rule_context, constraint_type, rule_rationale, resolution_rationale, duration_turns, remaining_turns, updated_at
+					FROM semantic_links
+					WHERE source_id = ? OR target_id = ? OR temporal_anchor_id = ?`
+				rows, err = e.dbRO.QueryContext(ctx, query, currentID, currentID, currentID)
+			} else {
+				query = `
+					SELECT source_id, target_id, relationship, caveats, valid_from, valid_until, temporal_anchor_id, temporal_relation, temporal_offset_seconds, temporal_granularity, temporal_note, origin_source_id, rule_context, constraint_type, rule_rationale, resolution_rationale, duration_turns, remaining_turns, updated_at
+					FROM semantic_links
+					WHERE (source_id = ? OR target_id = ? OR temporal_anchor_id = ?)
+					  AND (valid_from = 'temporal_note' OR CAST(valid_from AS INTEGER) <= ?)
+					  AND (valid_until IS NULL OR valid_until = 'temporal_note' OR CAST(valid_until AS INTEGER) > ?)`
+				rows, err = e.dbRO.QueryContext(ctx, query, currentID, currentID, currentID, *evalTimestamp, *evalTimestamp)
+			}
 			if err != nil {
 				continue
 			}
@@ -1058,6 +1077,12 @@ type NeedleScoredNode struct {
 
 // RetrieveHybridNeedle performs dual-channel RRF hybrid retrieval over vector embeddings and exact graph traversal
 func (e *GllamEngine) RetrieveHybridNeedle(ctx context.Context, query string, entityIDs []string, sourceID string, limit int) ([]NeedleScoredNode, error) {
+	return e.RetrieveHybridNeedleWithTime(ctx, query, entityIDs, sourceID, limit, nil)
+}
+
+// RetrieveHybridNeedleWithTime performs dual-channel RRF hybrid retrieval over vector embeddings and exact graph traversal,
+// filtering active facts as of a specific virtual evaluation timestamp (enabling point-in-time "time travel" RAG queries).
+func (e *GllamEngine) RetrieveHybridNeedleWithTime(ctx context.Context, query string, entityIDs []string, sourceID string, limit int, asOfTime *int64) ([]NeedleScoredNode, error) {
 	if limit <= 0 {
 		limit = 10
 	}
@@ -1096,7 +1121,7 @@ func (e *GllamEngine) RetrieveHybridNeedle(ctx context.Context, query string, en
 		}
 	}
 
-	// 3. Graph Channel: Fetch seed nodes & ExpandTemporalNeighbors (2 hops)
+	// 3. Graph Channel: Fetch seed nodes & ExpandTemporalNeighborsWithTime (2 hops)
 	var seedNodes []memory.SemanticNode
 	for _, entID := range resolvedEntities {
 		var node memory.SemanticNode
@@ -1113,7 +1138,8 @@ func (e *GllamEngine) RetrieveHybridNeedle(ctx context.Context, query string, en
 		}
 	}
 
-	expNodes, expLinks, _ := e.ExpandTemporalNeighbors(ctx, seedNodes, nil, 2)
+	expNodes, expLinks, _ := e.ExpandTemporalNeighborsWithTime(ctx, seedNodes, nil, 2, asOfTime)
+	expLinks = FilterActiveSummaryFactsForTime(expLinks, asOfTime)
 
 	// Map links to source/target nodes
 	linksByNode := make(map[string][]memory.SemanticLink)
@@ -1582,13 +1608,44 @@ func FormatSalienceAnchoredSummary(nodes []memory.SemanticNode, links []memory.S
 
 // FilterActiveSummaryFacts filters out links where valid_until IS NOT NULL (Trap 2).
 func FilterActiveSummaryFacts(links []memory.SemanticLink) []memory.SemanticLink {
+	return FilterActiveSummaryFactsForTime(links, nil)
+}
+
+// FilterActiveSummaryFactsForTime filters links active as of a specific evaluation timestamp (asOfTime).
+// If asOfTime is nil, filters links where valid_until IS NULL.
+func FilterActiveSummaryFactsForTime(links []memory.SemanticLink, asOfTime *int64) []memory.SemanticLink {
 	var active []memory.SemanticLink
 	for _, l := range links {
-		if l.ValidUntil == nil || *l.ValidUntil == "" {
-			active = append(active, l)
+		if asOfTime == nil {
+			if l.ValidUntil == nil || *l.ValidUntil == "" {
+				active = append(active, l)
+			}
+		} else {
+			ts := *asOfTime
+			fromVal := parseTimestamp(l.ValidFrom)
+			untilVal := parseTimestampPtr(l.ValidUntil)
+
+			if (fromVal == 0 || fromVal <= ts) && (untilVal == 0 || untilVal > ts) {
+				active = append(active, l)
+			}
 		}
 	}
 	return active
+}
+
+func parseTimestamp(s string) int64 {
+	if s == "" || s == "temporal_note" {
+		return 0
+	}
+	ts, _ := strconv.ParseInt(s, 10, 64)
+	return ts
+}
+
+func parseTimestampPtr(s *string) int64 {
+	if s == nil {
+		return 0
+	}
+	return parseTimestamp(*s)
 }
 
 // PreserveGlobalDirectives extracts user_preference and negative constraint rules (Trap 5).
