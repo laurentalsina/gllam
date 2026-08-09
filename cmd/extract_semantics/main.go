@@ -62,14 +62,33 @@ func main() {
 	fmt.Printf("Found %d episodes to process for prefix '%s'\n", len(episodes), *prefix)
 
 	systemPrompt := `You are an expert knowledge extractor for an agentic memory graph.
-Extract the most critical entities and relationships from the provided conversation transcript.
+Extract the most critical entities, states, events, and relationships from the provided conversation transcript.
+
+Node Types:
+- "event": An occurrence, action, or milestone (e.g. deploy_v1, migration, user_registered)
+- "state": An active or past state/status (e.g. state_active, state_deprecated, version_18)
+- "entity": A person, physical object, or domain subject
+- "service": A software component, database, or network service
+
+Temporal Guidelines for Links:
+- If precise timestamps or dates are mentioned (e.g. "May 2024"), extract them into valid_from / valid_until as strings or ISO dates.
+- If timing is relative or imprecise (e.g. "before the migration", "sometime last week", "after release v1.0"), set valid_from or valid_until to "temporal_note" AND provide the descriptive phrase in "temporal_note".
+
 You must output ONLY valid JSON matching this exact structure, with no markdown formatting or extra text:
 {
   "nodes": [
-    {"id": "unique_string", "name": "Display Name", "type": "person|technology|concept|etc", "context_prompt": "Any specific contextual notes"}
+    {"id": "unique_string", "name": "Display Name", "type": "event|state|entity|service|contradiction", "context_prompt": "Any specific contextual notes"}
   ],
   "links": [
-    {"source_id": "id1", "target_id": "id2", "relationship": "uses|knows|depends_on|etc", "caveats": "optional condition"}
+    {
+      "source_id": "id1",
+      "target_id": "id2",
+      "relationship": "happened_before|has_state|depends_on|causes|etc",
+      "caveats": "optional conditions",
+      "valid_from": "timestamp_or_temporal_note",
+      "valid_until": "timestamp_or_temporal_note_or_null",
+      "temporal_note": "relative or imprecise timing phrase if applicable"
+    }
   ]
 }
 If the chat contains a contradiction (e.g. user changes their mind), extract the conflicting claims as distinct relationships.`
@@ -124,8 +143,15 @@ If the chat contains a contradiction (e.g. user changes their mind), extract the
 			if link.SourceID == "" || link.TargetID == "" || link.Relationship == "" {
 				continue
 			}
-			// Use the episode's timestamp for the relationship validity
-			link.ValidFrom = fmt.Sprintf("%d", ep.CreatedAt)
+			// Default valid_from to episode timestamp if not specified by LLM
+			if link.ValidFrom == "" {
+				if link.TemporalNote != "" {
+					link.ValidFrom = "temporal_note"
+				} else {
+					link.ValidFrom = fmt.Sprintf("%d", ep.CreatedAt)
+				}
+			}
+
 
 			if err := gllam.AddEdge(ctx, link); err != nil {
 				if strings.Contains(err.Error(), "FOREIGN KEY constraint failed") {
