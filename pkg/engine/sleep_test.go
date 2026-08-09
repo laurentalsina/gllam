@@ -11,7 +11,7 @@ import (
 )
 
 
-func TestMemorySleepCycleAndDreamSimulation(t *testing.T) {
+func TestMemoryMaintenanceCycleAndRandomTraceTests(t *testing.T) {
 	tempDir := t.TempDir()
 	dbPath := filepath.Join(tempDir, "test_sleep.db")
 
@@ -55,13 +55,14 @@ func TestMemorySleepCycleAndDreamSimulation(t *testing.T) {
 		t.Errorf("Expected 1 pruned stale link, got %d", sleepReport.PrunedStaleLinksCount)
 	}
 
-	if len(sleepReport.SimulatedDreams) != 5 {
-		t.Errorf("Expected 5 simulated dream scenarios, got %d", len(sleepReport.SimulatedDreams))
+	if len(sleepReport.SimulatedTraceTests) != 5 {
+		t.Errorf("Expected 5 synthetic random trace test scenarios, got %d", len(sleepReport.SimulatedTraceTests))
 	}
 
 	if sleepReport.MemoryClarityScore <= 0 || sleepReport.MemoryConsistencyScore <= 0 {
 		t.Errorf("Expected positive clarity and consistency scores, got clarity=%f, consistency=%f", sleepReport.MemoryClarityScore, sleepReport.MemoryConsistencyScore)
 	}
+
 
 	// 3. Verify stale link was completely pruned from database
 	var count int

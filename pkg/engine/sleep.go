@@ -11,19 +11,19 @@ import (
 )
 
 // EnterMemorySleepCycle puts the memory engine into a maintenance sleep state, performing
-// graph compaction, stale link pruning, taxonomy consolidation, and synthetic dream simulations.
-func (e *GllamEngine) EnterMemorySleepCycle(ctx context.Context, numDreams int) (*memory.MemorySleepReport, error) {
+// graph compaction, stale link pruning, taxonomy consolidation, and synthetic random trace tests.
+func (e *GllamEngine) EnterMemorySleepCycle(ctx context.Context, numTraceTests int) (*memory.MemorySleepReport, error) {
 	start := time.Now()
 	nowTS := start.Unix()
 	sleepID := fmt.Sprintf("sleep-%d", nowTS)
 
-	if numDreams <= 0 {
-		numDreams = 5
+	if numTraceTests <= 0 {
+		numTraceTests = 5
 	}
 
 	report := &memory.MemorySleepReport{
-		SleepCycleID:    sleepID,
-		SimulatedDreams: make([]memory.MemoryDreamScenario, 0),
+		SleepCycleID:        sleepID,
+		SimulatedTraceTests: make([]memory.SyntheticTraceTestScenario, 0),
 	}
 
 	// Phase 1: Prune Stale / Expired Links
@@ -41,10 +41,10 @@ func (e *GllamEngine) EnterMemorySleepCycle(ctx context.Context, numDreams int) 
 	// Phase 3: Process Uncategorized Batch
 	_, _ = e.ProcessUncategorizedBatch(ctx, 100)
 
-	// Phase 4: Dream Simulation & Memory Exercise
-	dreams, clarityScore, consistencyScore, err := e.SimulateMemoryDreams(ctx, numDreams)
+	// Phase 4: Synthetic Random Trace Tests & Memory Exercise
+	traces, clarityScore, consistencyScore, err := e.SimulateRandomTraceTests(ctx, numTraceTests)
 	if err == nil {
-		report.SimulatedDreams = dreams
+		report.SimulatedTraceTests = traces
 		report.MemoryClarityScore = clarityScore
 		report.MemoryConsistencyScore = consistencyScore
 	} else {
@@ -56,17 +56,17 @@ func (e *GllamEngine) EnterMemorySleepCycle(ctx context.Context, numDreams int) 
 	return report, nil
 }
 
-// SimulateMemoryDreams picks entity node pairs from memory to run simulated question/answer scenario traces,
+// SimulateRandomTraceTests picks entity node pairs from memory to run synthetic random trace tests,
 // exercising multi-hop graph retrieval and measuring consistency and clarity scores.
-func (e *GllamEngine) SimulateMemoryDreams(ctx context.Context, numDreams int) ([]memory.MemoryDreamScenario, float64, float64, error) {
-	if numDreams <= 0 {
-		numDreams = 5
+func (e *GllamEngine) SimulateRandomTraceTests(ctx context.Context, numTraceTests int) ([]memory.SyntheticTraceTestScenario, float64, float64, error) {
+	if numTraceTests <= 0 {
+		numTraceTests = 5
 	}
 
 	query := `SELECT id, name, taxonomy_path FROM semantic_nodes WHERE is_category = 0 LIMIT 100`
 	rows, err := e.dbRO.QueryContext(ctx, query)
 	if err != nil {
-		return nil, 0, 0, fmt.Errorf("failed to fetch nodes for dream simulation: %w", err)
+		return nil, 0, 0, fmt.Errorf("failed to fetch nodes for trace test simulation: %w", err)
 	}
 	defer rows.Close()
 
@@ -79,16 +79,16 @@ func (e *GllamEngine) SimulateMemoryDreams(ctx context.Context, numDreams int) (
 	}
 
 	if len(nodes) < 2 {
-		// Insufficient nodes for multi-hop dream simulation
-		return []memory.MemoryDreamScenario{}, 1.0, 1.0, nil
+		// Insufficient nodes for multi-hop trace test simulation
+		return []memory.SyntheticTraceTestScenario{}, 1.0, 1.0, nil
 	}
 
 	r := rand.New(rand.NewSource(time.Now().UnixNano()))
-	var dreams []memory.MemoryDreamScenario
+	var traces []memory.SyntheticTraceTestScenario
 	totalClarity := 0.0
 	consistentCount := 0
 
-	for i := 0; i < numDreams; i++ {
+	for i := 0; i < numTraceTests; i++ {
 		idx1 := r.Intn(len(nodes))
 		idx2 := r.Intn(len(nodes))
 		if idx1 == idx2 {
@@ -98,12 +98,11 @@ func (e *GllamEngine) SimulateMemoryDreams(ctx context.Context, numDreams int) (
 		n1 := nodes[idx1]
 		n2 := nodes[idx2]
 
-		dreamID := fmt.Sprintf("dream-%d-%d", i+1, time.Now().UnixNano())
+		traceID := fmt.Sprintf("trace-test-%d-%d", i+1, time.Now().UnixNano())
 		simulatedQuery := fmt.Sprintf("What is the structural relationship between '%s' (%s) and '%s' (%s)?", n1.Name, n1.TaxonomyPath, n2.Name, n2.TaxonomyPath)
 
 		// Exercise graph traversal path finder
 		path, pathErr := e.FindMultiHopPath(ctx, []string{n1.ID, n2.ID}, 4)
-
 
 		isConsistent := pathErr == nil && len(path) > 0
 		clarity := 0.85
@@ -122,8 +121,8 @@ func (e *GllamEngine) SimulateMemoryDreams(ctx context.Context, numDreams int) (
 			simulatedAnswer = fmt.Sprintf("Trace exercise: Disjoint nodes %s and %s in separate domains.", n1.Name, n2.Name)
 		}
 
-		dream := memory.MemoryDreamScenario{
-			ID:               dreamID,
+		traceScenario := memory.SyntheticTraceTestScenario{
+			ID:               traceID,
 			PromptQuery:      simulatedQuery,
 			SimulatedAnswer:  simulatedAnswer,
 			RetrievedNodeIDs: []string{n1.ID, n2.ID},
@@ -131,12 +130,13 @@ func (e *GllamEngine) SimulateMemoryDreams(ctx context.Context, numDreams int) (
 			ClarityScore:     clarity,
 		}
 
-		dreams = append(dreams, dream)
+		traces = append(traces, traceScenario)
 		totalClarity += clarity
 	}
 
-	avgClarity := totalClarity / float64(numDreams)
-	consistencyRatio := float64(consistentCount) / float64(numDreams)
+	avgClarity := totalClarity / float64(numTraceTests)
+	consistencyRatio := float64(consistentCount) / float64(numTraceTests)
 
-	return dreams, avgClarity, consistencyRatio, nil
+	return traces, avgClarity, consistencyRatio, nil
 }
+

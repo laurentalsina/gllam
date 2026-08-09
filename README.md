@@ -350,15 +350,15 @@ err := gllam.ConsolidateTaxonomyBranch(ctx, "/Engineering/DBs", "/Engineering/In
 recipes, err := gllam.GetProceduresByTaxonomyPrefix(ctx, "/Engineering/Infrastructure/Databases")
 ```
 
-### Memory Sleep Cycle & Dream Simulation Protocol
+### Memory Maintenance Cycle & Synthetic Random Trace Tests
 
-Biologically inspired memory consolidation requires a periodic offline **Sleep Maintenance Cycle** (`EnterMemorySleepCycle`) to prevent memory degradation and measure graph consistency:
+High-scale memory systems require a periodic offline **Memory Maintenance Cycle** (`EnterMemorySleepCycle`) to prevent memory degradation and measure graph consistency:
 
 1. **Maintenance Compaction & Pruning:**
    * Automatically purges expired temporal links (`valid_until <= now`).
    * Runs self-healing taxonomy branch consolidation (`ConsolidateTaxonomyBranch`).
    * Processes orphaned entity nodes (`ProcessUncategorizedBatch`).
-2. **Dream Simulation & Memory Exercise (`SimulateMemoryDreams`):**
+2. **Synthetic Random Trace Tests & Memory Exercise (`SimulateRandomTraceTests`):**
    * Generates synthetic question/answer trace scenarios across randomly sampled entity pairs.
    * Exercises multi-hop graph retrieval (`FindMultiHopPath`).
    * Measures quantitative metrics:
@@ -366,13 +366,14 @@ Biologically inspired memory consolidation requires a periodic offline **Sleep M
      * **Memory Consistency Score ($\text{Consistency} \in [0.0, 1.0]$):** Ratio of consistent simulated answers across domains.
 
 ```go
-// Trigger offline memory sleep cycle with 10 simulated dream scenarios
+// Trigger offline memory maintenance cycle with 10 synthetic random trace tests
 report, err := gllam.EnterMemorySleepCycle(ctx, 10)
 
 fmt.Printf("Pruned Stale Links: %d\n", report.PrunedStaleLinksCount)
 fmt.Printf("Memory Clarity Score: %.2f\n", report.MemoryClarityScore)
 fmt.Printf("Memory Consistency Score: %.2f\n", report.MemoryConsistencyScore)
 ```
+
 
 
 

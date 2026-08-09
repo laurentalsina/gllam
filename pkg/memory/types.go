@@ -135,7 +135,7 @@ type CompiledContext struct {
 	PlannerOutput string
 }
 
-type MemoryDreamScenario struct {
+type SyntheticTraceTestScenario struct {
 	ID               string   `json:"id"`
 	PromptQuery      string   `json:"prompt_query"`
 	SimulatedAnswer  string   `json:"simulated_answer"`
@@ -145,14 +145,15 @@ type MemoryDreamScenario struct {
 }
 
 type MemorySleepReport struct {
-	SleepCycleID              string                `json:"sleep_cycle_id"`
-	DurationSeconds           float64               `json:"duration_seconds"`
-	PrunedStaleLinksCount     int                   `json:"pruned_stale_links_count"`
-	CompactedRevisionsCount   int                   `json:"compacted_revisions_count"`
-	ConsolidatedTaxonomyCount int                   `json:"consolidated_taxonomy_count"`
-	SimulatedDreams           []MemoryDreamScenario `json:"simulated_dreams"`
-	MemoryClarityScore        float64               `json:"memory_clarity_score"`
-	MemoryConsistencyScore    float64               `json:"memory_consistency_score"`
+	SleepCycleID              string                      `json:"sleep_cycle_id"`
+	DurationSeconds           float64                     `json:"duration_seconds"`
+	PrunedStaleLinksCount     int                         `json:"pruned_stale_links_count"`
+	CompactedRevisionsCount   int                         `json:"compacted_revisions_count"`
+	ConsolidatedTaxonomyCount int                         `json:"consolidated_taxonomy_count"`
+	SimulatedTraceTests       []SyntheticTraceTestScenario `json:"simulated_trace_tests"`
+	MemoryClarityScore        float64                     `json:"memory_clarity_score"`
+	MemoryConsistencyScore    float64                     `json:"memory_consistency_score"`
 }
+
 
 
