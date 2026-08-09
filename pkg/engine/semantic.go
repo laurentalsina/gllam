@@ -101,14 +101,15 @@ func (e *GllamEngine) AddEdge(ctx context.Context, link memory.SemanticLink) err
     // Insert the new link (idempotent update if it already exists)
 
     insertQuery := `
-        INSERT INTO semantic_links (source_id, target_id, relationship, caveats, valid_from, valid_until, temporal_anchor_id, temporal_relation, temporal_note, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO semantic_links (source_id, target_id, relationship, caveats, valid_from, valid_until, temporal_anchor_id, temporal_relation, temporal_offset_seconds, temporal_note, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(source_id, target_id, relationship) DO UPDATE SET 
             caveats = excluded.caveats,
             valid_from = excluded.valid_from,
             valid_until = excluded.valid_until,
             temporal_anchor_id = excluded.temporal_anchor_id,
             temporal_relation = excluded.temporal_relation,
+            temporal_offset_seconds = excluded.temporal_offset_seconds,
             temporal_note = excluded.temporal_note,
             updated_at = excluded.updated_at`
 
@@ -125,7 +126,8 @@ func (e *GllamEngine) AddEdge(ctx context.Context, link memory.SemanticLink) err
 
     _, err = e.db.ExecContext(ctx, insertQuery,
         link.SourceID, link.TargetID, link.Relationship, link.Caveats,
-        link.ValidFrom, link.ValidUntil, anchorID, tempRel, tempNote, now)
+        link.ValidFrom, link.ValidUntil, anchorID, tempRel, link.TemporalOffsetSeconds, tempNote, now)
+
     if err != nil {
         return fmt.Errorf("failed to add edge: %w", err)
     }
@@ -266,19 +268,17 @@ func (e *GllamEngine) SearchSimilarNodes(ctx context.Context, queryText string, 
     return results, rows.Err()
 }
 
-// GetActiveLinksAtTime retrieves semantic links that were active at a specific Unix timestamp (read-only -> dbRO)
 // GetActiveLinksAtTime retrieves semantic links active at a specific Unix timestamp (read-only -> dbRO)
 // It dynamically resolves temporal_anchor_id timestamps when valid_from or valid_until is "temporal_note".
 func (e *GllamEngine) GetActiveLinksAtTime(ctx context.Context, timestamp int64) ([]memory.SemanticLink, error) {
     query := `
-        SELECT source_id, target_id, relationship, caveats, valid_from, valid_until, temporal_anchor_id, temporal_relation, temporal_note, updated_at
+        SELECT source_id, target_id, relationship, caveats, valid_from, valid_until, temporal_anchor_id, temporal_relation, temporal_offset_seconds, temporal_note, updated_at
         FROM semantic_links
         WHERE (valid_from = 'temporal_note' OR CAST(valid_from AS INTEGER) <= ?) 
           AND (valid_until IS NULL OR valid_until = 'temporal_note' OR CAST(valid_until AS INTEGER) > ?)
         ORDER BY valid_from ASC`
 
     rows, err := e.dbRO.QueryContext(ctx, query, timestamp, timestamp)
-
     if err != nil {
         return nil, fmt.Errorf("failed to query active links at timestamp %d: %w", timestamp, err)
     }
@@ -288,7 +288,7 @@ func (e *GllamEngine) GetActiveLinksAtTime(ctx context.Context, timestamp int64)
     for rows.Next() {
         var l memory.SemanticLink
         var anchorID, tempRel, tempNote sql.NullString
-        if err := rows.Scan(&l.SourceID, &l.TargetID, &l.Relationship, &l.Caveats, &l.ValidFrom, &l.ValidUntil, &anchorID, &tempRel, &tempNote, &l.UpdatedAt); err != nil {
+        if err := rows.Scan(&l.SourceID, &l.TargetID, &l.Relationship, &l.Caveats, &l.ValidFrom, &l.ValidUntil, &anchorID, &tempRel, &l.TemporalOffsetSeconds, &tempNote, &l.UpdatedAt); err != nil {
             return nil, fmt.Errorf("failed to scan link: %w", err)
         }
         if anchorID.Valid {
@@ -304,11 +304,11 @@ func (e *GllamEngine) GetActiveLinksAtTime(ctx context.Context, timestamp int64)
     }
     rows.Close()
 
-    // Dynamic Anchor Resolution (Trap 6): Filter candidates whose anchored event timestamp invalidates them at time `timestamp`
+    // Dynamic Anchor Resolution (Trap 6 & 7): Filter candidates whose anchored event timestamp invalidates them at time `timestamp`
     var activeLinks []memory.SemanticLink
     for _, l := range candidates {
         if l.TemporalAnchorID != "" {
-            anchorTS := e.resolveAnchorTimestamp(ctx, l.TemporalAnchorID)
+            anchorTS := e.resolveAnchorTimestamp(ctx, l.TemporalAnchorID, l.TemporalOffsetSeconds)
             if anchorTS > 0 {
                 // If valid_from is anchored after requested timestamp, link wasn't active yet
                 if l.ValidFrom == "temporal_note" && (l.TemporalRelation == "after" || l.TemporalRelation == "ended_by") {
@@ -330,16 +330,15 @@ func (e *GllamEngine) GetActiveLinksAtTime(ctx context.Context, timestamp int64)
     return activeLinks, nil
 }
 
-// resolveAnchorTimestamp looks up the unix timestamp of an anchor node or link
-func (e *GllamEngine) resolveAnchorTimestamp(ctx context.Context, anchorID string) int64 {
+// resolveAnchorTimestamp looks up the unix timestamp of an anchor node or link and applies temporal offset seconds
+func (e *GllamEngine) resolveAnchorTimestamp(ctx context.Context, anchorID string, offsetSeconds int64) int64 {
 	var ts int64
 	query := `SELECT CAST(valid_from AS INTEGER) FROM semantic_links WHERE source_id = ? AND valid_from != 'temporal_note' LIMIT 1`
 	if err := e.dbRO.QueryRowContext(ctx, query, anchorID).Scan(&ts); err == nil && ts > 0 {
-		return ts
+		return ts + offsetSeconds
 	}
 	return 0
 }
-
 
 // ExpandTemporalNeighbors performs N-hop traversal over temporal links and temporal anchors
 // to ensure complete transitive ordering chains (e.g. A -> B -> C) are loaded into context.
@@ -367,7 +366,7 @@ func (e *GllamEngine) ExpandTemporalNeighbors(ctx context.Context, seedNodes []m
 
 		for _, currentID := range frontier {
 			query := `
-				SELECT source_id, target_id, relationship, caveats, valid_from, valid_until, temporal_anchor_id, temporal_relation, temporal_note, updated_at
+				SELECT source_id, target_id, relationship, caveats, valid_from, valid_until, temporal_anchor_id, temporal_relation, temporal_offset_seconds, temporal_note, updated_at
 				FROM semantic_links
 				WHERE source_id = ? OR target_id = ? OR temporal_anchor_id = ?`
 
@@ -379,7 +378,7 @@ func (e *GllamEngine) ExpandTemporalNeighbors(ctx context.Context, seedNodes []m
 			for rows.Next() {
 				var l memory.SemanticLink
 				var anchorID, tempRel, tempNote sql.NullString
-				if err := rows.Scan(&l.SourceID, &l.TargetID, &l.Relationship, &l.Caveats, &l.ValidFrom, &l.ValidUntil, &anchorID, &tempRel, &tempNote, &l.UpdatedAt); err != nil {
+				if err := rows.Scan(&l.SourceID, &l.TargetID, &l.Relationship, &l.Caveats, &l.ValidFrom, &l.ValidUntil, &anchorID, &tempRel, &l.TemporalOffsetSeconds, &tempNote, &l.UpdatedAt); err != nil {
 					continue
 				}
 				if anchorID.Valid {
@@ -391,6 +390,7 @@ func (e *GllamEngine) ExpandTemporalNeighbors(ctx context.Context, seedNodes []m
 				if tempNote.Valid {
 					l.TemporalNote = tempNote.String
 				}
+
 
 				key := fmt.Sprintf("%s-%s-%s", l.SourceID, l.TargetID, l.Relationship)
 				linkMap[key] = l

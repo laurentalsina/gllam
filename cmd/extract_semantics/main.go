@@ -72,7 +72,7 @@ Node Types:
 
 Temporal Guidelines for Links:
 - If precise timestamps or dates are mentioned (e.g. "May 2024"), extract them into valid_from / valid_until as strings or ISO dates.
-- If timing is relative to another event or entity (e.g. "during the database migration"), set valid_from or valid_until to "temporal_note", provide the descriptive phrase in "temporal_note", AND set "temporal_anchor_id" to the referenced node ID with "temporal_relation" using Allen's Interval Algebra ("before" | "after" | "equals" | "overlaps" | "during" | "contains" | "starts" | "finishes" | "meets").
+- If timing is relative to another event or entity (e.g. "3 days after the migration"), set valid_from or valid_until to "temporal_note", provide the descriptive phrase in "temporal_note", set "temporal_anchor_id" to the referenced node ID, "temporal_relation" using Allen's Interval Algebra ("before" | "after" | "equals" | "overlaps" | "during" | "contains" | "starts" | "finishes" | "meets"), AND "temporal_offset_seconds" (e.g. +259200 for 3 days after, -172800 for 2 days before).
 
 You must output ONLY valid JSON matching this exact structure, with no markdown formatting or extra text:
 {
@@ -89,10 +89,12 @@ You must output ONLY valid JSON matching this exact structure, with no markdown 
       "valid_until": "timestamp_or_temporal_note_or_null",
       "temporal_anchor_id": "node_id_of_referenced_event_or_entity_if_relative",
       "temporal_relation": "before|after|equals|overlaps|during|contains|starts|finishes|meets",
+      "temporal_offset_seconds": 0,
       "temporal_note": "relative or imprecise timing phrase if applicable"
     }
   ]
 }
+
 
 
 If the chat contains a contradiction (e.g. user changes their mind), extract the conflicting claims as distinct relationships.`

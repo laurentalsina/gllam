@@ -45,8 +45,9 @@ CREATE TABLE IF NOT EXISTS semantic_links (
     valid_until TEXT,                     -- Unix timestamp string OR 'temporal_note' (NULL = currently active)
     temporal_anchor_id TEXT,              -- Grounded node ID reference for relative timing (e.g. 'event-db-migration')
     temporal_relation TEXT,               -- Allen Interval Algebra: 'before', 'after', 'equals', 'overlaps', 'during', 'contains', 'starts', 'finishes', 'meets'
-
+    temporal_offset_seconds INTEGER DEFAULT 0, -- Relative offset in seconds (+86400 = +1 day after anchor, -172800 = -2 days before anchor)
     temporal_note TEXT,                   -- Qualitative phrase describing imprecise timestamp
+
     updated_at INTEGER NOT NULL,
     PRIMARY KEY (source_id, target_id, relationship),
     FOREIGN KEY (source_id) REFERENCES semantic_nodes(id),

@@ -46,7 +46,7 @@ type SemanticLink struct {
     ValidUntil       *string `json:"valid_until"`         // Unix timestamp string OR "temporal_note" OR nil
     TemporalAnchorID string  `json:"temporal_anchor_id"` // Grounded node ID reference for relative timing
     TemporalRelation string  `json:"temporal_relation"` // Allen Interval Algebra: "before"|"after"|"equals"|"overlaps"|"during"|"contains"|"starts"|"finishes"|"meets"
-
+    TemporalOffsetSeconds int64   `json:"temporal_offset_seconds"` // Relative offset in seconds (+86400 = +1 day, -172800 = -2 days)
     TemporalNote     string  `json:"temporal_note"`       // Qualitative phrase describing imprecise timestamp
     UpdatedAt        int64   `json:"updated_at"`
 }
