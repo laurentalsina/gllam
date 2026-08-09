@@ -263,6 +263,19 @@ func (e *GllamEngine) RouteAndAssemble(ctx context.Context, userPrompt string, e
         }
     }
 
+    // Check for Byzantine Fallacy Subversion
+    if len(ctxResult.SemanticLinks) > 0 || len(ctxResult.SemanticNodes) > 0 {
+        fallacyDiag := DetectFallacySubversion(ctxResult.SemanticLinks, ctxResult.SemanticNodes)
+        if fallacyDiag != "" {
+            if ctxResult.PlannerOutput != "" {
+                ctxResult.PlannerOutput += "\n" + fallacyDiag
+            } else {
+                ctxResult.PlannerOutput = fallacyDiag
+            }
+        }
+    }
+
+
 
 
 

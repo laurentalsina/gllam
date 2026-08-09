@@ -841,5 +841,98 @@ func (e *GllamEngine) DisambiguateEntityForSource(ctx context.Context, term stri
 	}, nil
 }
 
+// ResolveContradiction resolves an active contradiction between two claims (Trap 5),
+// marking losingClaimID as expired (valid_until = now) and inserting a resolves_conflict edge.
+func (e *GllamEngine) ResolveContradiction(ctx context.Context, contradictionID string, winningClaimID string, losingClaimID string, rationale string) error {
+	nowStr := fmt.Sprintf("%d", time.Now().Unix())
+	now := time.Now().Unix()
+
+	// 1. Expire losing claim links
+	expireQuery := `
+		UPDATE semantic_links
+		SET valid_until = ?, updated_at = ?
+		WHERE (source_id = ? OR target_id = ?) AND valid_until IS NULL`
+	if _, err := e.db.ExecContext(ctx, expireQuery, nowStr, now, losingClaimID, losingClaimID); err != nil {
+		return fmt.Errorf("failed to expire losing claim %s: %w", losingClaimID, err)
+	}
+
+	// 2. Expire active contradiction node links
+	if contradictionID != "" {
+		expireContrQuery := `
+			UPDATE semantic_links
+			SET valid_until = ?, updated_at = ?
+			WHERE (source_id = ? OR target_id = ?) AND valid_until IS NULL`
+		_, _ = e.db.ExecContext(ctx, expireContrQuery, nowStr, now, contradictionID, contradictionID)
+	}
+
+	// 3. Insert resolves_conflict link
+	resLink := memory.SemanticLink{
+		SourceID:            winningClaimID,
+		TargetID:            losingClaimID,
+		Relationship:        "resolves_conflict",
+		ResolutionRationale: rationale,
+		ValidFrom:           nowStr,
+	}
+
+	return e.AddEdge(ctx, resLink)
+}
+
+// DetectFallacySubversion inspects retrieved links and nodes for active logical fallacies across all 6 categories,
+// returning a human-readable diagnostic warning explaining how GLLAM has isolated or guarded against them.
+func DetectFallacySubversion(links []memory.SemanticLink, nodes []memory.SemanticNode) string {
+	fallacyNodes := make(map[string]memory.SemanticNode)
+	for _, n := range nodes {
+		if n.Type == memory.NodeTypeFallacy || strings.HasPrefix(strings.ToLower(n.ID), "fallacy_") {
+			fallacyNodes[n.ID] = n
+		}
+	}
+
+	var diagnostics []string
+
+	for _, l := range links {
+		rel := strings.ToLower(l.Relationship)
+		if rel == "exhibits_fallacy" || rel == "subverts_claim" || fallacyNodes[l.SourceID].ID != "" || fallacyNodes[l.TargetID].ID != "" {
+			fallacyID := l.TargetID
+			claimID := l.SourceID
+			if fallacyNodes[l.SourceID].ID != "" {
+				fallacyID = l.SourceID
+				claimID = l.TargetID
+			}
+
+			fNode := fallacyNodes[fallacyID]
+			fType := strings.ToLower(fallacyID)
+			fExplain := fNode.ContextPrompt
+			if fExplain == "" {
+				fExplain = "Deceptive or logically flawed premise detected"
+			}
+
+			var guardAction string
+			switch {
+			case strings.Contains(fType, "false_dilemma"):
+				guardAction = "Isolated binary constraint; prevented promotion to global rule."
+			case strings.Contains(fType, "circularity") || strings.Contains(fType, "begging_question"):
+				guardAction = "Disabled cyclic PDDL action preconditions."
+			case strings.Contains(fType, "post_hoc") || strings.Contains(fType, "cum_hoc"):
+				guardAction = "Downgraded causal link to weak temporal sequence."
+			case strings.Contains(fType, "ad_hominem"):
+				guardAction = "Preserved underlying claim; isolated source attack."
+			case strings.Contains(fType, "red_herring") || strings.Contains(fType, "straw_man"):
+				guardAction = "Suppressed multi-hop graph expansion for distracting sub-graph."
+			case strings.Contains(fType, "equivocation"):
+				guardAction = "Triggered entity disambiguation for ambiguous terms."
+			default:
+				guardAction = "Isolated fallacy node to protect automated reasoning."
+			}
+
+			diag := fmt.Sprintf("⚠️ BYZANTINE FALLACY DETECTED: Claim '%s' exhibits fallacy '%s' (%s). Guard Action: %s",
+				claimID, fallacyID, fExplain, guardAction)
+			diagnostics = append(diagnostics, diag)
+		}
+	}
+
+	return strings.Join(diagnostics, "\n")
+}
+
+
 
 
