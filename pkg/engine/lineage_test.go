@@ -102,8 +102,12 @@ func TestStrictInformationLineage(t *testing.T) {
 	if !strings.Contains(prompt, "https://jira.internal.company.com/browse/PROD-101") || !strings.Contains(prompt, "https://github.company.com/infra/config/pull/55") {
 		t.Errorf("Formatted prompt missing source URIs: %s", prompt)
 	}
+	if !strings.Contains(prompt, "Synthetic Revision Timeline") {
+		t.Errorf("Formatted prompt missing Synthetic Revision Timeline: %s", prompt)
+	}
 	if !strings.Contains(prompt, "Alice Smith (alice)") || !strings.Contains(prompt, "Carol Tech Lead (carol_lead)") {
 		t.Errorf("Formatted prompt missing multi-author version handles: %s", prompt)
 	}
 }
+
 

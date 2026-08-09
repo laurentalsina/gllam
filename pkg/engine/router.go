@@ -356,23 +356,21 @@ func FormatSystemPrompt(ctx *memory.CompiledContext) string {
             }
             sb.WriteString(fmt.Sprintf("- Node `%s` [%s] %s%s%s%s\n", lin.NodeID, lin.SourceType, lin.SourceURI, titleStr, lineStr, authorStr))
 
-            // Sub-bullet version history edits
-            if len(lin.Versions) > 0 {
-                for _, v := range lin.Versions {
-                    vAuthor := v.AuthorID
-                    if v.AuthorName != "" {
-                        vAuthor = fmt.Sprintf("%s (%s)", v.AuthorName, v.AuthorID)
+            // Synthetic Revision History Compaction (token-efficient author epochs)
+            if len(lin.RevisionEpochs) > 0 {
+                sb.WriteString("  * Synthetic Revision Timeline:\n")
+                for _, ep := range lin.RevisionEpochs {
+                    authorLabel := ep.AuthorID
+                    if ep.AuthorName != "" {
+                        authorLabel = fmt.Sprintf("%s (%s)", ep.AuthorName, ep.AuthorID)
                     }
-                    lines := ""
-                    if v.StartLine > 0 && v.EndLine > 0 {
-                        lines = fmt.Sprintf(" Lines %d-%d", v.StartLine, v.EndLine)
-                    }
-                    sb.WriteString(fmt.Sprintf("  * v%d by %s%s: %s\n", v.VersionNumber, vAuthor, lines, v.ChangeSummary))
+                    sb.WriteString(fmt.Sprintf("    - [%s, %s] %s: %s\n", ep.VersionRange, ep.TimeRange, authorLabel, ep.SyntheticSummary))
                 }
             }
         }
         sb.WriteString("\n")
     }
+
 
 
     rawText := sb.String()

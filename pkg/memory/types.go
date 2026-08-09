@@ -87,19 +87,29 @@ type DocumentVersion struct {
 	CreatedAt     int64  `json:"created_at"`
 }
 
-type DocumentLineage struct {
-	ID            string            `json:"id"`
-	NodeID        string            `json:"node_id"`
-	SourceURI     string            `json:"source_uri"`
-	DocumentTitle string            `json:"document_title"`
-	SourceType    string            `json:"source_type"`
-	LineNumber    int               `json:"line_number,omitempty"`
-	CharOffset    int               `json:"char_offset,omitempty"`
-	Checksum      string            `json:"checksum,omitempty"`
-	Authors       []string          `json:"authors,omitempty"`
-	Versions      []DocumentVersion `json:"versions,omitempty"`
-	CreatedAt     int64             `json:"created_at"`
+type CompactedRevisionEpoch struct {
+	AuthorID         string `json:"author_id"`
+	AuthorName       string `json:"author_name"`
+	VersionRange     string `json:"version_range"`
+	TimeRange        string `json:"time_range"`
+	SyntheticSummary string `json:"synthetic_summary"`
 }
+
+type DocumentLineage struct {
+	ID               string                   `json:"id"`
+	NodeID           string                   `json:"node_id"`
+	SourceURI        string                   `json:"source_uri"`
+	DocumentTitle    string                   `json:"document_title"`
+	SourceType       string                   `json:"source_type"`
+	LineNumber       int                      `json:"line_number,omitempty"`
+	CharOffset       int                      `json:"char_offset,omitempty"`
+	Checksum         string                   `json:"checksum,omitempty"`
+	Authors          []string                 `json:"authors,omitempty"`
+	Versions         []DocumentVersion        `json:"versions,omitempty"`
+	RevisionEpochs   []CompactedRevisionEpoch `json:"revision_epochs,omitempty"`
+	CreatedAt        int64                    `json:"created_at"`
+}
+
 
 
 type CompiledContext struct {

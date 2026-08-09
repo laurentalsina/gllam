@@ -1702,6 +1702,7 @@ func (e *GllamEngine) GetDocumentLineageForNodes(ctx context.Context, nodeIDs []
 		vers, err := e.GetDocumentVersionsForLineage(ctx, lineages[i].ID)
 		if err == nil && len(vers) > 0 {
 			lineages[i].Versions = vers
+			lineages[i].RevisionEpochs = CompactRevisionHistory(vers)
 			authorMap := make(map[string]bool)
 			var authors []string
 			for _, v := range vers {
@@ -1720,6 +1721,93 @@ func (e *GllamEngine) GetDocumentLineageForNodes(ctx context.Context, nodeIDs []
 
 	return lineages, nil
 }
+
+// CompactRevisionHistory collapses granular line-by-line version edit histories into compact, synthetic author epoch summaries
+// preventing context window token explosion ("Mr. A worked on X from T1..T2, then Mr. B modified Y").
+func CompactRevisionHistory(versions []memory.DocumentVersion) []memory.CompactedRevisionEpoch {
+	if len(versions) == 0 {
+		return nil
+	}
+
+	var epochs []memory.CompactedRevisionEpoch
+	var currentEpoch *memory.CompactedRevisionEpoch
+	var currentStartVer int
+	var currentEndVer int
+	var minTS int64
+	var maxTS int64
+	var summaries []string
+
+	for i, v := range versions {
+		if currentEpoch == nil {
+			currentEpoch = &memory.CompactedRevisionEpoch{
+				AuthorID:   v.AuthorID,
+				AuthorName: v.AuthorName,
+			}
+			currentStartVer = v.VersionNumber
+			currentEndVer = v.VersionNumber
+			minTS = v.CreatedAt
+			maxTS = v.CreatedAt
+			if v.ChangeSummary != "" {
+				summaries = append(summaries, v.ChangeSummary)
+			}
+		} else if v.AuthorID == currentEpoch.AuthorID {
+			// Same author consecutive edits -> group into single synthetic epoch!
+			currentEndVer = v.VersionNumber
+			if v.CreatedAt > maxTS {
+				maxTS = v.CreatedAt
+			}
+			if v.ChangeSummary != "" {
+				summaries = append(summaries, v.ChangeSummary)
+			}
+		} else {
+			// Author changed -> finalize previous epoch and start new epoch!
+			if currentStartVer == currentEndVer {
+				currentEpoch.VersionRange = fmt.Sprintf("v%d", currentStartVer)
+			} else {
+				currentEpoch.VersionRange = fmt.Sprintf("v%d-v%d", currentStartVer, currentEndVer)
+			}
+			if minTS == maxTS {
+				currentEpoch.TimeRange = formatTimestamp(minTS)
+			} else {
+				currentEpoch.TimeRange = fmt.Sprintf("%s to %s", formatTimestamp(minTS), formatTimestamp(maxTS))
+			}
+			currentEpoch.SyntheticSummary = strings.Join(summaries, "; ")
+			epochs = append(epochs, *currentEpoch)
+
+			// Start new epoch
+			currentEpoch = &memory.CompactedRevisionEpoch{
+				AuthorID:   v.AuthorID,
+				AuthorName: v.AuthorName,
+			}
+			currentStartVer = v.VersionNumber
+			currentEndVer = v.VersionNumber
+			minTS = v.CreatedAt
+			maxTS = v.CreatedAt
+			summaries = nil
+			if v.ChangeSummary != "" {
+				summaries = append(summaries, v.ChangeSummary)
+			}
+		}
+
+		if i == len(versions)-1 && currentEpoch != nil {
+			if currentStartVer == currentEndVer {
+				currentEpoch.VersionRange = fmt.Sprintf("v%d", currentStartVer)
+			} else {
+				currentEpoch.VersionRange = fmt.Sprintf("v%d-v%d", currentStartVer, currentEndVer)
+			}
+			if minTS == maxTS {
+				currentEpoch.TimeRange = formatTimestamp(minTS)
+			} else {
+				currentEpoch.TimeRange = fmt.Sprintf("%s to %s", formatTimestamp(minTS), formatTimestamp(maxTS))
+			}
+			currentEpoch.SyntheticSummary = strings.Join(summaries, "; ")
+			epochs = append(epochs, *currentEpoch)
+		}
+	}
+
+	return epochs
+}
+
 
 // AddDocumentVersion records a multi-author edit version history entry for a document lineage record.
 func (e *GllamEngine) AddDocumentVersion(ctx context.Context, ver memory.DocumentVersion) error {
