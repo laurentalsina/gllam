@@ -366,8 +366,9 @@ func (e *GllamEngine) ConsolidateTaxonomyBranch(ctx context.Context, sourceCateg
 				WHERE target_id = ? AND relationship IN ('is_a', 'subclass_of', 'instance_of', 'part_of')`
 			_, _ = tx.ExecContext(ctx, redirectTargetQuery, targetID, sourceID)
 
-			deleteOldCategoryQuery := `DELETE FROM semantic_nodes WHERE id = ?`
-			_, _ = tx.ExecContext(ctx, deleteOldCategoryQuery, sourceID)
+			// Preserve the old category node by merging its path and setting is_category = 0 (never delete nodes!)
+			mergeOldCategoryQuery := `UPDATE semantic_nodes SET taxonomy_path = ?, is_category = 0 WHERE id = ?`
+			_, _ = tx.ExecContext(ctx, mergeOldCategoryQuery, cleanTarget, sourceID)
 		}
 	}
 

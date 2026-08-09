@@ -63,7 +63,7 @@ Prevents LLM-generated taxonomy loops (e.g. `/Infrastructure/Storage` $\rightarr
 Merges redundant categories (e.g. `/Engineering/DBs` $\rightarrow$ `/Engineering/Infrastructure/Databases`) in an atomic SQLite transaction:
 1. Rewrites `taxonomy_path` string for all descendant nodes using `SUBSTR` and `REPLACE`.
 2. Redirects `is_a`, `subclass_of`, `instance_of`, and `part_of` links to the canonical target category node.
-3. Deletes the redundant category node.
+3. Merges the old category node into the canonical target branch (`taxonomy_path = targetPath, is_category = 0`), preserving the node and its historical links in `semantic_nodes` without deletion.
 
 
 ### 4. Domain-Bound Procedural Memory (`GetProceduresByTaxonomyPrefix`)
