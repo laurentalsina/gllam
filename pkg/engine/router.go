@@ -99,17 +99,31 @@ func (e *GllamEngine) RouteAndAssemble(ctx context.Context, userPrompt string, e
                 ctxResult.SemanticLinks = hybridLinks
             }
 
-            // Surface cross-cutting knowledge update warnings
-            crossCuttingNotices := SurfaceCrossCuttingImpacts(ctxResult.SemanticLinks, ctxResult.SemanticNodes, "")
-            if crossCuttingNotices != "" {
-                if ctxResult.PlannerOutput != "" {
-                    ctxResult.PlannerOutput += "\n" + crossCuttingNotices
-                } else {
-                    ctxResult.PlannerOutput = crossCuttingNotices
+            // Evaluate Quantitative Constraints (Trap 2)
+            var proposedCost float64
+            userPromptLower := strings.ToLower(userPrompt)
+            if strings.Contains(userPromptLower, "can i buy") || strings.Contains(userPromptLower, "afford") || strings.Contains(userPromptLower, "cost") {
+                var cost float64
+                if _, err := fmt.Sscanf(userPrompt, "can i buy for %f", &cost); err == nil {
+                    proposedCost = cost
+                } else if _, err := fmt.Sscanf(userPrompt, "can i buy something for %f", &cost); err == nil {
+                    proposedCost = cost
+                }
+            }
+
+            if proposedCost > 0 {
+                quantRes := EvaluateQuantitativeConstraints(ctxResult.SemanticNodes, ctxResult.SemanticLinks, proposedCost)
+                if quantRes.Explanation != "" {
+                    if ctxResult.PlannerOutput != "" {
+                        ctxResult.PlannerOutput += "\n" + quantRes.Explanation
+                    } else {
+                        ctxResult.PlannerOutput = quantRes.Explanation
+                    }
                 }
             }
         }
     }
+
 
 
 

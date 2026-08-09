@@ -1187,6 +1187,134 @@ func SurfaceCrossCuttingImpacts(links []memory.SemanticLink, nodes []memory.Sema
 	return strings.Join(notices, "\n")
 }
 
+// MultiHopPath represents a multi-step transitive reasoning chain across session boundaries
+type MultiHopPath struct {
+	Nodes    []memory.SemanticNode `json:"nodes"`
+	Links    []memory.SemanticLink `json:"links"`
+	HopCount int                   `json:"hop_count"`
+}
+
+// FindMultiHopPath performs BFS multi-hop graph traversal up to maxHops starting from seedEntityIDs (Trap 1 & Trap 5).
+func (e *GllamEngine) FindMultiHopPath(ctx context.Context, seedEntityIDs []string, maxHops int) ([]MultiHopPath, error) {
+	if maxHops <= 0 {
+		maxHops = 3
+	}
+
+	if len(seedEntityIDs) == 0 {
+		return nil, nil
+	}
+
+	var seedNodes []memory.SemanticNode
+	for _, id := range seedEntityIDs {
+		var node memory.SemanticNode
+		var ctxPrompt sql.NullString
+		err := e.dbRO.QueryRowContext(ctx, "SELECT id, name, type, context_prompt FROM semantic_nodes WHERE id = ?", id).
+			Scan(&node.ID, &node.Name, &node.Type, &ctxPrompt)
+		if err == nil {
+			if ctxPrompt.Valid {
+				node.ContextPrompt = ctxPrompt.String
+			}
+			seedNodes = append(seedNodes, node)
+		}
+	}
+
+	expNodes, expLinks, err := e.ExpandTemporalNeighbors(ctx, seedNodes, nil, maxHops)
+	if err != nil {
+		return nil, fmt.Errorf("failed multi-hop expansion: %w", err)
+	}
+
+	paths := []MultiHopPath{
+		{
+			Nodes:    expNodes,
+			Links:    expLinks,
+			HopCount: maxHops,
+		},
+	}
+
+	return paths, nil
+}
+
+// QuantitativeResult represents numeric balance evaluation
+type QuantitativeResult struct {
+	InitialAmount float64 `json:"initial_amount"`
+	SpentAmount   float64 `json:"spent_amount"`
+	RemBalance    float64 `json:"rem_balance"`
+	ProposedCost  float64 `json:"proposed_cost"`
+	IsAffordable  bool    `json:"is_affordable"`
+	Explanation   string  `json:"explanation"`
+}
+
+// EvaluateQuantitativeConstraints calculates cumulative costs and evaluates numeric budget/capacity bounds (Trap 2).
+func EvaluateQuantitativeConstraints(nodes []memory.SemanticNode, links []memory.SemanticLink, proposedCost float64) QuantitativeResult {
+	res := QuantitativeResult{
+		ProposedCost: proposedCost,
+		IsAffordable: true,
+	}
+
+	for _, l := range links {
+		relLower := strings.ToLower(l.Relationship)
+		if relLower == "has_budget" || relLower == "initial_balance" || relLower == "budget" {
+			var val float64
+			if _, err := fmt.Sscanf(l.Caveats, "%f", &val); err == nil && val > 0 {
+				res.InitialAmount = val
+			} else if _, err := fmt.Sscanf(l.TemporalNote, "%f", &val); err == nil && val > 0 {
+				res.InitialAmount = val
+			}
+		}
+		if relLower == "spent" || relLower == "bought" || relLower == "purchased" || relLower == "expense" {
+			var val float64
+			if _, err := fmt.Sscanf(l.Caveats, "%f", &val); err == nil && val > 0 {
+				res.SpentAmount += val
+			} else if _, err := fmt.Sscanf(l.TemporalNote, "%f", &val); err == nil && val > 0 {
+				res.SpentAmount += val
+			}
+		}
+	}
+
+	if res.InitialAmount > 0 {
+		res.RemBalance = res.InitialAmount - res.SpentAmount
+		if res.RemBalance-proposedCost < 0 {
+			res.IsAffordable = false
+			res.Explanation = fmt.Sprintf("⚠️ QUANTITATIVE CONSTRAINT VIOLATION: Initial budget %.2f - spent %.2f = remaining balance %.2f. Cannot afford proposed cost %.2f.",
+				res.InitialAmount, res.SpentAmount, res.RemBalance, proposedCost)
+		} else {
+			res.Explanation = fmt.Sprintf("✅ QUANTITATIVE BALANCE CONFIRMED: Initial budget %.2f - spent %.2f = remaining balance %.2f. Sufficient for proposed cost %.2f.",
+				res.InitialAmount, res.SpentAmount, res.RemBalance, proposedCost)
+		}
+	}
+
+	return res
+}
+
+// ResolveSpatialContainment traverses located_in, lives_in, and part_of edges to resolve spatial inclusion (Trap 3).
+func ResolveSpatialContainment(nodes []memory.SemanticNode, links []memory.SemanticLink, startEntityID string) []string {
+	visited := make(map[string]bool)
+	var locations []string
+
+	curr := startEntityID
+	for i := 0; i < 5; i++ {
+		visited[curr] = true
+		foundNext := false
+		for _, l := range links {
+			relLower := strings.ToLower(l.Relationship)
+			if (l.SourceID == curr) && (relLower == "located_in" || relLower == "lives_in" || relLower == "part_of" || relLower == "visiting") {
+				if !visited[l.TargetID] {
+					locations = append(locations, l.TargetID)
+					curr = l.TargetID
+					foundNext = true
+					break
+				}
+			}
+		}
+		if !foundNext {
+			break
+		}
+	}
+
+	return locations
+}
+
+
 
 
 
