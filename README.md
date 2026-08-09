@@ -464,18 +464,7 @@ In enterprise datasets with circular component dependencies (e.g. `Service A` $\
 err := gllam.InvalidateDependentCrossCuttingLinks(ctx, "service-a", "2000")
 ```
 
-
-
-
-
-
-
-
-
-
-
 ### Logical Fallacy Taxonomy & Terminology Guide
-
 
 GLLAM treats logical fallacies in user or agent input as first-class cognitive nodes (`NodeTypeFallacy`) to prevent deceptive or flawed premises from corrupting automated reasoning.
 
