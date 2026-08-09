@@ -450,6 +450,19 @@ gllam.StartVectorEmbeddingWorkerPool(ctx, 2, 2*time.Second)
 indexedCount, err := gllam.ProcessUnembeddedNodeVectorBatch(ctx, 50)
 ```
 
+### Active Stack Cycle Detection & Cascading Invalidation
+
+In enterprise datasets with circular component dependencies (e.g. `Service A` $\rightarrow$ `Spec B` $\rightarrow$ `Rule C` $\rightarrow$ `Service A`), upstream state invalidation risks entering infinite recursive loops. GLLAM implements active stack cycle prevention:
+
+1. **Active Call Stack Tracking (`activeStack`):** Tracks nodes in the current recursion branch. If `activeStack[currentNodeID] == true`, branch recursion terminates with a diagnostic log.
+2. **Adaptive Propagation Depth:** Allows deep dependency propagation (default 10 hops) without getting trapped in circular graph loops.
+
+```go
+// Trigger cascading cross-cutting invalidation across downstream dependencies
+err := gllam.InvalidateDependentCrossCuttingLinks(ctx, "service-a", "2000")
+```
+
+
 
 
 

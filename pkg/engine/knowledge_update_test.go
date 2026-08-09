@@ -3,10 +3,12 @@ package engine
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/laurentalsina/gllam/pkg/memory"
 )
+
 
 func TestSupersedeFactAndCrossCuttingInvalidation(t *testing.T) {
 	tempDir := t.TempDir()
@@ -144,3 +146,44 @@ func TestOutOfOrderFactSupersession(t *testing.T) {
 		t.Errorf("Expected older link valid_until to be backdated to '3000', got %v", validUntil)
 	}
 }
+
+func TestCircularDependencyInvalidationLoopPrevention(t *testing.T) {
+	tempDir := t.TempDir()
+	dbPath := filepath.Join(tempDir, "test_circ_inv.db")
+
+	gllam, err := NewGllamEngine(dbPath, nil)
+	if err != nil {
+		t.Fatalf("Failed to create engine: %v", err)
+	}
+	defer gllam.Close()
+
+	if err := gllam.InitSchema(); err != nil {
+		t.Fatalf("Failed to init schema: %v", err)
+	}
+
+	ctx := context.Background()
+
+	// Seed circular dependency: Service A -> Spec B -> Rule C -> Service A
+	_ = gllam.UpsertNode(ctx, memory.SemanticNode{ID: "service-a", Name: "Service A", Type: memory.NodeTypeService})
+	_ = gllam.UpsertNode(ctx, memory.SemanticNode{ID: "spec-b", Name: "Spec B", Type: memory.NodeTypeEntity})
+	_ = gllam.UpsertNode(ctx, memory.SemanticNode{ID: "rule-c", Name: "Rule C", Type: memory.NodeTypeRule})
+
+
+	_ = gllam.AddEdge(ctx, memory.SemanticLink{SourceID: "service-a", TargetID: "spec-b", Relationship: "depends_on", ValidFrom: "1000"})
+	_ = gllam.AddEdge(ctx, memory.SemanticLink{SourceID: "spec-b", TargetID: "rule-c", Relationship: "applies_rule", ValidFrom: "1000"})
+	_ = gllam.AddEdge(ctx, memory.SemanticLink{SourceID: "rule-c", TargetID: "service-a", Relationship: "references", ValidFrom: "1000"})
+
+	// Trigger invalidation on Service A
+	err = gllam.InvalidateDependentCrossCuttingLinks(ctx, "service-a", "2000")
+	if err != nil {
+		t.Fatalf("InvalidateDependentCrossCuttingLinks failed: %v", err)
+	}
+
+	// Verify links in cycle are flagged with REQUIRES_REVALIDATION without entering an infinite loop
+	var caveat string
+	err = gllam.dbRO.QueryRowContext(ctx, "SELECT caveats FROM semantic_links WHERE source_id = 'service-a' AND target_id = 'spec-b'").Scan(&caveat)
+	if err != nil || !strings.Contains(caveat, "REQUIRES_REVALIDATION") {
+		t.Errorf("Expected REQUIRES_REVALIDATION caveat on service-a -> spec-b link, got '%s', err=%v", caveat, err)
+	}
+}
+

@@ -1,17 +1,19 @@
 package engine
 
 import (
-    "context"
-    "database/sql"
-    "fmt"
-    "sort"
-    "strconv"
-    "strings"
-    "time"
+	"context"
+	"database/sql"
+	"fmt"
+	"log"
+	"sort"
+	"strconv"
+	"strings"
+	"time"
 
-    "github.com/laurentalsina/gllam/pkg/config"
-    "github.com/laurentalsina/gllam/pkg/memory"
+	"github.com/laurentalsina/gllam/pkg/config"
+	"github.com/laurentalsina/gllam/pkg/memory"
 )
+
 
 
 
@@ -1265,11 +1267,59 @@ func (e *GllamEngine) SupersedeFact(ctx context.Context, oldLink memory.Semantic
 	return e.AddEdge(ctx, supLink)
 }
 
-// InvalidateDependentCrossCuttingLinks inspects downstream links (depends_on, applies_rule, requires_config)
-// connected to updatedNodeID and flags them as requires_revalidation (Trap 6).
+// InvalidateDependentCrossCuttingLinks performs cascading re-validation tagging across downstream dependent nodes.
+// Employs Active Stack Cycle Detection to gracefully break circular dependency loops (e.g. A -> B -> C -> A)
+// while allowing deep acyclic propagation up to a configurable maxDepth (default 10).
 func (e *GllamEngine) InvalidateDependentCrossCuttingLinks(ctx context.Context, updatedNodeID string, validFrom string) error {
+	activeStack := make(map[string]bool)
+	return e.InvalidateDependentCrossCuttingLinksRecursive(ctx, updatedNodeID, validFrom, 10, activeStack)
+}
+
+// InvalidateDependentCrossCuttingLinksRecursive traverses downstream dependencies with active stack cycle prevention.
+func (e *GllamEngine) InvalidateDependentCrossCuttingLinksRecursive(ctx context.Context, currentNodeID string, validFrom string, remainingDepth int, activeStack map[string]bool) error {
+	if remainingDepth <= 0 {
+		return nil // Maximum traversal depth reached
+	}
+
+	// Active Stack Cycle Prevention: If currentNodeID is already in the active traversal stack, a cycle is detected!
+	if activeStack[currentNodeID] {
+		log.Printf("Circular dependency invalidation loop detected at node %s. Terminating branch recursion.", currentNodeID)
+		return nil
+	}
+
+	// Mark node as active in current recursion branch
+	activeStack[currentNodeID] = true
+	defer func() {
+		delete(activeStack, currentNodeID) // Unmark when exiting branch
+	}()
+
 	now := time.Now().Unix()
 
+	// Query downstream nodes connected to currentNodeID as target_id
+	queryDownstream := `
+		SELECT source_id
+		FROM semantic_links
+		WHERE target_id = ? AND relationship IN ('depends_on', 'applies_rule', 'requires_config', 'references', 'uses_version') AND valid_until IS NULL`
+
+	rows, err := e.dbRO.QueryContext(ctx, queryDownstream, currentNodeID)
+	if err != nil {
+		return fmt.Errorf("failed to query downstream dependent nodes for %s: %w", currentNodeID, err)
+	}
+
+	var downstreamNodeIDs []string
+	for rows.Next() {
+		var srcID string
+		if err := rows.Scan(&srcID); err == nil {
+			downstreamNodeIDs = append(downstreamNodeIDs, srcID)
+		}
+	}
+	rows.Close()
+
+	if len(downstreamNodeIDs) == 0 {
+		return nil
+	}
+
+	// Flag direct links as REQUIRES_REVALIDATION
 	updateQuery := `
 		UPDATE semantic_links
 		SET caveats = CASE 
@@ -1277,15 +1327,21 @@ func (e *GllamEngine) InvalidateDependentCrossCuttingLinks(ctx context.Context, 
 			ELSE caveats || ' [REQUIRES_REVALIDATION: Upstream node ' || ? || ' was updated]' 
 		END,
 		updated_at = ?
-		WHERE target_id = ? AND relationship IN ('depends_on', 'applies_rule', 'requires_config') AND valid_until IS NULL`
+		WHERE target_id = ? AND relationship IN ('depends_on', 'applies_rule', 'requires_config', 'references', 'uses_version') AND valid_until IS NULL`
 
-	_, err := e.db.ExecContext(ctx, updateQuery, updatedNodeID, updatedNodeID, now, updatedNodeID)
+	_, err = e.db.ExecContext(ctx, updateQuery, currentNodeID, currentNodeID, now, currentNodeID)
 	if err != nil {
-		return fmt.Errorf("failed to invalidate dependent cross-cutting links for %s: %w", updatedNodeID, err)
+		return fmt.Errorf("failed to invalidate dependent cross-cutting links for %s: %w", currentNodeID, err)
+	}
+
+	// Recurse downstream
+	for _, nextNodeID := range downstreamNodeIDs {
+		_ = e.InvalidateDependentCrossCuttingLinksRecursive(ctx, nextNodeID, validFrom, remainingDepth-1, activeStack)
 	}
 
 	return nil
 }
+
 
 // SurfaceCrossCuttingImpacts inspects retrieved links for any requires_revalidation caveats (Trap 8),
 // returning human-readable cross-cutting update diagnostics.
