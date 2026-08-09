@@ -5,10 +5,12 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/laurentalsina/gllam/pkg/config"
 	"github.com/laurentalsina/gllam/pkg/memory"
 )
+
 
 
 func TestStrictInformationLineage(t *testing.T) {
@@ -168,6 +170,50 @@ func TestIngestionSteeringDirectives(t *testing.T) {
 		t.Errorf("Expected custom notion_workspace trust weight (>=600), got %d, err=%v", weight, err)
 	}
 }
+
+func TestAttributeContainerEntryToSource(t *testing.T) {
+	tempDir := t.TempDir()
+	dbPath := filepath.Join(tempDir, "test_container_attr.db")
+
+	gllam, err := NewGllamEngine(dbPath, nil)
+	if err != nil {
+		t.Fatalf("Failed to create engine: %v", err)
+	}
+	defer gllam.Close()
+
+	if err := gllam.InitSchema(); err != nil {
+		t.Fatalf("Failed to init schema: %v", err)
+	}
+
+	// Register high trust for Alice (+150) and low trust for Dave (-150)
+	gllam.SetIndividualSourceTrustWeight("alice", 150)
+	gllam.SetIndividualSourceTrustWeight("dave", -150)
+
+	ctx := context.Background()
+	now := time.Now().Unix()
+
+	// Parse Comment 1 by Alice in Jira Ticket PROD-101
+	aliceSourceID, aliceWeight, err := gllam.AttributeContainerEntryToSource(ctx, "jira", "alice", "Alice Smith", "Comment 1: Database is PostgreSQL 15 on port 5432.", now)
+	if err != nil || aliceWeight < 800 {
+		t.Errorf("Expected high trust for Alice comment (>=800), got weight=%d, err=%v", aliceWeight, err)
+	}
+
+
+	// Parse Comment 2 by Dave in same Jira Ticket PROD-101
+	daveSourceID, daveWeight, err := gllam.AttributeContainerEntryToSource(ctx, "jira", "dave", "Dave Miller", "Comment 2: DB is MySQL on port 3306.", now)
+	if err != nil || daveWeight > 650 {
+		t.Errorf("Expected lower trust for Dave comment (<=650), got weight=%d, err=%v", daveWeight, err)
+	}
+
+	if aliceWeight <= daveWeight {
+		t.Errorf("Alice's comment trust weight (%d) must exceed Dave's comment trust weight (%d) within the same Jira container", aliceWeight, daveWeight)
+	}
+
+	if aliceSourceID != "src-alice" || daveSourceID != "src-dave" {
+		t.Errorf("Unexpected source IDs: alice=%s, dave=%s", aliceSourceID, daveSourceID)
+	}
+}
+
 
 
 

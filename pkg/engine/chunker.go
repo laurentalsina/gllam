@@ -98,10 +98,10 @@ func CalculateCompositeTrustWeight(input SourceTrustInput, sysPrompts *config.Ag
 		switch docTypeKey {
 		case "jira_resolved", "pull_request_merged", "git_commit", "production_config":
 			weight = 800
-		case "confluence_approved", "architecture_doc", "design_doc":
+		case "confluence_approved", "architecture_doc", "design_doc", "confluence":
 			weight = 700
-		case "jira_open", "slack_channel", "incident_log":
-			weight = 500
+		case "jira_open", "jira", "slack_channel", "incident_log":
+			weight = 600
 		case "meeting_notes", "email_thread", "support_ticket":
 			weight = 400
 		case "confluence_draft", "personal_notes", "draft":
@@ -109,6 +109,7 @@ func CalculateCompositeTrustWeight(input SourceTrustInput, sysPrompts *config.Ag
 		default:
 			weight = 100
 		}
+
 	}
 
 

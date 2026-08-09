@@ -1666,8 +1666,38 @@ func (e *GllamEngine) GaugeAndUpsertSourceNode(ctx context.Context, id string, n
 	return calculatedWeight, nil
 }
 
+// AttributeContainerEntryToSource parses an individual entry/comment/version within a document container (e.g., Jira ticket, Confluence page)
+// and attributes the claim directly to the specific individual source node (with their individual trust_weight), NOT the container.
+func (e *GllamEngine) AttributeContainerEntryToSource(ctx context.Context, containerType string, entryAuthorID string, entryAuthorName string, entryText string, createdAt int64) (string, int, error) {
+
+	sourceNodeID := fmt.Sprintf("src-%s", strings.ToLower(entryAuthorID))
+	if entryAuthorID == "" && entryAuthorName != "" {
+		sourceNodeID = fmt.Sprintf("src-%s", strings.ToLower(strings.ReplaceAll(entryAuthorName, " ", "_")))
+	}
+
+	trustInput := SourceTrustInput{
+		DocumentType: containerType,
+		AuthorID:     entryAuthorID,
+		AuthorName:   entryAuthorName,
+		DocumentText: entryText,
+		CreatedAt:    createdAt,
+	}
+
+	authorName := entryAuthorName
+	if authorName == "" {
+		authorName = entryAuthorID
+	}
+
+	weight, err := e.GaugeAndUpsertSourceNode(ctx, sourceNodeID, authorName, memory.NodeTypeHuman, trustInput)
+	if err != nil {
+		return "", 0, fmt.Errorf("failed to gauge and upsert source node %s: %w", sourceNodeID, err)
+	}
+
+	return sourceNodeID, weight, nil
+}
 
 // AddDocumentLineage stores source URI provenance for a semantic node (Issue #8 Strict Information Lineage).
+
 func (e *GllamEngine) AddDocumentLineage(ctx context.Context, lineage memory.DocumentLineage) error {
 	now := time.Now().Unix()
 	if lineage.CreatedAt == 0 {
