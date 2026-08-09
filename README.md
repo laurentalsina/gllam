@@ -253,30 +253,49 @@ When `AddEdge()` detects an existing active link with the same `source_id` and a
 1. It compares the `trust_weight` (integer in `[10, 1000]`) of both origin sources (`OriginSourceID`).
 2. If a highly trusted source (e.g. `Jira Resolved` or `Merged Pull Request`, $W = 900$) conflicts with a low-trust source (e.g. `Email Draft`, $W = 100$), the low-trust claim is **automatically expired** (`valid_until = now`) and superseded with a `resolves_conflict` edge.
 3. This completely bypasses the need for manual user grilling or unresolved contradiction nodes!
-4. If trust weights are equal, GLLAM falls back to creating an explicit `NodeTypeContradiction` node for planner or user resolution.
+4. If trust weights are equal, GLLAM falls back to creating an explicit `NodeTypeContradiction` node for planner or user resolution (or auto-resolves by recency if `AllowUserGrilling = false`).
 
 ### Multi-Factor Composite Trust Weight Calculation
 
-$$W_{\text{composite}} = \text{Clamp}\Big( W_{\text{doc\_type}} + W_{\text{author}} + \Delta W_{\text{coherence}} + \Delta W_{\text{temporal\_freshness}},\, 10,\, 1000 \Big)$$
+$$W_{\text{composite}} = \text{Clamp}\Big( W_{\text{doc\_type}} + W_{\text{source}} + \Delta W_{\text{coherence}} + \Delta W_{\text{temporal\_freshness}},\, 10,\, 1000 \Big)$$
 
-* **Document Type Base ($W_{\text{doc\_type}}$):** Jira Resolved / Merged PR (800), Approved Architecture Doc (700), Slack / Open Ticket (500), Email Thread / Meeting Notes (400), Draft / Scratchpad (200).
-* **Author Identity ($W_{\text{author}}$):** Admin / CI-CD Bot (+150), Tech Lead / Staff Eng (+100), Verified Eng (+50).
+* **Document Type Base ($W_{\text{doc\_type}}$):** Jira Resolved / Merged PR (800), Approved Architecture Doc (700), Jira Open / Slack / Incident Log (600), Email Thread / Support Ticket (400), Draft / Scratchpad (200).
+* **Source Identity ($W_{\text{source}}$):** Person / source handle adjustments from `SourceReliabilityHeuristics` (e.g. Alice `+150`, Carol `+200`, Dave `-150`), falling back to roles (System CI/CD `+150`, Tech Lead `+100`, Verified Eng `+50`).
 * **Internal Semantic Coherence ($\Delta W_{\text{coherence}}$):** Shannon character entropy & non-lexical noise check (+50 boost for valid prose, -250 penalty for DoS / gibberish).
 * **Temporal Freshness ($\Delta W_{\text{temporal\_freshness}}$):** < 30 days old (+50), > 6 months old (-50), > 1 year old (-150).
 
 ## Agentic Memory System Prompting & Configuration
 
-GLLAM provides a dedicated JSON configuration system (`config/agentic_memory_prompts.json` & `pkg/config/agentic_memory.go`) to define system prompts and domain heuristics without re-compiling code:
+GLLAM provides a dedicated JSON configuration system (`config/agentic_memory_prompts.json` & `pkg/config/agentic_memory.go`) to define system prompts, repository directives, and source trust heuristics without re-compiling code:
 
 ```json
 {
+  "allow_user_grilling": true,
+  "ingestion_steering_directives": {
+    "confluence": { "track_revision_history": true, "max_revision_depth": 10, "compact_author_epochs": true },
+    "jira": { "track_comment_history": true, "track_status_transitions": true, "compact_author_epochs": true },
+    "git": { "track_branch_merges": true, "track_revision_history": true, "compact_author_epochs": true }
+  },
+  "custom_document_type_rules": {
+    "notion_workspace": {
+      "type_name": "notion_workspace",
+      "baseline_trust_weight": 600,
+      "ingestion_strategy": { "track_revision_history": true, "compact_author_epochs": true }
+    }
+  },
+  "repository_context_directives": {
+    "jira": {
+      "repository_type": "jira",
+      "extraction_prompt": "Extract Jira issue key, status transitions, resolution, priority, and epic linkage into entity context profiles.",
+      "context_template": "Jira Issue: {{key}}\nType: {{type}}\nStatus: {{status}}\nResolution: {{resolution}}"
+    }
+  },
   "trust_weight_prompt": "EVALUATION RULESET FOR SOURCE TRUST WEIGHTING (W in [10, 1000])...",
-  "historical_context_prompt": "CORPUS HISTORICAL & DOMAIN CONTEXT...",
-  "semantic_extraction_prompt": "SEMANTIC EXTRACTION DIRECTIVES...",
-  "procedural_generalization_prompt": "PROCEDURAL KNOWLEDGE GENERALIZATION DIRECTIVES...",
-  "salience_query_prompt": "SALIENCE SCORING DIRECTIVES...",
-  "custom_category_prompts": {
-    "enterprise_domain": "ENTERPRISE SPECIFIC OVERRIDE..."
+  "source_reliability_prompt": "INDIVIDUAL SOURCE RELIABILITY HEURISTICS...",
+  "source_reliability_heuristics": {
+    "alice": 150,
+    "carol_lead": 200,
+    "dave_drafts": -150
   }
 }
 ```
@@ -284,9 +303,32 @@ GLLAM provides a dedicated JSON configuration system (`config/agentic_memory_pro
 ```go
 // Load custom agentic memory prompts
 err := gllam.LoadSystemPromptsConfig("./config/agentic_memory_prompts.json")
+
+// Register dynamic custom document type
+gllam.RegisterCustomDocumentTypeRule(config.CustomDocumentTypeRule{
+    TypeName:            "notion_workspace",
+    BaselineTrustWeight: 650,
+    IngestionStrategy:   config.IngestionStrategy{TrackRevisionHistory: true, CompactAuthorEpochs: true},
+})
+
+// Register documentation repository context directive
+gllam.RegisterRepositoryContextDirective(config.RepositoryContextDirective{
+    RepositoryType:   "sharepoint",
+    ExtractionPrompt: "Extract SharePoint site URL, document library, and version label into entity context profiles.",
+    ContextTemplate:  "SharePoint Doc: {{doc_name}}\nLibrary: {{library}}\nSite: {{site}}",
+})
+
+// Attribute comment inside Jira container directly to individual source node
+sourceID, trustWeight, err := gllam.AttributeContainerEntryToSource(ctx, "jira", "alice", "Alice Smith", "Comment 1: DB is PostgreSQL 15.", time.Now().Unix())
 ```
 
-The engine automatically injects `HistoricalContextPrompt` and `SalienceQueryPrompt` into summary context headers and query-conditioned focal salience scoring (`ComputeQueryConditionedSalience`).
+### Information Containers vs. Individual Sources
+
+GLLAM enforces a strict ontological distinction between **Information Containers / Repositories** and **Individual Sources**:
+* **Containers (`document_lineage` / `document_versions`):** A Jira ticket (`PROD-101`), Confluence page, or Git repo is a multi-author container.
+* **Sources (`semantic_nodes` & `semantic_links.origin_source_id`):** Each comment, status change, or revision diff within a container is attributed directly to the specific individual source node (`src-alice` vs `src-dave`) with their individual `trust_weight` score.
+* When Alice ($W = 850$) and Dave ($W = 550$) post conflicting claims inside the same Jira ticket, Alice's claim **automatically supersedes** Dave's claim in the semantic graph.
+
 
 ### Logical Fallacy Taxonomy & Terminology Guide
 
