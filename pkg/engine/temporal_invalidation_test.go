@@ -180,3 +180,57 @@ func TestTemporalOffsetSecondsResolution(t *testing.T) {
 	}
 }
 
+func TestTemporalGranularitySnapping(t *testing.T) {
+	tempDir := t.TempDir()
+	dbPath := filepath.Join(tempDir, "test_granularity.db")
+
+	gllam, err := NewGllamEngine(dbPath, nil)
+	if err != nil {
+		t.Fatalf("Failed to create engine: %v", err)
+	}
+	defer gllam.Close()
+
+	if err := gllam.InitSchema(); err != nil {
+		t.Fatalf("Failed to init schema: %v", err)
+	}
+
+	ctx := context.Background()
+
+	_ = gllam.UpsertNode(ctx, memory.SemanticNode{ID: "caddy", Name: "Caddy", Type: memory.NodeTypeService})
+	_ = gllam.UpsertNode(ctx, memory.SemanticNode{ID: "state-v2", Name: "v2", Type: memory.NodeTypeState})
+	_ = gllam.UpsertNode(ctx, memory.SemanticNode{ID: "event-now", Name: "Current Time", Type: memory.NodeTypeEvent})
+
+	// Anchor event at T = 1723215234 (August 9, 2024 at 14:53:54 UTC)
+	_ = gllam.AddEdge(ctx, memory.SemanticLink{
+		SourceID:     "event-now",
+		TargetID:     "state-v2",
+		Relationship: "reference_now",
+		ValidFrom:    "1723215234",
+	})
+
+
+	// "2 weeks ago" -> offset -14 days (-1209600s), granularity "day"
+	// Raw T = 1723215234 - 1209600 = 1722005634 (July 26, 2024 at 14:53:54 UTC)
+	// Snapped T (day boundary) = 1721952000 (July 26, 2024 at 00:00:00 UTC)
+	link2Weeks := memory.SemanticLink{
+		SourceID:              "caddy",
+		TargetID:              "state-v2",
+		Relationship:          "has_state",
+		ValidFrom:             "temporal_note",
+		TemporalAnchorID:     "event-now",
+		TemporalRelation:     "after",
+		TemporalOffsetSeconds: -1209600,
+		TemporalGranularity:   "day",
+		TemporalNote:          "2 weeks ago",
+	}
+	_ = gllam.AddEdge(ctx, link2Weeks)
+
+	resolvedTS := gllam.resolveAnchorTimestamp(ctx, "event-now", -1209600, "day")
+	expectedDayStart := int64(1721952000) // 2024-07-26 00:00:00 UTC
+
+	if resolvedTS != expectedDayStart {
+		t.Errorf("Expected day-snapped timestamp %d, got %d", expectedDayStart, resolvedTS)
+	}
+}
+
+

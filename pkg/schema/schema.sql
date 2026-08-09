@@ -46,7 +46,9 @@ CREATE TABLE IF NOT EXISTS semantic_links (
     temporal_anchor_id TEXT,              -- Grounded node ID reference for relative timing (e.g. 'event-db-migration')
     temporal_relation TEXT,               -- Allen Interval Algebra: 'before', 'after', 'equals', 'overlaps', 'during', 'contains', 'starts', 'finishes', 'meets'
     temporal_offset_seconds INTEGER DEFAULT 0, -- Relative offset in seconds (+86400 = +1 day after anchor, -172800 = -2 days before anchor)
+    temporal_granularity TEXT DEFAULT 'exact', -- Granularity leniency: 'day' (snap 00:00), 'hour' (snap XX:00), 'exact' (no snap), 'month'
     temporal_note TEXT,                   -- Qualitative phrase describing imprecise timestamp
+
 
     updated_at INTEGER NOT NULL,
     PRIMARY KEY (source_id, target_id, relationship),

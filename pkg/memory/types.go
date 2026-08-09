@@ -47,6 +47,7 @@ type SemanticLink struct {
     TemporalAnchorID string  `json:"temporal_anchor_id"` // Grounded node ID reference for relative timing
     TemporalRelation string  `json:"temporal_relation"` // Allen Interval Algebra: "before"|"after"|"equals"|"overlaps"|"during"|"contains"|"starts"|"finishes"|"meets"
     TemporalOffsetSeconds int64   `json:"temporal_offset_seconds"` // Relative offset in seconds (+86400 = +1 day, -172800 = -2 days)
+    TemporalGranularity   string  `json:"temporal_granularity"`    // "day" (snap 00:00:00) | "hour" | "exact" | "month"
     TemporalNote     string  `json:"temporal_note"`       // Qualitative phrase describing imprecise timestamp
     UpdatedAt        int64   `json:"updated_at"`
 }
