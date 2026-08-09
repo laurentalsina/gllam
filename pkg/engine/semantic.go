@@ -30,23 +30,30 @@ func (e *GllamEngine) UpsertNode(ctx context.Context, node memory.SemanticNode) 
 		isCatInt = 1
 	}
 
+	var caveatSummaryVal sql.NullString
+	if node.CaveatSummary != "" {
+		caveatSummaryVal = sql.NullString{String: node.CaveatSummary, Valid: true}
+	}
+
 	query := `
-        INSERT INTO semantic_nodes (id, name, type, context_prompt, trust_weight, taxonomy_path, is_category)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO semantic_nodes (id, name, type, context_prompt, trust_weight, taxonomy_path, is_category, caveat_summary)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET 
             name = excluded.name, 
             type = excluded.type, 
             context_prompt = excluded.context_prompt, 
             trust_weight = excluded.trust_weight,
             taxonomy_path = CASE WHEN excluded.taxonomy_path != '/' AND excluded.taxonomy_path != '' THEN excluded.taxonomy_path ELSE semantic_nodes.taxonomy_path END,
-            is_category = CASE WHEN excluded.is_category != 0 THEN excluded.is_category ELSE semantic_nodes.is_category END`
+            is_category = CASE WHEN excluded.is_category != 0 THEN excluded.is_category ELSE semantic_nodes.is_category END,
+            caveat_summary = CASE WHEN excluded.caveat_summary IS NOT NULL AND excluded.caveat_summary != '' THEN excluded.caveat_summary ELSE semantic_nodes.caveat_summary END`
 
-	_, err := e.db.ExecContext(ctx, query, node.ID, node.Name, node.Type, node.ContextPrompt, node.TrustWeight, node.TaxonomyPath, isCatInt)
+	_, err := e.db.ExecContext(ctx, query, node.ID, node.Name, node.Type, node.ContextPrompt, node.TrustWeight, node.TaxonomyPath, isCatInt, caveatSummaryVal)
 	if err != nil {
 		return fmt.Errorf("failed to upsert node: %w", err)
 	}
 	return nil
 }
+
 
 
 // AddEdge inserts a new semantic link after checking for existing active links with the same source and relationship
@@ -622,11 +629,14 @@ func (e *GllamEngine) ExpandTemporalNeighbors(ctx context.Context, seedNodes []m
 
 						// Fetch Node metadata if missing
 						var node memory.SemanticNode
-						var ctxPrompt sql.NullString
-						nodeQuery := `SELECT id, name, type, context_prompt FROM semantic_nodes WHERE id = ?`
-						if err := e.dbRO.QueryRowContext(ctx, nodeQuery, neighborID).Scan(&node.ID, &node.Name, &node.Type, &ctxPrompt); err == nil {
+						var ctxPrompt, caveatSum sql.NullString
+						nodeQuery := `SELECT id, name, type, context_prompt, caveat_summary FROM semantic_nodes WHERE id = ?`
+						if err := e.dbRO.QueryRowContext(ctx, nodeQuery, neighborID).Scan(&node.ID, &node.Name, &node.Type, &ctxPrompt, &caveatSum); err == nil {
 							if ctxPrompt.Valid {
 								node.ContextPrompt = ctxPrompt.String
+							}
+							if caveatSum.Valid {
+								node.CaveatSummary = caveatSum.String
 							}
 							nodeMap[node.ID] = node
 						}
@@ -1042,11 +1052,14 @@ func (e *GllamEngine) RetrieveHybridNeedle(ctx context.Context, query string, en
 		if err == nil {
 			for _, res := range simResults {
 				var node memory.SemanticNode
-				var ctxPrompt sql.NullString
-				nodeQuery := `SELECT id, name, type, context_prompt FROM semantic_nodes WHERE id = ?`
-				if err := e.dbRO.QueryRowContext(ctx, nodeQuery, res.NodeID).Scan(&node.ID, &node.Name, &node.Type, &ctxPrompt); err == nil {
+				var ctxPrompt, caveatSum sql.NullString
+				nodeQuery := `SELECT id, name, type, context_prompt, caveat_summary FROM semantic_nodes WHERE id = ?`
+				if err := e.dbRO.QueryRowContext(ctx, nodeQuery, res.NodeID).Scan(&node.ID, &node.Name, &node.Type, &ctxPrompt, &caveatSum); err == nil {
 					if ctxPrompt.Valid {
 						node.ContextPrompt = ctxPrompt.String
+					}
+					if caveatSum.Valid {
+						node.CaveatSummary = caveatSum.String
 					}
 					vectorNodes = append(vectorNodes, node)
 				}
@@ -1069,11 +1082,14 @@ func (e *GllamEngine) RetrieveHybridNeedle(ctx context.Context, query string, en
 	var seedNodes []memory.SemanticNode
 	for _, entID := range resolvedEntities {
 		var node memory.SemanticNode
-		var ctxPrompt sql.NullString
-		nodeQuery := `SELECT id, name, type, context_prompt FROM semantic_nodes WHERE id = ?`
-		if err := e.dbRO.QueryRowContext(ctx, nodeQuery, entID).Scan(&node.ID, &node.Name, &node.Type, &ctxPrompt); err == nil {
+		var ctxPrompt, caveatSum sql.NullString
+		nodeQuery := `SELECT id, name, type, context_prompt, caveat_summary FROM semantic_nodes WHERE id = ?`
+		if err := e.dbRO.QueryRowContext(ctx, nodeQuery, entID).Scan(&node.ID, &node.Name, &node.Type, &ctxPrompt, &caveatSum); err == nil {
 			if ctxPrompt.Valid {
 				node.ContextPrompt = ctxPrompt.String
+			}
+			if caveatSum.Valid {
+				node.CaveatSummary = caveatSum.String
 			}
 			seedNodes = append(seedNodes, node)
 		}
@@ -1289,12 +1305,15 @@ func (e *GllamEngine) FindMultiHopPath(ctx context.Context, seedEntityIDs []stri
 	var seedNodes []memory.SemanticNode
 	for _, id := range seedEntityIDs {
 		var node memory.SemanticNode
-		var ctxPrompt sql.NullString
-		err := e.dbRO.QueryRowContext(ctx, "SELECT id, name, type, context_prompt FROM semantic_nodes WHERE id = ?", id).
-			Scan(&node.ID, &node.Name, &node.Type, &ctxPrompt)
+		var ctxPrompt, caveatSum sql.NullString
+		err := e.dbRO.QueryRowContext(ctx, "SELECT id, name, type, context_prompt, caveat_summary FROM semantic_nodes WHERE id = ?", id).
+			Scan(&node.ID, &node.Name, &node.Type, &ctxPrompt, &caveatSum)
 		if err == nil {
 			if ctxPrompt.Valid {
 				node.ContextPrompt = ctxPrompt.String
+			}
+			if caveatSum.Valid {
+				node.CaveatSummary = caveatSum.String
 			}
 			seedNodes = append(seedNodes, node)
 		}

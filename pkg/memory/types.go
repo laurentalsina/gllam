@@ -40,14 +40,16 @@ type ProceduralKnowledge struct {
 }
 
 type SemanticNode struct {
-    ID            string `json:"id"`
-    Name          string `json:"name"`
-    Type          string `json:"type"`
-    ContextPrompt string `json:"context_prompt"`
-    TrustWeight   int    `json:"trust_weight"` // Epistemic trust weight (e.g. 900 for Jira Resolved/PR Merged, 100 for draft)
-    TaxonomyPath  string `json:"taxonomy_path"` // Materialized path (e.g. /Engineering/Infrastructure/Databases/Relational/Postgres)
-    IsCategory    bool   `json:"is_category"`   // Flag indicating if node represents a taxonomy category
+	ID            string `json:"id"`
+	Name          string `json:"name"`
+	Type          string `json:"type"`
+	ContextPrompt string `json:"context_prompt"`
+	TrustWeight   int    `json:"trust_weight"` // Epistemic trust weight (e.g. 900 for Jira Resolved/PR Merged, 100 for draft)
+	TaxonomyPath  string `json:"taxonomy_path"` // Materialized path (e.g. /Engineering/Infrastructure/Databases/Relational/Postgres)
+	IsCategory    bool   `json:"is_category"`   // Flag indicating if node represents a taxonomy category
+	CaveatSummary string `json:"caveat_summary,omitempty"` // Compacted historical edge caveat summary
 }
+
 
 type TaxonomyNode struct {
 	ID           string          `json:"id"`

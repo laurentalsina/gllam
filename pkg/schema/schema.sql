@@ -35,8 +35,10 @@ CREATE TABLE IF NOT EXISTS semantic_nodes (
     context_prompt TEXT,
     trust_weight INTEGER DEFAULT 100,
     taxonomy_path TEXT DEFAULT '/',        -- Materialized path (e.g. /Engineering/Infrastructure/Databases/Relational/Postgres)
-    is_category INTEGER DEFAULT 0           -- Boolean flag indicating if node is a taxonomy category
+    is_category INTEGER DEFAULT 0,          -- Boolean flag indicating if node is a taxonomy category
+    caveat_summary TEXT                     -- Compacted historical edge caveat summary string
 );
+
 
 CREATE INDEX IF NOT EXISTS idx_semantic_nodes_taxonomy_path ON semantic_nodes(taxonomy_path);
 CREATE INDEX IF NOT EXISTS idx_semantic_nodes_is_category ON semantic_nodes(is_category);
