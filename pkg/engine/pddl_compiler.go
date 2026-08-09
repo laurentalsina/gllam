@@ -92,6 +92,12 @@ func CompileGraphToPDDL(nodes []memory.SemanticNode, links []memory.SemanticLink
 	if !predicates["verified_sequence"] {
 		domain.WriteString("    (verified_sequence ?a ?b)\n")
 	}
+	if !predicates["happened_before"] {
+		domain.WriteString("    (happened_before ?a ?b)\n")
+	}
+	if !predicates["happened_after"] {
+		domain.WriteString("    (happened_after ?a ?b)\n")
+	}
 	domain.WriteString("  )\n\n")
 
 	// Inject dynamic (:action) blocks from ProceduralKnowledge or fallback temporal actions
@@ -108,7 +114,19 @@ func CompileGraphToPDDL(nodes []memory.SemanticNode, links []memory.SemanticLink
 		domain.WriteString(`  (:action sequence_events
     :parameters (?e1 - event ?e2 - event)
     :precondition (and (happened_before ?e1 ?e2))
-    :effect (and (verified_sequence ?e1 ?e2))
+    :effect (and (verified_sequence ?e1 ?e2) (happened_after ?e2 ?e1))
+  )
+
+  (:action verify_transitive_sequence
+    :parameters (?e1 - event ?e2 - event ?e3 - event)
+    :precondition (and (happened_before ?e1 ?e2) (happened_before ?e2 ?e3))
+    :effect (and (happened_before ?e1 ?e3) (verified_sequence ?e1 ?e3) (happened_after ?e3 ?e1))
+  )
+
+  (:action verify_after
+    :parameters (?e1 - event ?e2 - event)
+    :precondition (and (happened_before ?e2 ?e1))
+    :effect (and (happened_after ?e1 ?e2))
   )
 
   (:action transition_state
@@ -124,7 +142,7 @@ func CompileGraphToPDDL(nodes []memory.SemanticNode, links []memory.SemanticLink
 
 	// 3. Build Problem String
 	var problem strings.Builder
-	problem.WriteString("(define (problem gllam_timeline)\n")
+	problem.WriteString("(define (problem gllam_problem)\n")
 	problem.WriteString("  (:domain gllam)\n\n")
 
 	problem.WriteString("  (:objects\n")
@@ -155,7 +173,74 @@ func ExtractPDDLGoal(userPrompt string, nodes []memory.SemanticNode, links []mem
 	// 1. Entity name and ID matching against prompt
 	matchedNodes := matchQueryEntities(userPrompt, nodes)
 
-	// 2. Check for temporal event ordering queries ("before", "after", "sequence", "order")
+	// 2. Check for "between X and Y" / "from X to Y" interval range queries
+	if strings.Contains(promptLower, "between") || strings.Contains(promptLower, "from") {
+		if len(matchedNodes) >= 2 {
+			startNode := matchedNodes[0]
+			endNode := matchedNodes[len(matchedNodes)-1]
+
+			// Find any intermediate node E
+			var interNode string
+			for _, m := range matchedNodes[1 : len(matchedNodes)-1] {
+				if m != startNode && m != endNode {
+					interNode = m
+					break
+				}
+			}
+			if interNode == "" {
+				for _, n := range nodes {
+					sanitized := SanitizePDDLName(n.ID)
+					if sanitized != startNode && sanitized != endNode {
+						interNode = sanitized
+						break
+					}
+				}
+			}
+
+			if interNode != "" {
+				return fmt.Sprintf("(and (verified_sequence %s %s) (verified_sequence %s %s))", startNode, interNode, interNode, endNode)
+			}
+			return fmt.Sprintf("(and (verified_sequence %s %s))", startNode, endNode)
+		}
+	}
+
+	// 3. Check for "since X" / "after X" interval queries
+	if strings.Contains(promptLower, "since") {
+		if len(matchedNodes) >= 1 {
+			anchor := matchedNodes[0]
+			var afterNode string
+			for _, n := range nodes {
+				sanitized := SanitizePDDLName(n.ID)
+				if sanitized != anchor {
+					afterNode = sanitized
+					break
+				}
+			}
+			if afterNode != "" {
+				return fmt.Sprintf("(and (happened_after %s %s))", afterNode, anchor)
+			}
+		}
+	}
+
+	// 4. Check for "until Y" interval queries
+	if strings.Contains(promptLower, "until") {
+		if len(matchedNodes) >= 1 {
+			anchor := matchedNodes[0]
+			var beforeNode string
+			for _, n := range nodes {
+				sanitized := SanitizePDDLName(n.ID)
+				if sanitized != anchor {
+					beforeNode = sanitized
+					break
+				}
+			}
+			if beforeNode != "" {
+				return fmt.Sprintf("(and (happened_before %s %s))", beforeNode, anchor)
+			}
+		}
+	}
+
+	// 5. Check for general temporal event ordering queries ("before", "after", "sequence", "order")
 	if strings.Contains(promptLower, "before") || strings.Contains(promptLower, "after") || strings.Contains(promptLower, "sequence") || strings.Contains(promptLower, "order") {
 		// Prefer matched nodes if at least two were ground-matched in prompt
 		if len(matchedNodes) >= 2 {
@@ -177,14 +262,14 @@ func ExtractPDDLGoal(userPrompt string, nodes []memory.SemanticNode, links []mem
 		}
 	}
 
-	// 3. Check for contradiction nodes
+	// 6. Check for contradiction nodes
 	for _, n := range nodes {
 		if strings.ToLower(n.Type) == memory.NodeTypeContradiction {
 			return fmt.Sprintf("(and (resolved %s))", SanitizePDDLName(n.ID))
 		}
 	}
 
-	// 4. Fallback to verifying the primary retrieved link relationship
+	// 7. Fallback to verifying the primary retrieved link relationship
 	if len(links) > 0 {
 		rel := SanitizePDDLName(links[0].Relationship)
 		src := SanitizePDDLName(links[0].SourceID)

@@ -79,4 +79,32 @@ func TestGroundedTemporalAnchorPDDL(t *testing.T) {
 	}
 }
 
+func TestExtractPDDLGoalRangeIntervals(t *testing.T) {
+
+	nodes := []memory.SemanticNode{
+		{ID: "event-db-migration", Name: "database migration", Type: memory.NodeTypeEvent},
+		{ID: "event-cache-purge", Name: "cache purge", Type: memory.NodeTypeEvent},
+		{ID: "event-release-v2", Name: "production release", Type: memory.NodeTypeEvent},
+	}
+
+	// 1. "between X and Y"
+	goalBetween := ExtractPDDLGoal("What events occurred between database migration and production release?", nodes, nil)
+	if !strings.Contains(goalBetween, "event_db_migration") || !strings.Contains(goalBetween, "event_release_v2") {
+		t.Errorf("Between goal failed: %s", goalBetween)
+	}
+
+	// 2. "since X"
+	goalSince := ExtractPDDLGoal("What has happened since database migration?", nodes, nil)
+	if !strings.Contains(goalSince, "(happened_after") || !strings.Contains(goalSince, "event_db_migration") {
+		t.Errorf("Since goal failed: %s", goalSince)
+	}
+
+	// 3. "until Y"
+	goalUntil := ExtractPDDLGoal("What occurred until production release?", nodes, nil)
+	if !strings.Contains(goalUntil, "(happened_before") || !strings.Contains(goalUntil, "event_release_v2") {
+		t.Errorf("Until goal failed: %s", goalUntil)
+	}
+}
+
+
 
