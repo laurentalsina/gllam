@@ -182,10 +182,11 @@ func TestGaugeCompositeTrustWeight(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now().Unix()
 
-	// High-trust: Jira Resolved + CI/CD bot + Fresh coherent text
+	// High-trust individual author: "alice" (+150 individual bonus) + Jira Resolved + Fresh text
 	highInput := SourceTrustInput{
 		DocumentType: "jira_resolved",
-		AuthorRole:   "system_ci_cd",
+		AuthorID:     "alice",
+		AuthorName:   "Alice Smith",
 		DocumentText: "Resolved issue PROD-101: Updated service auth to port 9090 following security audit.",
 		CreatedAt:    now - 86400, // 1 day ago
 	}
@@ -194,22 +195,24 @@ func TestGaugeCompositeTrustWeight(t *testing.T) {
 		t.Errorf("Expected high trust weight (>=900), got %d, err=%v", highWeight, err)
 	}
 
-	// Low-trust: Draft + Anonymous + Gibberish text + Old (400 days old)
+	// Low-trust individual author: "dave_drafts" (-150 individual penalty) + Draft + Gibberish text + Old (400 days old)
 	lowInput := SourceTrustInput{
 		DocumentType: "confluence_draft",
-		AuthorRole:   "anonymous",
+		AuthorID:     "dave_drafts",
+		AuthorName:   "Dave Miller",
 		DocumentText: "asdf kjhgf qwert zxcvb poiuy lkjhg mnbvc 12345 67890 !@#$%^&*()_+",
 		CreatedAt:    now - (400 * 86400), // 400 days ago
 	}
 	lowWeight, err := gllam.GaugeAndUpsertSourceNode(ctx, "source-draft-low", "Draft Low Trust", memory.NodeTypeHuman, lowInput)
 	if err != nil || lowWeight > 100 {
-		t.Errorf("Expected low trust weight (<=100 due to gibberish & age penalties), got %d, err=%v", lowWeight, err)
+		t.Errorf("Expected low trust weight (<=100 due to individual dave_drafts penalty & age), got %d, err=%v", lowWeight, err)
 	}
 
 	if highWeight <= lowWeight {
 		t.Errorf("High trust weight (%d) must exceed low trust weight (%d)", highWeight, lowWeight)
 	}
 }
+
 
 func TestAllowUserGrillingDisabledBenchmarkMode(t *testing.T) {
 	tempDir := t.TempDir()

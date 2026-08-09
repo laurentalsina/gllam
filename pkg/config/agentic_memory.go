@@ -12,6 +12,8 @@ import (
 type AgenticMemorySystemPrompts struct {
 	AllowUserGrilling              bool              `json:"allow_user_grilling"` // Set false in non-interactive benchmark evaluation (e.g. BEAM)
 	TrustWeightPrompt              string            `json:"trust_weight_prompt"`
+	AuthorReliabilityPrompt        string            `json:"author_reliability_prompt"`
+	AuthorReliabilityHeuristics    map[string]int    `json:"author_reliability_heuristics,omitempty"` // Individual author/person trust adjustments (e.g. "alice": +150, "dave": -150)
 	HistoricalContextPrompt        string            `json:"historical_context_prompt"`
 	SemanticExtractionPrompt       string            `json:"semantic_extraction_prompt"`
 	ProceduralGeneralizationPrompt string            `json:"procedural_generalization_prompt"`

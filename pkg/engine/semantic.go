@@ -1587,17 +1587,36 @@ func ComputeQueryConditionedSalience(nodes []memory.SemanticNode, links []memory
 	return salienceScores
 }
 
-// GaugeAndUpsertSourceNode evaluates multi-factor trust input (document type, author role, internal coherence, temporal freshness)
+// SetIndividualAuthorTrustWeight sets a person-specific reliability adjustment bonus/penalty.
+func (e *GllamEngine) SetIndividualAuthorTrustWeight(authorID string, adjustment int) {
+	if e.SystemPrompts == nil {
+		e.SystemPrompts = config.DefaultAgenticMemorySystemPrompts()
+	}
+	if e.SystemPrompts.AuthorReliabilityHeuristics == nil {
+		e.SystemPrompts.AuthorReliabilityHeuristics = make(map[string]int)
+	}
+	e.SystemPrompts.AuthorReliabilityHeuristics[strings.ToLower(authorID)] = adjustment
+}
+
+// GaugeAndUpsertSourceNode evaluates multi-factor trust input (document type, individual author reliability, internal coherence, temporal freshness)
 // to compute composite trust weight and upserts the source node into SQLite.
 func (e *GllamEngine) GaugeAndUpsertSourceNode(ctx context.Context, id string, name string, nodeType string, input SourceTrustInput) (int, error) {
 	now := time.Now().Unix()
-	calculatedWeight := CalculateCompositeTrustWeight(input, now)
+	calculatedWeight := CalculateCompositeTrustWeight(input, e.SystemPrompts, now)
+
+	authorLabel := input.AuthorID
+	if authorLabel == "" {
+		authorLabel = input.AuthorName
+	}
+	if authorLabel == "" {
+		authorLabel = input.AuthorRole
+	}
 
 	node := memory.SemanticNode{
 		ID:            id,
 		Name:          name,
 		Type:          nodeType,
-		ContextPrompt: fmt.Sprintf("Source Type: %s, Author: %s, Trust Weight: %d", input.DocumentType, input.AuthorRole, calculatedWeight),
+		ContextPrompt: fmt.Sprintf("Source Type: %s, Individual Author: %s, Trust Weight: %d", input.DocumentType, authorLabel, calculatedWeight),
 		TrustWeight:   calculatedWeight,
 	}
 
@@ -1606,6 +1625,7 @@ func (e *GllamEngine) GaugeAndUpsertSourceNode(ctx context.Context, id string, n
 	}
 	return calculatedWeight, nil
 }
+
 
 // AddDocumentLineage stores source URI provenance for a semantic node (Issue #8 Strict Information Lineage).
 func (e *GllamEngine) AddDocumentLineage(ctx context.Context, lineage memory.DocumentLineage) error {

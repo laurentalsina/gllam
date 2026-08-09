@@ -4,7 +4,10 @@ import (
 	"math"
 	"strings"
 	"unicode"
+
+	"github.com/laurentalsina/gllam/pkg/config"
 )
+
 
 // ValidateTranscriptSemanticCoherence detects adversarial nonsense / high-entropy gibberish text (Trap 9),
 // returning false if the text exhibits non-lexical entropy or DoS word-salad characteristics.
@@ -69,14 +72,16 @@ func ValidateTranscriptSemanticCoherence(text string) bool {
 
 type SourceTrustInput struct {
 	DocumentType string // e.g. "jira_resolved", "pull_request_merged", "confluence_approved", "slack_channel", "email_thread", "draft"
-	AuthorRole   string // e.g. "system_ci_cd", "tech_lead", "verified_engineer", "anonymous"
+	AuthorID     string // Unique individual identifier e.g. "alice", "bob_contractor", "user-dave"
+	AuthorName   string // Human-readable author name e.g. "Alice Smith", "Dave Miller"
+	AuthorRole   string // Optional role e.g. "tech_lead", "verified_engineer"
 	DocumentText string // Content for evaluating internal coherence
 	CreatedAt    int64  // Unix timestamp of document creation
 }
 
-// CalculateCompositeTrustWeight evaluates document type heuristics, author identity,
+// CalculateCompositeTrustWeight evaluates document type heuristics, individual author reliability,
 // internal semantic coherence, and temporal freshness to compute a trust weight W in [10, 1000].
-func CalculateCompositeTrustWeight(input SourceTrustInput, nowTS int64) int {
+func CalculateCompositeTrustWeight(input SourceTrustInput, sysPrompts *config.AgenticMemorySystemPrompts, nowTS int64) int {
 	var weight int
 
 	// 1. Document Type Base Heuristic
@@ -95,14 +100,31 @@ func CalculateCompositeTrustWeight(input SourceTrustInput, nowTS int64) int {
 		weight = 100
 	}
 
-	// 2. Author / Source Identity Heuristic
-	switch strings.ToLower(input.AuthorRole) {
-	case "system_ci_cd", "security_bot", "admin":
-		weight += 150
-	case "tech_lead", "architect", "staff_engineer":
-		weight += 100
-	case "verified_engineer", "maintainer":
-		weight += 50
+	// 2. Individual Author Reliability Check (Person-specific, NOT just role)
+	matchedIndividual := false
+	if sysPrompts != nil && len(sysPrompts.AuthorReliabilityHeuristics) > 0 {
+		authorKeys := []string{strings.ToLower(input.AuthorID), strings.ToLower(input.AuthorName)}
+		for _, k := range authorKeys {
+			if k != "" {
+				if adjustment, ok := sysPrompts.AuthorReliabilityHeuristics[k]; ok {
+					weight += adjustment
+					matchedIndividual = true
+					break
+				}
+			}
+		}
+	}
+
+	// Fallback to Role Identity Heuristic if no individual match found
+	if !matchedIndividual {
+		switch strings.ToLower(input.AuthorRole) {
+		case "system_ci_cd", "security_bot", "admin":
+			weight += 150
+		case "tech_lead", "architect", "staff_engineer":
+			weight += 100
+		case "verified_engineer", "maintainer":
+			weight += 50
+		}
 	}
 
 	// 3. Evaluated Internal Semantic Coherence
@@ -138,6 +160,7 @@ func CalculateCompositeTrustWeight(input SourceTrustInput, nowTS int64) int {
 
 	return weight
 }
+
 
 
 
