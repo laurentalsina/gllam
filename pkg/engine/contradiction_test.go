@@ -100,3 +100,68 @@ func TestDetectFallacySubversion(t *testing.T) {
 		t.Errorf("Diagnostic missing guard action: %s", diag)
 	}
 }
+
+func TestEpistemicHierarchySourceTrustWeighting(t *testing.T) {
+	tempDir := t.TempDir()
+	dbPath := filepath.Join(tempDir, "test_trust_weight.db")
+
+	gllam, err := NewGllamEngine(dbPath, nil)
+	if err != nil {
+		t.Fatalf("Failed to create engine: %v", err)
+	}
+	defer gllam.Close()
+
+	if err := gllam.InitSchema(); err != nil {
+		t.Fatalf("Failed to init schema: %v", err)
+	}
+
+	ctx := context.Background()
+
+	// 1. Source nodes with different trust weights
+	// High trust: Jira Resolved Ticket (TrustWeight = 900)
+	// Low trust: Email Draft (TrustWeight = 100)
+	_ = gllam.UpsertNode(ctx, memory.SemanticNode{ID: "source-jira-101", Name: "Jira PROD-101 (Resolved)", Type: memory.NodeTypeSystem, TrustWeight: 900})
+	_ = gllam.UpsertNode(ctx, memory.SemanticNode{ID: "source-email-draft", Name: "Email Draft", Type: memory.NodeTypeHuman, TrustWeight: 100})
+
+	_ = gllam.UpsertNode(ctx, memory.SemanticNode{ID: "service-auth", Name: "Auth Service", Type: memory.NodeTypeService})
+	_ = gllam.UpsertNode(ctx, memory.SemanticNode{ID: "port-8080", Name: "Port 8080", Type: memory.NodeTypeEntity})
+	_ = gllam.UpsertNode(ctx, memory.SemanticNode{ID: "port-9090", Name: "Port 9090", Type: memory.NodeTypeEntity})
+
+	// Low-trust claim first: Auth Service located_in port-8080 (from Email Draft)
+	_ = gllam.AddEdge(ctx, memory.SemanticLink{
+		SourceID:       "service-auth",
+		TargetID:       "port-8080",
+		Relationship:   "located_in",
+		OriginSourceID: "source-email-draft",
+	})
+
+	// High-trust claim second: Auth Service located_in port-9090 (from Jira PROD-101)
+	_ = gllam.AddEdge(ctx, memory.SemanticLink{
+		SourceID:       "service-auth",
+		TargetID:       "port-9090",
+		Relationship:   "located_in",
+		OriginSourceID: "source-jira-101",
+	})
+
+	// Verify low-trust claim (port-8080) was automatically expired without user grilling!
+	var expiredUntil string
+	err = gllam.dbRO.QueryRowContext(ctx, "SELECT valid_until FROM semantic_links WHERE source_id = 'service-auth' AND target_id = 'port-8080' AND relationship = 'located_in'").Scan(&expiredUntil)
+	if err != nil || expiredUntil == "" {
+		t.Errorf("Low-trust claim should be automatically expired by Epistemic Hierarchy, got err=%v, valid_until=%s", err, expiredUntil)
+	}
+
+	// Verify high-trust claim (port-9090) is active
+	var activeTarget string
+	err = gllam.dbRO.QueryRowContext(ctx, "SELECT target_id FROM semantic_links WHERE source_id = 'service-auth' AND relationship = 'located_in' AND valid_until IS NULL").Scan(&activeTarget)
+	if err != nil || activeTarget != "port-9090" {
+		t.Errorf("High-trust claim port-9090 should be active, got target=%s", activeTarget)
+	}
+
+	// Verify resolves_conflict rationale
+	var rationale string
+	err = gllam.dbRO.QueryRowContext(ctx, "SELECT resolution_rationale FROM semantic_links WHERE source_id = 'port-9090' AND target_id = 'port-8080' AND relationship = 'resolves_conflict'").Scan(&rationale)
+	if err != nil || !strings.Contains(rationale, "Automated Epistemic Hierarchy Resolution") {
+		t.Errorf("Missing resolution rationale link: %v, rationale=%s", err, rationale)
+	}
+}
+

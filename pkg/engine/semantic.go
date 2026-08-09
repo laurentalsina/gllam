@@ -17,75 +17,126 @@ import (
 
 // UpsertNode inserts or updates a semantic node
 func (e *GllamEngine) UpsertNode(ctx context.Context, node memory.SemanticNode) error {
-    query := `
-        INSERT INTO semantic_nodes (id, name, type, context_prompt)
-        VALUES (?, ?, ?, ?)
-        ON CONFLICT(id) DO UPDATE SET name = excluded.name, type = excluded.type, context_prompt = excluded.context_prompt`
+	if node.TrustWeight <= 0 {
+		node.TrustWeight = 100 // Default trust weight
+	}
 
-    _, err := e.db.ExecContext(ctx, query, node.ID, node.Name, node.Type, node.ContextPrompt)
-    if err != nil {
-        return fmt.Errorf("failed to upsert node: %w", err)
-    }
-    return nil
+	query := `
+        INSERT INTO semantic_nodes (id, name, type, context_prompt, trust_weight)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET name = excluded.name, type = excluded.type, context_prompt = excluded.context_prompt, trust_weight = excluded.trust_weight`
+
+	_, err := e.db.ExecContext(ctx, query, node.ID, node.Name, node.Type, node.ContextPrompt, node.TrustWeight)
+	if err != nil {
+		return fmt.Errorf("failed to upsert node: %w", err)
+	}
+	return nil
 }
 
 // AddEdge inserts a new semantic link after checking for existing active links with the same source and relationship
 func (e *GllamEngine) AddEdge(ctx context.Context, link memory.SemanticLink) error {
-    // Query existing active links for the same source_id and relationship
-    var existingCaveats string
-    var existingTargetID string
-    query := `
-        SELECT caveats, target_id 
+	// Query existing active links for the same source_id and relationship
+	var existingCaveats string
+	var existingTargetID string
+	var existingOriginSource sql.NullString
+
+	query := `
+        SELECT caveats, target_id, origin_source_id 
         FROM semantic_links 
         WHERE source_id = ? AND relationship = ? AND valid_until IS NULL
         LIMIT 1`
 
-    err := e.db.QueryRowContext(ctx, query, link.SourceID, link.Relationship).Scan(&existingCaveats, &existingTargetID)
-    if err != nil && err != sql.ErrNoRows {
-        return fmt.Errorf("failed to query existing edges: %w", err)
-    }
+	err := e.db.QueryRowContext(ctx, query, link.SourceID, link.Relationship).Scan(&existingCaveats, &existingTargetID, &existingOriginSource)
+	if err != nil && err != sql.ErrNoRows {
+		return fmt.Errorf("failed to query existing edges: %w", err)
+	}
 
-    // Relationships that are strictly 1:1 (mutually exclusive targets)
-    isMutuallyExclusive := map[string]bool{
-        "has_state":  true,
-        "located_in": true,
-    }
+	// Relationships that are strictly 1:1 (mutually exclusive targets)
+	isMutuallyExclusive := map[string]bool{
+		"has_state":  true,
+		"located_in": true,
+	}
 
-    // If an existing active link was found, it points to a different target, and the relationship is mutually exclusive, create a contradiction node
-    if err == nil && existingTargetID != link.TargetID && isMutuallyExclusive[link.Relationship] {
-        conflictID := fmt.Sprintf("conflict-%s-%s", link.SourceID, link.Relationship)
-        conflictNode := memory.SemanticNode{
-            ID:   conflictID,
-            Name: fmt.Sprintf("Conflict regarding %s for %s", link.Relationship, link.SourceID),
-            Type: "contradiction",
-        }
-        _ = e.UpsertNode(ctx, conflictNode)
-        _ = e.StoreNodeEmbedding(ctx, conflictNode.ID)
+	// If an existing active link was found, it points to a different target, and the relationship is mutually exclusive:
+	if err == nil && existingTargetID != link.TargetID && isMutuallyExclusive[link.Relationship] {
+		// Epistemic Hierarchy Source Trust Weighting Check
+		newTrustWeight := 100
+		existingTrustWeight := 100
 
-        // Add edge from source to conflict
-        now := time.Now().Unix()
-        nowStr := fmt.Sprintf("%d", now)
-        _ = e.AddEdge(ctx, memory.SemanticLink{
-            SourceID:     link.SourceID,
-            TargetID:     conflictID,
-            Relationship: "has_unresolved_conflict",
-            ValidFrom:    nowStr,
-        })
+		if link.OriginSourceID != "" {
+			var tw sql.NullInt64
+			if err := e.dbRO.QueryRowContext(ctx, "SELECT trust_weight FROM semantic_nodes WHERE id = ?", link.OriginSourceID).Scan(&tw); err == nil && tw.Valid {
+				newTrustWeight = int(tw.Int64)
+			}
+		}
 
-        // Add edges from conflict to targets
-        _ = e.AddEdge(ctx, memory.SemanticLink{
-            SourceID:     conflictID,
-            TargetID:     existingTargetID,
-            Relationship: "conflicting_claim",
-            ValidFrom:    nowStr,
-        })
-        _ = e.AddEdge(ctx, memory.SemanticLink{
-            SourceID:     conflictID,
-            TargetID:     link.TargetID,
-            Relationship: "conflicting_claim",
-            ValidFrom:    nowStr,
-        })
-    }
+		if existingOriginSource.Valid && existingOriginSource.String != "" {
+			var tw sql.NullInt64
+			if err := e.dbRO.QueryRowContext(ctx, "SELECT trust_weight FROM semantic_nodes WHERE id = ?", existingOriginSource.String).Scan(&tw); err == nil && tw.Valid {
+				existingTrustWeight = int(tw.Int64)
+			}
+		}
+
+		nowStr := fmt.Sprintf("%d", time.Now().Unix())
+
+		if newTrustWeight > existingTrustWeight {
+			// Incoming claim has HIGHER trust weight (e.g. Jira Resolved 900 vs Draft 100) -> Expire existing claim automatically!
+			expireQuery := `UPDATE semantic_links SET valid_until = ? WHERE source_id = ? AND target_id = ? AND relationship = ? AND valid_until IS NULL`
+			_, _ = e.db.ExecContext(ctx, expireQuery, nowStr, link.SourceID, existingTargetID, link.Relationship)
+
+			// Insert resolves_conflict edge
+			_ = e.AddEdge(ctx, memory.SemanticLink{
+				SourceID:            link.TargetID,
+				TargetID:            existingTargetID,
+				Relationship:        "resolves_conflict",
+				ResolutionRationale: fmt.Sprintf("Automated Epistemic Hierarchy Resolution: Incoming source trust weight (%d) higher than existing (%d)", newTrustWeight, existingTrustWeight),
+				ValidFrom:           nowStr,
+				OriginSourceID:      link.OriginSourceID,
+			})
+		} else if existingTrustWeight > newTrustWeight {
+			// Existing claim has HIGHER trust weight -> Automatically reject incoming claim by setting valid_until!
+			link.ValidUntil = &nowStr
+			_ = e.AddEdge(ctx, memory.SemanticLink{
+				SourceID:            existingTargetID,
+				TargetID:            link.TargetID,
+				Relationship:        "resolves_conflict",
+				ResolutionRationale: fmt.Sprintf("Automated Epistemic Hierarchy Resolution: Existing source trust weight (%d) higher than incoming (%d)", existingTrustWeight, newTrustWeight),
+				ValidFrom:           nowStr,
+				OriginSourceID:      existingOriginSource.String,
+			})
+			return nil
+		} else {
+			// Equal trust weights -> Fallback to unresolved contradiction node
+			conflictID := fmt.Sprintf("conflict-%s-%s", link.SourceID, link.Relationship)
+			conflictNode := memory.SemanticNode{
+				ID:   conflictID,
+				Name: fmt.Sprintf("Conflict regarding %s for %s", link.Relationship, link.SourceID),
+				Type: "contradiction",
+			}
+			_ = e.UpsertNode(ctx, conflictNode)
+			_ = e.StoreNodeEmbedding(ctx, conflictNode.ID)
+
+			_ = e.AddEdge(ctx, memory.SemanticLink{
+				SourceID:     link.SourceID,
+				TargetID:     conflictID,
+				Relationship: "has_unresolved_conflict",
+				ValidFrom:    nowStr,
+			})
+			_ = e.AddEdge(ctx, memory.SemanticLink{
+				SourceID:     conflictID,
+				TargetID:     existingTargetID,
+				Relationship: "conflicting_claim",
+				ValidFrom:    nowStr,
+			})
+			_ = e.AddEdge(ctx, memory.SemanticLink{
+				SourceID:     conflictID,
+				TargetID:     link.TargetID,
+				Relationship: "conflicting_claim",
+				ValidFrom:    nowStr,
+			})
+		}
+	}
+
 
     // Default valid_from if unassigned
     now := time.Now().Unix()

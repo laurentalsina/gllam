@@ -32,8 +32,10 @@ CREATE TABLE IF NOT EXISTS semantic_nodes (
     id TEXT PRIMARY KEY,
     name TEXT UNIQUE NOT NULL,
     type TEXT NOT NULL,
-    context_prompt TEXT
+    context_prompt TEXT,
+    trust_weight INTEGER DEFAULT 100
 );
+
 
 -- 4. SEMANTIC LINKS (Caveat-qualified, temporally bounded relationships with grounded uncertainty support)
 CREATE TABLE IF NOT EXISTS semantic_links (

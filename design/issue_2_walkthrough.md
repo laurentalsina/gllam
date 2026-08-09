@@ -39,11 +39,17 @@ flowchart TD
   5. **Relevance & Poisoning** (`fallacy_ad_hominem`, `fallacy_straw_man`, `fallacy_red_herring`, `fallacy_appeal_to_authority`)
   6. **Ambiguity & Semantic Shift** (`fallacy_equivocation`, `fallacy_amphiboly`, `fallacy_composition_division`)
 
-### 3. Contradiction Resolution Engine ([`ResolveContradiction`](file:///home/laurent/gllam/pkg/engine/semantic.go#L845-L880))
+### 3. Epistemic Hierarchy & Source Trust Weighting ([`AddEdge`](file:///home/laurent/gllam/pkg/engine/semantic.go#L33-L90))
+* Added `trust_weight` integer column to `semantic_nodes` in SQLite schema (`TrustWeight` in `SemanticNode`).
+* Automatically compares origin source trust weights (e.g. `Jira Resolved (900)` vs `Email Draft (100)`) when detecting mutually exclusive claim contradictions (`has_state`, `located_in`).
+* If a higher trust weight source contradicts a lower trust weight source, the lower trust claim is automatically expired (`valid_until = now`) and superseded with a `resolves_conflict` edge, bypassing user grilling!
+
+### 4. Manual Contradiction Resolution Engine ([`ResolveContradiction`](file:///home/laurent/gllam/pkg/engine/semantic.go#L845-L880))
 * Marks losing claim links and contradiction nodes as expired (`valid_until = now`).
 * Creates a `resolves_conflict` edge from the winning claim to the losing claim with `ResolutionRationale`.
 
-### 4. Byzantine Fallacy Guarding ([`DetectFallacySubversion`](file:///home/laurent/gllam/pkg/engine/semantic.go#L880-L940))
+### 5. Byzantine Fallacy Guarding ([`DetectFallacySubversion`](file:///home/laurent/gllam/pkg/engine/semantic.go#L880-L940))
+
 * Detects fallacies in retrieved sub-graphs, applies category-specific guard actions, and appends explicit warnings to `PlannerOutput`:
   `"⚠️ BYZANTINE FALLACY DETECTED: Claim 'claim-delete-db' exhibits fallacy 'fallacy_false_dilemma_1' (Asserts binary choice between DB deletion and deploy failure). Guard Action: Isolated binary constraint; prevented promotion to global rule."`
 

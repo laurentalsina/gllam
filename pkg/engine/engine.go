@@ -119,5 +119,9 @@ func (e *GllamEngine) InitSchema() error {
         return fmt.Errorf("failed to execute schema.sql: %w", err)
     }
 
+    // Migration: Add trust_weight column to semantic_nodes if missing
+    _, _ = e.db.Exec("ALTER TABLE semantic_nodes ADD COLUMN trust_weight INTEGER DEFAULT 100;")
+
     return nil
 }
+

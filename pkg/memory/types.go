@@ -42,7 +42,9 @@ type SemanticNode struct {
     Name          string `json:"name"`
     Type          string `json:"type"`
     ContextPrompt string `json:"context_prompt"`
+    TrustWeight   int    `json:"trust_weight"` // Epistemic trust weight (e.g. 900 for Jira Resolved/PR Merged, 100 for draft)
 }
+
 
 type SemanticLink struct {
     SourceID              string  `json:"source_id"`
