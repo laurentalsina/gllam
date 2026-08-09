@@ -1592,6 +1592,80 @@ func (e *GllamEngine) GaugeAndUpsertSourceNode(ctx context.Context, id string, n
 	return calculatedWeight, nil
 }
 
+// AddDocumentLineage stores source URI provenance for a semantic node (Issue #8 Strict Information Lineage).
+func (e *GllamEngine) AddDocumentLineage(ctx context.Context, lineage memory.DocumentLineage) error {
+	now := time.Now().Unix()
+	if lineage.CreatedAt == 0 {
+		lineage.CreatedAt = now
+	}
+	if lineage.ID == "" {
+		lineage.ID = fmt.Sprintf("lin-%s-%d", lineage.NodeID, now)
+	}
+
+	query := `
+		INSERT INTO document_lineage (id, node_id, source_uri, document_title, source_type, line_number, char_offset, checksum, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(id) DO UPDATE SET source_uri = excluded.source_uri, document_title = excluded.document_title, line_number = excluded.line_number`
+
+	_, err := e.db.ExecContext(ctx, query, lineage.ID, lineage.NodeID, lineage.SourceURI, lineage.DocumentTitle, lineage.SourceType, lineage.LineNumber, lineage.CharOffset, lineage.Checksum, lineage.CreatedAt)
+	if err != nil {
+		return fmt.Errorf("failed to insert document lineage for node %s: %w", lineage.NodeID, err)
+	}
+	return nil
+}
+
+// GetDocumentLineageForNodes retrieves all document lineage records for a slice of node IDs.
+func (e *GllamEngine) GetDocumentLineageForNodes(ctx context.Context, nodeIDs []string) ([]memory.DocumentLineage, error) {
+	if len(nodeIDs) == 0 {
+		return nil, nil
+	}
+
+	placeholders := make([]string, len(nodeIDs))
+	args := make([]interface{}, len(nodeIDs))
+	for i, id := range nodeIDs {
+		placeholders[i] = "?"
+		args[i] = id
+	}
+
+	query := fmt.Sprintf(`
+		SELECT id, node_id, source_uri, document_title, source_type, line_number, char_offset, checksum, created_at
+		FROM document_lineage
+		WHERE node_id IN (%s)
+		ORDER BY created_at DESC`, strings.Join(placeholders, ","))
+
+	rows, err := e.dbRO.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query document lineage: %w", err)
+	}
+	defer rows.Close()
+
+	var lineages []memory.DocumentLineage
+	for rows.Next() {
+		var l memory.DocumentLineage
+		var title, checksum sql.NullString
+		var lineNo, charOff sql.NullInt64
+		if err := rows.Scan(&l.ID, &l.NodeID, &l.SourceURI, &title, &l.SourceType, &lineNo, &charOff, &checksum, &l.CreatedAt); err != nil {
+			continue
+		}
+		if title.Valid {
+			l.DocumentTitle = title.String
+		}
+		if checksum.Valid {
+			l.Checksum = checksum.String
+		}
+		if lineNo.Valid {
+			l.LineNumber = int(lineNo.Int64)
+		}
+		if charOff.Valid {
+			l.CharOffset = int(charOff.Int64)
+		}
+		lineages = append(lineages, l)
+	}
+
+	return lineages, nil
+}
+
+
 
 
 

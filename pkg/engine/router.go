@@ -248,8 +248,21 @@ func (e *GllamEngine) RouteAndAssemble(ctx context.Context, userPrompt string, e
 
 
 
+    // 6. Fetch Document Lineage for retrieved semantic nodes (Issue #8 Strict Information Lineage)
+    if len(ctxResult.SemanticNodes) > 0 {
+        var nodeIDs []string
+        for _, n := range ctxResult.SemanticNodes {
+            nodeIDs = append(nodeIDs, n.ID)
+        }
+        lineageRecords, err := e.GetDocumentLineageForNodes(ctx, nodeIDs)
+        if err == nil && len(lineageRecords) > 0 {
+            ctxResult.Lineage = lineageRecords
+        }
+    }
+
     return ctxResult, nil
 }
+
 
 
 // FormatSystemPrompt formats the compiled context into a Markdown block for LLM consumption
@@ -324,9 +337,28 @@ func FormatSystemPrompt(ctx *memory.CompiledContext) string {
         sb.WriteString("\n\n")
     }
 
+    // Strict Source Lineage Citations (Issue #8)
+    if len(ctx.Lineage) > 0 {
+        sb.WriteString("## Strict Source Lineage Citations\n\n")
+        sb.WriteString("When synthesizing facts from this context, you MUST explicitly cite source URIs:\n\n")
+        for _, lin := range ctx.Lineage {
+            lineStr := ""
+            if lin.LineNumber > 0 {
+                lineStr = fmt.Sprintf(" (Line %d)", lin.LineNumber)
+            }
+            titleStr := ""
+            if lin.DocumentTitle != "" {
+                titleStr = fmt.Sprintf(" - %s", lin.DocumentTitle)
+            }
+            sb.WriteString(fmt.Sprintf("- Node `%s` [%s] %s%s%s\n", lin.NodeID, lin.SourceType, lin.SourceURI, titleStr, lineStr))
+        }
+        sb.WriteString("\n")
+    }
+
     rawText := sb.String()
     return RedactProhibitedContent(rawText, ctx.SemanticLinks, ctx.SemanticNodes)
 }
+
 
 var (
     ipRegex    = regexp.MustCompile(`\b(?:10|172\.(?:1[6-9]|2[0-9]|3[01])|192\.168)\.\d{1,3}\.\d{1,3}\b`)

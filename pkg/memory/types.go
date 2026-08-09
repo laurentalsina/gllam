@@ -74,10 +74,24 @@ type SemanticLink struct {
 
 
 
+type DocumentLineage struct {
+	ID            string `json:"id"`
+	NodeID        string `json:"node_id"`
+	SourceURI     string `json:"source_uri"`
+	DocumentTitle string `json:"document_title"`
+	SourceType    string `json:"source_type"`
+	LineNumber    int    `json:"line_number,omitempty"`
+	CharOffset    int    `json:"char_offset,omitempty"`
+	Checksum      string `json:"checksum,omitempty"`
+	CreatedAt     int64  `json:"created_at"`
+}
+
 type CompiledContext struct {
 	Procedural    []ProceduralKnowledge
 	SemanticNodes []SemanticNode
 	SemanticLinks []SemanticLink
 	Episodic      []EpisodicSummary
+	Lineage       []DocumentLineage
 	PlannerOutput string
 }
+

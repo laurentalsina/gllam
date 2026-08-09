@@ -71,7 +71,25 @@ CREATE TABLE IF NOT EXISTS semantic_links (
 
 
 
+-- 5. DOCUMENT LINEAGE (Strict information source URI traceability)
+CREATE TABLE IF NOT EXISTS document_lineage (
+    id TEXT PRIMARY KEY,
+    node_id TEXT NOT NULL,
+    source_uri TEXT NOT NULL,
+    document_title TEXT,
+    source_type TEXT NOT NULL,
+    line_number INTEGER DEFAULT 0,
+    char_offset INTEGER DEFAULT 0,
+    checksum TEXT,
+    created_at INTEGER NOT NULL,
+    FOREIGN KEY (node_id) REFERENCES semantic_nodes(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_lineage_node ON document_lineage(node_id);
+CREATE INDEX IF NOT EXISTS idx_lineage_uri ON document_lineage(source_uri);
+
 CREATE INDEX IF NOT EXISTS idx_links_lookup ON semantic_links(source_id, target_id);
+
 
 
 
