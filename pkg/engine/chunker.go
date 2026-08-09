@@ -67,6 +67,79 @@ func ValidateTranscriptSemanticCoherence(text string) bool {
 	return true
 }
 
+type SourceTrustInput struct {
+	DocumentType string // e.g. "jira_resolved", "pull_request_merged", "confluence_approved", "slack_channel", "email_thread", "draft"
+	AuthorRole   string // e.g. "system_ci_cd", "tech_lead", "verified_engineer", "anonymous"
+	DocumentText string // Content for evaluating internal coherence
+	CreatedAt    int64  // Unix timestamp of document creation
+}
+
+// CalculateCompositeTrustWeight evaluates document type heuristics, author identity,
+// internal semantic coherence, and temporal freshness to compute a trust weight W in [10, 1000].
+func CalculateCompositeTrustWeight(input SourceTrustInput, nowTS int64) int {
+	var weight int
+
+	// 1. Document Type Base Heuristic
+	switch strings.ToLower(input.DocumentType) {
+	case "jira_resolved", "pull_request_merged", "git_commit", "production_config":
+		weight = 800
+	case "confluence_approved", "architecture_doc", "design_doc":
+		weight = 700
+	case "jira_open", "slack_channel", "incident_log":
+		weight = 500
+	case "meeting_notes", "email_thread", "support_ticket":
+		weight = 400
+	case "confluence_draft", "personal_notes", "draft":
+		weight = 200
+	default:
+		weight = 100
+	}
+
+	// 2. Author / Source Identity Heuristic
+	switch strings.ToLower(input.AuthorRole) {
+	case "system_ci_cd", "security_bot", "admin":
+		weight += 150
+	case "tech_lead", "architect", "staff_engineer":
+		weight += 100
+	case "verified_engineer", "maintainer":
+		weight += 50
+	}
+
+	// 3. Evaluated Internal Semantic Coherence
+	if input.DocumentText != "" {
+		if ValidateTranscriptSemanticCoherence(input.DocumentText) {
+			weight += 50 // Valid coherent prose boost
+		} else {
+			weight -= 250 // High entropy / DoS / incoherent penalty
+		}
+	}
+
+	// 4. Temporal Freshness Adjustment
+	if input.CreatedAt > 0 && nowTS > input.CreatedAt {
+		ageSec := nowTS - input.CreatedAt
+		ageDays := ageSec / 86400
+
+		if ageDays < 30 {
+			weight += 50 // Fresh document bonus
+		} else if ageDays > 365 {
+			weight -= 150 // Very old document penalty (> 1 year)
+		} else if ageDays > 180 {
+			weight -= 50 // Aged document penalty (> 6 months)
+		}
+	}
+
+	// Clamp to [10, 1000]
+	if weight < 10 {
+		weight = 10
+	}
+	if weight > 1000 {
+		weight = 1000
+	}
+
+	return weight
+}
+
+
 
 type Chunk struct {
 	Text       string

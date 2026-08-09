@@ -1563,6 +1563,27 @@ func ComputeQueryConditionedSalience(nodes []memory.SemanticNode, links []memory
 	return salienceScores
 }
 
+// GaugeAndUpsertSourceNode evaluates multi-factor trust input (document type, author role, internal coherence, temporal freshness)
+// to compute composite trust weight and upserts the source node into SQLite.
+func (e *GllamEngine) GaugeAndUpsertSourceNode(ctx context.Context, id string, name string, nodeType string, input SourceTrustInput) (int, error) {
+	now := time.Now().Unix()
+	calculatedWeight := CalculateCompositeTrustWeight(input, now)
+
+	node := memory.SemanticNode{
+		ID:            id,
+		Name:          name,
+		Type:          nodeType,
+		ContextPrompt: fmt.Sprintf("Source Type: %s, Author: %s, Trust Weight: %d", input.DocumentType, input.AuthorRole, calculatedWeight),
+		TrustWeight:   calculatedWeight,
+	}
+
+	if err := e.UpsertNode(ctx, node); err != nil {
+		return 0, err
+	}
+	return calculatedWeight, nil
+}
+
+
 
 
 

@@ -165,3 +165,50 @@ func TestEpistemicHierarchySourceTrustWeighting(t *testing.T) {
 	}
 }
 
+func TestGaugeCompositeTrustWeight(t *testing.T) {
+	tempDir := t.TempDir()
+	dbPath := filepath.Join(tempDir, "test_gauge_trust.db")
+
+	gllam, err := NewGllamEngine(dbPath, nil)
+	if err != nil {
+		t.Fatalf("Failed to create engine: %v", err)
+	}
+	defer gllam.Close()
+
+	if err := gllam.InitSchema(); err != nil {
+		t.Fatalf("Failed to init schema: %v", err)
+	}
+
+	ctx := context.Background()
+	now := time.Now().Unix()
+
+	// High-trust: Jira Resolved + CI/CD bot + Fresh coherent text
+	highInput := SourceTrustInput{
+		DocumentType: "jira_resolved",
+		AuthorRole:   "system_ci_cd",
+		DocumentText: "Resolved issue PROD-101: Updated service auth to port 9090 following security audit.",
+		CreatedAt:    now - 86400, // 1 day ago
+	}
+	highWeight, err := gllam.GaugeAndUpsertSourceNode(ctx, "source-jira-high", "Jira High Trust", memory.NodeTypeSystem, highInput)
+	if err != nil || highWeight < 900 {
+		t.Errorf("Expected high trust weight (>=900), got %d, err=%v", highWeight, err)
+	}
+
+	// Low-trust: Draft + Anonymous + Gibberish text + Old (400 days old)
+	lowInput := SourceTrustInput{
+		DocumentType: "confluence_draft",
+		AuthorRole:   "anonymous",
+		DocumentText: "asdf kjhgf qwert zxcvb poiuy lkjhg mnbvc 12345 67890 !@#$%^&*()_+",
+		CreatedAt:    now - (400 * 86400), // 400 days ago
+	}
+	lowWeight, err := gllam.GaugeAndUpsertSourceNode(ctx, "source-draft-low", "Draft Low Trust", memory.NodeTypeHuman, lowInput)
+	if err != nil || lowWeight > 100 {
+		t.Errorf("Expected low trust weight (<=100 due to gibberish & age penalties), got %d, err=%v", lowWeight, err)
+	}
+
+	if highWeight <= lowWeight {
+		t.Errorf("High trust weight (%d) must exceed low trust weight (%d)", highWeight, lowWeight)
+	}
+}
+
+
