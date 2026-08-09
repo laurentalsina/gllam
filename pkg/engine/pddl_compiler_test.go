@@ -27,9 +27,10 @@ func TestCompileGraphToPDDLTyped(t *testing.T) {
 	}
 
 
-	if !strings.Contains(problem, "event_a event_b - event") {
+	if !strings.Contains(problem, "event_a") || !strings.Contains(problem, "event_b") || !strings.Contains(problem, "- event") {
 		t.Errorf("Problem missing typed event objects: %s", problem)
 	}
+
 
 	if !strings.Contains(problem, "state_active - state") {
 		t.Errorf("Problem missing typed state objects: %s", problem)

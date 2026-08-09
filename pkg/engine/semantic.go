@@ -5,11 +5,13 @@ import (
     "database/sql"
     "fmt"
     "sort"
+    "strconv"
     "strings"
     "time"
 
     "github.com/laurentalsina/gllam/pkg/memory"
 )
+
 
 
 
@@ -1090,6 +1092,101 @@ func (e *GllamEngine) RetrieveHybridNeedle(ctx context.Context, query string, en
 
 	return filteredList, nil
 }
+
+// SupersedeFact updates a fact (Trap 1 & Trap 5), marking oldLink as expired (valid_until = newLink.valid_from)
+// and adding a superseded_by edge connecting newLink to oldLink. Handles out-of-order ingestion backdating.
+func (e *GllamEngine) SupersedeFact(ctx context.Context, oldLink memory.SemanticLink, newLink memory.SemanticLink, rationale string) error {
+	nowStr := fmt.Sprintf("%d", time.Now().Unix())
+	now := time.Now().Unix()
+
+	// Parse timestamps to check for out-of-order ingestion (Trap 5)
+	oldFromTS, _ := strconv.ParseInt(oldLink.ValidFrom, 10, 64)
+	newFromTS, _ := strconv.ParseInt(newLink.ValidFrom, 10, 64)
+
+	var expireTSStr string
+	if newFromTS > 0 && oldFromTS > 0 && newFromTS < oldFromTS {
+		// Out-of-order ingestion: newLink is chronologically OLDER than oldLink!
+		// Do not overwrite oldLink's active status; instead, set newLink's valid_until = oldLink.ValidFrom
+		newLink.ValidUntil = &oldLink.ValidFrom
+		if newLink.Relationship == "" {
+			newLink.Relationship = oldLink.Relationship
+		}
+		return e.AddEdge(ctx, newLink)
+	} else {
+		// Normal supersession: newLink is chronologically NEWER
+		expireTSStr = newLink.ValidFrom
+		if expireTSStr == "" || expireTSStr == "temporal_note" {
+			expireTSStr = nowStr
+		}
+	}
+
+	// 1. Expire old link
+	expireQuery := `
+		UPDATE semantic_links
+		SET valid_until = ?, updated_at = ?
+		WHERE source_id = ? AND target_id = ? AND relationship = ? AND valid_until IS NULL`
+
+	if _, err := e.db.ExecContext(ctx, expireQuery, expireTSStr, now, oldLink.SourceID, oldLink.TargetID, oldLink.Relationship); err != nil {
+		return fmt.Errorf("failed to expire old fact link (%s-%s-%s): %w", oldLink.SourceID, oldLink.TargetID, oldLink.Relationship, err)
+	}
+
+	// 2. Add newLink
+	if err := e.AddEdge(ctx, newLink); err != nil {
+		return fmt.Errorf("failed to add new superseded fact link: %w", err)
+	}
+
+	// 3. Add superseded_by edge connecting new link target to old link target
+	supLink := memory.SemanticLink{
+		SourceID:            newLink.TargetID,
+		TargetID:            oldLink.TargetID,
+		Relationship:        "superseded_by",
+		ResolutionRationale: rationale,
+		ValidFrom:           expireTSStr,
+		OriginSourceID:      newLink.OriginSourceID,
+	}
+
+	// Trigger cascading invalidation on cross-cutting dependent links (Trap 6)
+	_ = e.InvalidateDependentCrossCuttingLinks(ctx, oldLink.TargetID, expireTSStr)
+
+	return e.AddEdge(ctx, supLink)
+}
+
+// InvalidateDependentCrossCuttingLinks inspects downstream links (depends_on, applies_rule, requires_config)
+// connected to updatedNodeID and flags them as requires_revalidation (Trap 6).
+func (e *GllamEngine) InvalidateDependentCrossCuttingLinks(ctx context.Context, updatedNodeID string, validFrom string) error {
+	now := time.Now().Unix()
+
+	updateQuery := `
+		UPDATE semantic_links
+		SET caveats = CASE 
+			WHEN caveats IS NULL OR caveats = '' THEN '[REQUIRES_REVALIDATION: Upstream node ' || ? || ' was updated]' 
+			ELSE caveats || ' [REQUIRES_REVALIDATION: Upstream node ' || ? || ' was updated]' 
+		END,
+		updated_at = ?
+		WHERE target_id = ? AND relationship IN ('depends_on', 'applies_rule', 'requires_config') AND valid_until IS NULL`
+
+	_, err := e.db.ExecContext(ctx, updateQuery, updatedNodeID, updatedNodeID, now, updatedNodeID)
+	if err != nil {
+		return fmt.Errorf("failed to invalidate dependent cross-cutting links for %s: %w", updatedNodeID, err)
+	}
+
+	return nil
+}
+
+// SurfaceCrossCuttingImpacts inspects retrieved links for any requires_revalidation caveats (Trap 8),
+// returning human-readable cross-cutting update diagnostics.
+func SurfaceCrossCuttingImpacts(links []memory.SemanticLink, nodes []memory.SemanticNode, sourceID string) string {
+	var notices []string
+	for _, l := range links {
+		if strings.Contains(l.Caveats, "REQUIRES_REVALIDATION") {
+			notice := fmt.Sprintf("⚠️ CROSS-CUTTING KNOWLEDGE UPDATE WARNING: Link '%s --(%s)--> %s' requires re-validation due to upstream updates. (%s)",
+				l.SourceID, l.Relationship, l.TargetID, l.Caveats)
+			notices = append(notices, notice)
+		}
+	}
+	return strings.Join(notices, "\n")
+}
+
 
 
 

@@ -98,8 +98,20 @@ func (e *GllamEngine) RouteAndAssemble(ctx context.Context, userPrompt string, e
                 ctxResult.SemanticNodes = hybridNodes
                 ctxResult.SemanticLinks = hybridLinks
             }
+
+            // Surface cross-cutting knowledge update warnings
+            crossCuttingNotices := SurfaceCrossCuttingImpacts(ctxResult.SemanticLinks, ctxResult.SemanticNodes, "")
+            if crossCuttingNotices != "" {
+                if ctxResult.PlannerOutput != "" {
+                    ctxResult.PlannerOutput += "\n" + crossCuttingNotices
+                } else {
+                    ctxResult.PlannerOutput = crossCuttingNotices
+                }
+            }
         }
     }
+
+
 
 
 
