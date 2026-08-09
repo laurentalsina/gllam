@@ -7,18 +7,36 @@ import (
 
     sqlite_vec "github.com/asg017/sqlite-vec-go-bindings/cgo"
     _ "github.com/mattn/go-sqlite3"
+
+    "github.com/laurentalsina/gllam/pkg/config"
 )
 
+
 type GllamEngine struct {
-    db                    *sql.DB   // Write handle: single connection, serializes all mutations
-    dbRO                  *sql.DB   // Read handle: connection pool for concurrent read-only queries
-    embedder              Embedder  // Pluggable embedding generator (e.g., llama.cpp)
-    PlannerExecutablePath string    // Path to external PDDL planner binary/script
+    db                    *sql.DB                            // Write handle: single connection, serializes all mutations
+    dbRO                  *sql.DB                            // Read handle: connection pool for concurrent read-only queries
+    embedder              Embedder                           // Pluggable embedding generator (e.g., llama.cpp)
+    PlannerExecutablePath string                             // Path to external PDDL planner binary/script
+    SystemPrompts         *config.AgenticMemorySystemPrompts // Agentic memory system prompting configuration
 }
 
 func (e *GllamEngine) SetPlannerExecutablePath(path string) {
     e.PlannerExecutablePath = path
 }
+
+func (e *GllamEngine) SetSystemPrompts(prompts *config.AgenticMemorySystemPrompts) {
+    e.SystemPrompts = prompts
+}
+
+func (e *GllamEngine) LoadSystemPromptsConfig(path string) error {
+    prompts, err := config.LoadAgenticMemoryConfig(path)
+    if err != nil {
+        return err
+    }
+    e.SystemPrompts = prompts
+    return nil
+}
+
 
 
 // NewGllamEngine opens two SQLite handles with sqlite-vec support:
@@ -68,8 +86,14 @@ func NewGllamEngine(dbPath string, embedder Embedder) (*GllamEngine, error) {
         return nil, fmt.Errorf("failed to apply read-only sqlite pragmas: %w", err)
     }
 
-    return &GllamEngine{db: db, dbRO: dbRO, embedder: embedder}, nil
+    return &GllamEngine{
+        db:            db,
+        dbRO:          dbRO,
+        embedder:      embedder,
+        SystemPrompts: config.DefaultAgenticMemorySystemPrompts(),
+    }, nil
 }
+
 
 func (e *GllamEngine) Close() error {
     var errs []error

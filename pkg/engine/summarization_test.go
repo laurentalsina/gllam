@@ -47,8 +47,14 @@ func TestSalienceAnchoredSummaryAndProceduralExtraction(t *testing.T) {
 		{ID: "ep-1", SummaryText: "Configured Caddy web server on port 8080 with TLS cert."},
 	}
 
-	// 1. FormatSalienceAnchoredSummary with query focal prompt
-	summary := FormatSalienceAnchoredSummary(nodes, links, episodes, "What port is Caddy web server running on?")
+	// 1. FormatSalienceAnchoredSummary with query focal prompt & SystemPrompts
+	summary := FormatSalienceAnchoredSummary(nodes, links, episodes, "What port is Caddy web server running on?", gllam.SystemPrompts)
+
+	// Verify Corpus Historical & Domain Context header is present
+	if !strings.Contains(summary, "CORPUS HISTORICAL & DOMAIN CONTEXT") {
+		t.Errorf("Summary missing Agentic System Prompts historical context: %s", summary)
+	}
+
 
 
 	// Verify ground-truth entity IDs and active links are present

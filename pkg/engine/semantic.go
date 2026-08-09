@@ -9,8 +9,10 @@ import (
     "strings"
     "time"
 
+    "github.com/laurentalsina/gllam/pkg/config"
     "github.com/laurentalsina/gllam/pkg/memory"
 )
+
 
 
 
@@ -1366,8 +1368,8 @@ func ResolveSpatialContainment(nodes []memory.SemanticNode, links []memory.Seman
 }
 
 // FormatSalienceAnchoredSummary builds a ground-truth anchored summary (Trap 1, 2, 4, 5)
-// preserving exact entity IDs, active relationships, hard temporal boundaries, and global user directives.
-func FormatSalienceAnchoredSummary(nodes []memory.SemanticNode, links []memory.SemanticLink, episodes []memory.EpisodicSummary, queryPrompt string) string {
+// preserving exact entity IDs, active relationships, hard temporal boundaries, global user directives, and agentic system prompts.
+func FormatSalienceAnchoredSummary(nodes []memory.SemanticNode, links []memory.SemanticLink, episodes []memory.EpisodicSummary, queryPrompt string, sysPrompts *config.AgenticMemorySystemPrompts) string {
 	// 1. Filter out obsolete state links (Trap 2 - Knowledge Update Active State Filter)
 	activeLinks := FilterActiveSummaryFacts(links)
 
@@ -1380,11 +1382,18 @@ func FormatSalienceAnchoredSummary(nodes []memory.SemanticNode, links []memory.S
 	var sb strings.Builder
 	sb.WriteString("=== GROUND-TRUTH ANCHORED SUMMARY ===\n")
 
+	if sysPrompts != nil && sysPrompts.HistoricalContextPrompt != "" {
+		sb.WriteString("--- CORPUS HISTORICAL & DOMAIN CONTEXT ---\n")
+		sb.WriteString(sysPrompts.HistoricalContextPrompt)
+		sb.WriteString("\n\n")
+	}
+
 	if globalDirectives != "" {
 		sb.WriteString("--- GLOBAL DIRECTIVES & RULES ---\n")
 		sb.WriteString(globalDirectives)
 		sb.WriteString("\n")
 	}
+
 
 	sb.WriteString("--- SALIENT GROUND-TRUTH ENTITIES & STATES ---\n")
 	for _, n := range nodes {
