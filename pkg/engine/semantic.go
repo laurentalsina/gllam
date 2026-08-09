@@ -1356,11 +1356,34 @@ func FormatSalienceAnchoredSummary(nodes []memory.SemanticNode, links []memory.S
 	}
 
 	sb.WriteString("\n--- ACTIVE FACTUAL RELATIONSHIPS & TEMPORAL BOUNDS ---\n")
+	now := time.Now().Unix()
+
 	for _, l := range activeLinks {
 		tempStr := ""
 		if l.TemporalRelation != "" || l.TemporalAnchorID != "" {
 			tempStr = fmt.Sprintf(" [Timing: %s %s offset %ds]", l.TemporalRelation, l.TemporalAnchorID, l.TemporalOffsetSeconds)
 		}
+
+		// Calculate state origin and duration ("since X")
+		sinceStr := ""
+		if l.ValidFrom != "" && l.ValidFrom != "temporal_note" {
+			if fromTS, err := strconv.ParseInt(l.ValidFrom, 10, 64); err == nil && fromTS > 0 && now > fromTS {
+				diffSec := now - fromTS
+				days := diffSec / 86400
+				weeks := days / 7
+				if weeks >= 1 {
+					sinceStr = fmt.Sprintf(" [Active since: %d weeks ago (%d days)]", weeks, days)
+				} else if days >= 1 {
+					sinceStr = fmt.Sprintf(" [Active since: %d days ago]", days)
+				} else {
+					hours := diffSec / 3600
+					sinceStr = fmt.Sprintf(" [Active since: %d hours ago]", hours)
+				}
+			} else if l.TemporalAnchorID != "" {
+				sinceStr = fmt.Sprintf(" [Active since anchor: %s]", l.TemporalAnchorID)
+			}
+		}
+
 		turnStr := ""
 		if l.RemainingTurns > 0 {
 			turnStr = fmt.Sprintf(" [Turns Remaining: %d/%d]", l.RemainingTurns, l.DurationTurns)
@@ -1370,8 +1393,9 @@ func FormatSalienceAnchoredSummary(nodes []memory.SemanticNode, links []memory.S
 			caveatStr = fmt.Sprintf(" (Caveat: %s)", l.Caveats)
 		}
 
-		sb.WriteString(fmt.Sprintf("• %s --(%s)--> %s%s%s%s\n", l.SourceID, l.Relationship, l.TargetID, caveatStr, tempStr, turnStr))
+		sb.WriteString(fmt.Sprintf("• %s --(%s)--> %s%s%s%s%s\n", l.SourceID, l.Relationship, l.TargetID, caveatStr, tempStr, sinceStr, turnStr))
 	}
+
 
 	if len(episodes) > 0 {
 		sb.WriteString("\n--- EPISODIC TIMELINE SUMMARY ---\n")
