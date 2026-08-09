@@ -333,9 +333,10 @@ To prevent a flat semantic graph from devolving into an unsearchable hairball ac
    * Decoupled from bulk ingestion pipeline; pulls orphaned nodes (`taxonomy_path = '/'`) and categorizes them into category nodes (`NodeTypeCategory = "category"`) with explicit `is_a` links.
 3. **Cyclic Path Prevention (`DetectTaxonomyCycles` & `WouldCreateTaxonomyCycle`):**
    * Uses **Kahn's Topological Sort Algorithm** to detect and prevent circular parent-child relationships (e.g. `/Infrastructure/Storage` $\rightarrow$ `/Storage/Databases` $\rightarrow$ `/Infrastructure/Storage`).
-4. **Self-Healing Taxonomy Consolidation (`ConsolidateTaxonomyBranch`):**
-   * Merges redundant categories (e.g. `/Engineering/DBs` into `/Engineering/Infrastructure/Databases`) in an atomic transaction that rewrites child node paths and redirects `is_a` edges.
+4. **Self-Healing Bounded Taxonomy Consolidation (`ConsolidateTaxonomyBranch`):**
+   * Merges redundant categories (e.g. `/Engineering/DBs` into `/Engineering/Infrastructure/Databases`) using chunked 500-row write transactions and 10ms yield pauses to eliminate SQLite write lock stalls during bulk path rewrites.
 5. **Procedural Domain Binding (`GetProceduresByTaxonomyPrefix`):**
+
    * Supercharges procedural knowledge retrieval by isolating operational recipes bound to target taxonomy sub-trees.
 
 ```go

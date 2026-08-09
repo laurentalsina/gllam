@@ -4,11 +4,12 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-
 	"strings"
+	"time"
 
 	"github.com/laurentalsina/gllam/pkg/memory"
 )
+
 
 // DetectTaxonomyCycles uses Kahn's Topological Sort Algorithm to detect cyclic parent-child dependencies
 // across all is_a, subclass_of, instance_of, and part_of taxonomy edges.
@@ -267,8 +268,9 @@ func (e *GllamEngine) GetTaxonomyTree(ctx context.Context) ([]*memory.TaxonomyNo
 	return rootNodes, nil
 }
 
-// ConsolidateTaxonomyBranch performs an atomic SQLite transaction merging a duplicate/redundant category
-// branch into a target canonical category branch (rewriting all child materialized paths and updating is_a edges).
+// ConsolidateTaxonomyBranch merges a duplicate/redundant category branch into a target canonical category branch.
+// Performs path rewrites in small, bounded transactions (batchSize = 500) with short sleep intervals
+// between commits to prevent exclusive write lock stalls during bulk taxonomy consolidations.
 func (e *GllamEngine) ConsolidateTaxonomyBranch(ctx context.Context, sourceCategoryPath string, targetCategoryPath string) error {
 	cleanSource := "/" + strings.Trim(sourceCategoryPath, "/")
 	cleanTarget := "/" + strings.Trim(targetCategoryPath, "/")
@@ -277,25 +279,80 @@ func (e *GllamEngine) ConsolidateTaxonomyBranch(ctx context.Context, sourceCateg
 		return nil // Nothing to merge
 	}
 
+	sourcePattern := cleanSource + "%"
+	batchSize := 500
+
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
+		// 1. Fetch next batch of node IDs needing path rewrite
+		queryBatch := `
+			SELECT id
+			FROM semantic_nodes
+			WHERE taxonomy_path LIKE ? OR taxonomy_path = ?
+			LIMIT ?`
+
+		rows, err := e.dbRO.QueryContext(ctx, queryBatch, sourcePattern, cleanSource, batchSize)
+		if err != nil {
+			return fmt.Errorf("failed to query batch for taxonomy consolidation: %w", err)
+		}
+
+		var ids []string
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err == nil {
+				ids = append(ids, id)
+			}
+		}
+		rows.Close()
+
+		if len(ids) == 0 {
+			break // All nodes rewritten
+		}
+
+		// 2. Perform chunked update in a bounded write transaction
+		tx, err := e.db.BeginTx(ctx, nil)
+		if err != nil {
+			return fmt.Errorf("failed to start chunked consolidation transaction: %w", err)
+		}
+
+		placeholders := make([]string, len(ids))
+		args := make([]interface{}, 0, len(ids)+2)
+		args = append(args, cleanTarget, cleanSource)
+		for i, id := range ids {
+			placeholders[i] = "?"
+			args = append(args, id)
+		}
+
+		rewriteQuery := fmt.Sprintf(`
+			UPDATE semantic_nodes
+			SET taxonomy_path = ? || SUBSTR(taxonomy_path, LENGTH(?) + 1)
+			WHERE id IN (%s)`, strings.Join(placeholders, ","))
+
+		if _, err := tx.ExecContext(ctx, rewriteQuery, args...); err != nil {
+			tx.Rollback()
+			return fmt.Errorf("failed to execute chunked path rewrite: %w", err)
+		}
+
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("failed to commit chunked consolidation: %w", err)
+		}
+
+		// Short pause between batches to allow concurrent reads and writes to proceed cleanly
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	// 3. Redirect ontological semantic_links (is_a, subclass_of, instance_of, part_of) and remove old category node
 	tx, err := e.db.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("failed to start consolidation transaction: %w", err)
+		return fmt.Errorf("failed to start link redirection transaction: %w", err)
 	}
 	defer tx.Rollback()
 
-	// 1. Rewrite taxonomy_path for all descendant nodes matching cleanSource prefix
-	sourcePattern := cleanSource + "%"
-	rewriteQuery := `
-		UPDATE semantic_nodes
-		SET taxonomy_path = ? || SUBSTR(taxonomy_path, LENGTH(?) + 1)
-		WHERE taxonomy_path LIKE ? OR taxonomy_path = ?`
-
-	_, err = tx.ExecContext(ctx, rewriteQuery, cleanTarget, cleanSource, sourcePattern, cleanSource)
-	if err != nil {
-		return fmt.Errorf("failed to rewrite child node taxonomy paths: %w", err)
-	}
-
-	// 2. Redirect ontological semantic_links (is_a, subclass_of, instance_of, part_of) pointing to source node ID
 	var sourceID string
 	err = tx.QueryRowContext(ctx, "SELECT id FROM semantic_nodes WHERE taxonomy_path = ? AND is_category = 1 LIMIT 1", cleanSource).Scan(&sourceID)
 	if err == nil && sourceID != "" {
@@ -315,11 +372,12 @@ func (e *GllamEngine) ConsolidateTaxonomyBranch(ctx context.Context, sourceCateg
 	}
 
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("failed to commit taxonomy consolidation: %w", err)
+		return fmt.Errorf("failed to commit link redirection during taxonomy consolidation: %w", err)
 	}
 
 	return nil
 }
+
 
 // AutoClassifyEntityByRules applies deterministic domain heuristics to categorize an uncategorized entity.
 func AutoClassifyEntityByRules(node memory.SemanticNode) (string, string) {
