@@ -135,3 +135,24 @@ type CompiledContext struct {
 	PlannerOutput string
 }
 
+type MemoryDreamScenario struct {
+	ID               string   `json:"id"`
+	PromptQuery      string   `json:"prompt_query"`
+	SimulatedAnswer  string   `json:"simulated_answer"`
+	RetrievedNodeIDs []string `json:"retrieved_node_ids"`
+	IsConsistent     bool     `json:"is_consistent"`
+	ClarityScore     float64  `json:"clarity_score"`
+}
+
+type MemorySleepReport struct {
+	SleepCycleID              string                `json:"sleep_cycle_id"`
+	DurationSeconds           float64               `json:"duration_seconds"`
+	PrunedStaleLinksCount     int                   `json:"pruned_stale_links_count"`
+	CompactedRevisionsCount   int                   `json:"compacted_revisions_count"`
+	ConsolidatedTaxonomyCount int                   `json:"consolidated_taxonomy_count"`
+	SimulatedDreams           []MemoryDreamScenario `json:"simulated_dreams"`
+	MemoryClarityScore        float64               `json:"memory_clarity_score"`
+	MemoryConsistencyScore    float64               `json:"memory_consistency_score"`
+}
+
+
