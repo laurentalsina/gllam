@@ -374,6 +374,27 @@ fmt.Printf("Memory Clarity Score: %.2f\n", report.MemoryClarityScore)
 fmt.Printf("Memory Consistency Score: %.2f\n", report.MemoryConsistencyScore)
 ```
 
+### WAL Checkpoint Management & Read-Only Handle Enforcement
+
+To prevent WAL file swelling and checkpoint stalls (`SQLITE_BUSY`) during high-frequency bulk ingestion (e.g. 15,000+ Jira issues and 10,000+ Confluence pages), GLLAM implements explicit WAL checkpointing and strict read-only handle isolation:
+
+1. **Dedicated Connection Pragmas:**
+   * **Write Handle (`db`):** `MaxOpenConns = 1`, `PRAGMA journal_mode = WAL`, `PRAGMA wal_autocheckpoint = 1000`, `PRAGMA busy_timeout = 5000`.
+   * **Read Handle (`dbRO`):** `MaxOpenConns = 8`, `PRAGMA query_only = ON;`, `PRAGMA busy_timeout = 5000;`. Read operations cannot lock the writer or attempt invalid mutations.
+2. **Explicit WAL Checkpoint API (`CheckpointWAL`):**
+   * Executes explicit `PRAGMA wal_checkpoint(RESTART)` or `PRAGMA wal_checkpoint(TRUNCATE)` flushes.
+3. **Background Checkpoint Manager (`StartWALCheckpointManager`):**
+   * Asynchronous background goroutine that manages WAL size during idle ingestion windows.
+
+```go
+// Launch background WAL Checkpoint Manager running every 5 seconds
+gllam.StartWALCheckpointManager(ctx, 5*time.Second)
+
+// Manually trigger a WAL restart or truncation checkpoint
+logPages, checkpointedPages, err := gllam.CheckpointWAL(ctx, "RESTART")
+```
+
+
 
 
 
