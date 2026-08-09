@@ -431,7 +431,25 @@ summaryText, retainedCount, prunedCount, err := gllam.CompactNodeCaveats(ctx, "n
 
 // Run batch compaction across all hub entities with > 10 caveats
 compactedHubs, err := gllam.BatchCompactHubCaveats(ctx, 10, 5)
+
 ```
+
+### Asynchronous Vector Index Worker Pool
+
+When scaling past 100,000 extracted `semantic_nodes`, executing embedding model calls and updating virtual vector tables (`sqlite-vec` `vec0`) inside the primary write transaction drastically increases commit latency. GLLAM decouples relational graph insertion from vector virtual table creation:
+
+1. **Sub-Millisecond Relational Commit:** `UpsertNode` commits relational graph entities to SQLite immediately.
+2. **Background Unembedded Queue (`ProcessUnembeddedNodeVectorBatch`):** Queries nodes where `v.node_id IS NULL`.
+3. **Worker Pool (`StartVectorEmbeddingWorkerPool`):** Launches background worker goroutines that generate embeddings and populate `semantic_embeddings` asynchronously.
+
+```go
+// Launch background vector worker pool (2 workers polling every 2 seconds)
+gllam.StartVectorEmbeddingWorkerPool(ctx, 2, 2*time.Second)
+
+// Manually process a batch of unindexed vector embeddings
+indexedCount, err := gllam.ProcessUnembeddedNodeVectorBatch(ctx, 50)
+```
+
 
 
 

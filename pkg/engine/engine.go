@@ -25,7 +25,9 @@ type GllamEngine struct {
 	SystemPrompts         *config.AgenticMemorySystemPrompts // Agentic memory system prompting configuration
 	AllowUserGrilling     bool                               // Set false for non-interactive benchmark evaluation (e.g. BEAM)
 	stopWALManager        chan struct{}                      // Control channel for background WAL checkpoint manager
+	stopVectorWorkers     chan struct{}                      // Control channel for background vector worker pool
 }
+
 
 func (e *GllamEngine) SetPlannerExecutablePath(path string) {
 	e.PlannerExecutablePath = path
@@ -113,10 +115,12 @@ func NewGllamEngine(dbPath string, embedder Embedder) (*GllamEngine, error) {
 		SystemPrompts:     config.DefaultAgenticMemorySystemPrompts(),
 		AllowUserGrilling: true,
 		stopWALManager:    make(chan struct{}),
+		stopVectorWorkers: make(chan struct{}),
 	}
 
 	return engine, nil
 }
+
 
 // CheckpointWAL triggers an explicit SQLite WAL checkpoint using the specified mode ("RESTART", "TRUNCATE", "PASSIVE", or "FULL").
 // Returns logPages, checkpointedPages, and error.
@@ -166,6 +170,10 @@ func (e *GllamEngine) Close() error {
 	if e.stopWALManager != nil {
 		close(e.stopWALManager)
 	}
+	if e.stopVectorWorkers != nil {
+		close(e.stopVectorWorkers)
+	}
+
 
 	// Final WAL truncation checkpoint before closing DB connections
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)

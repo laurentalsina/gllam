@@ -358,6 +358,22 @@ func (e *GllamEngine) StoreNodeEmbedding(ctx context.Context, nodeID string) err
     return nil
 }
 
+// IndexNodeVector stores a pre-computed float32 vector embedding for a semantic node into semantic_embeddings.
+func (e *GllamEngine) IndexNodeVector(ctx context.Context, nodeID string, vec []float32) error {
+	vecBytes, err := serializeEmbedding(vec)
+	if err != nil {
+		return fmt.Errorf("failed to serialize embedding: %w", err)
+	}
+
+	_, _ = e.db.ExecContext(ctx, "DELETE FROM semantic_embeddings WHERE node_id = ?", nodeID)
+	_, err = e.db.ExecContext(ctx, "INSERT INTO semantic_embeddings (node_id, embedding) VALUES (?, vec_f32(?))", nodeID, vecBytes)
+	if err != nil {
+		return fmt.Errorf("failed to store embedding for node %s: %w", nodeID, err)
+	}
+	return nil
+}
+
+
 // SearchSimilarNodes finds nodes with similar embeddings to the given query text.
 func (e *GllamEngine) SearchSimilarNodes(ctx context.Context, queryText string, limit int) ([]struct {
     NodeID   string
