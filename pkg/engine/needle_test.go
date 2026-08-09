@@ -67,3 +67,45 @@ func TestRetrieveHybridNeedle(t *testing.T) {
 		t.Errorf("Expected caveat-qualified link attached to top needle node")
 	}
 }
+
+func TestRetrieveHybridNeedleQualifierBoostingAndAbstention(t *testing.T) {
+	tempDir := t.TempDir()
+	dbPath := filepath.Join(tempDir, "test_qualifier_needle.db")
+
+	gllam, err := NewGllamEngine(dbPath, nil)
+	if err != nil {
+		t.Fatalf("Failed to create engine: %v", err)
+	}
+	defer gllam.Close()
+
+	if err := gllam.InitSchema(); err != nil {
+		t.Fatalf("Failed to init schema: %v", err)
+	}
+
+	ctx := context.Background()
+
+	_ = gllam.UpsertNode(ctx, memory.SemanticNode{ID: "caddy-dev", Name: "Caddy Dev Server", Type: memory.NodeTypeService, ContextPrompt: "Dev port 8080"})
+	_ = gllam.UpsertNode(ctx, memory.SemanticNode{ID: "caddy-staging", Name: "Caddy Staging Server", Type: memory.NodeTypeService, ContextPrompt: "Staging port 8081"})
+
+	// 1. Query with "staging" qualifier -> caddy-staging must win due to qualifier boosting
+	resultsStaging, err := gllam.RetrieveHybridNeedle(ctx, "port for caddy in staging", []string{"caddy-dev", "caddy-staging"}, "", 5)
+	if err != nil {
+		t.Fatalf("RetrieveHybridNeedle for staging failed: %v", err)
+	}
+	if len(resultsStaging) == 0 {
+		t.Fatalf("Expected results for staging query")
+	}
+	if resultsStaging[0].Node.ID != "caddy-staging" {
+		t.Errorf("Expected caddy-staging to rank top for staging query, got %s", resultsStaging[0].Node.ID)
+	}
+
+	// 2. Query for absent fact -> must return empty list (abstention trigger)
+	resultsAbsent, err := gllam.RetrieveHybridNeedle(ctx, "quantum key rotation password", []string{"nonexistent-node"}, "", 5)
+	if err != nil {
+		t.Fatalf("RetrieveHybridNeedle for absent query failed: %v", err)
+	}
+	if len(resultsAbsent) != 0 {
+		t.Errorf("Expected 0 results for absent needle, got %d results", len(resultsAbsent))
+	}
+}
+

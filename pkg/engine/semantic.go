@@ -1035,7 +1035,37 @@ func (e *GllamEngine) RetrieveHybridNeedle(ctx context.Context, query string, en
 		nodeMap[nodeID].RRFScore += 1.0 / (k + float64(rank+1))
 	}
 
-	// 5. Sort by RRFScore DESC
+	// 5. Apply Qualifier Boosting (Trap 6) for specific environment/context tokens (e.g. "staging", "prod", "dev")
+	queryLower := strings.ToLower(query)
+	qualifiers := []string{"staging", "prod", "production", "dev", "development", "test", "read-only", "primary", "replica"}
+	var activeQualifiers []string
+	for _, q := range qualifiers {
+		if strings.Contains(queryLower, q) {
+			activeQualifiers = append(activeQualifiers, q)
+		}
+	}
+
+	for _, sn := range nodeMap {
+		if len(activeQualifiers) > 0 {
+			combinedText := strings.ToLower(sn.Node.Name + " " + sn.Node.ContextPrompt)
+			for _, l := range sn.Links {
+				combinedText += " " + strings.ToLower(l.Caveats) + " " + strings.ToLower(l.Relationship)
+			}
+
+			matchedCount := 0
+			for _, q := range activeQualifiers {
+				if strings.Contains(combinedText, q) {
+					matchedCount++
+				}
+			}
+
+			if matchedCount > 0 {
+				sn.RRFScore += float64(matchedCount) * 0.05 // Boost exact qualifier matches
+			}
+		}
+	}
+
+	// 6. Sort by RRFScore DESC
 	scoredList := make([]NeedleScoredNode, 0, len(nodeMap))
 	for _, sn := range nodeMap {
 		scoredList = append(scoredList, *sn)
@@ -1045,12 +1075,22 @@ func (e *GllamEngine) RetrieveHybridNeedle(ctx context.Context, query string, en
 		return scoredList[i].RRFScore > scoredList[j].RRFScore
 	})
 
-	if len(scoredList) > limit {
-		scoredList = scoredList[:limit]
+	// 7. Apply RRF Minimum Confidence Thresholding (Trap 7 - Abstention Guard)
+	minThreshold := 0.015
+	var filteredList []NeedleScoredNode
+	for _, sn := range scoredList {
+		if sn.RRFScore >= minThreshold {
+			filteredList = append(filteredList, sn)
+		}
 	}
 
-	return scoredList, nil
+	if len(filteredList) > limit {
+		filteredList = filteredList[:limit]
+	}
+
+	return filteredList, nil
 }
+
 
 
 
