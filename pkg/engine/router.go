@@ -236,6 +236,19 @@ func (e *GllamEngine) RouteAndAssemble(ctx context.Context, userPrompt string, e
         }
     }
 
+    // Check for rule rationale confrontations
+    if len(ctxResult.SemanticLinks) > 0 {
+        confrontationDiag := ConfrontRuleRationales(ctxResult.SemanticLinks)
+        if confrontationDiag != "" {
+            if ctxResult.PlannerOutput != "" {
+                ctxResult.PlannerOutput += "\n" + confrontationDiag
+            } else {
+                ctxResult.PlannerOutput = confrontationDiag
+            }
+        }
+    }
+
+
 
 
 

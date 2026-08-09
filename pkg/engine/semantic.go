@@ -651,3 +651,56 @@ func (e *GllamEngine) DecrementActiveTurnConstraints(ctx context.Context) error 
 	return nil
 }
 
+// ConfrontRuleRationales evaluates pairs of active rules for priority/rationale collisions,
+// returning a human-readable confrontation diagnostic detailing why higher-priority rationale wins.
+func ConfrontRuleRationales(links []memory.SemanticLink) string {
+	var posRules []memory.SemanticLink
+	var negRules []memory.SemanticLink
+
+	for _, l := range links {
+		if l.ConstraintType == "negative" || strings.Contains(strings.ToLower(l.TargetID), "no_") || strings.Contains(strings.ToLower(l.TargetID), "never_") || strings.Contains(strings.ToLower(l.TargetID), "dont_") {
+			negRules = append(negRules, l)
+		} else if l.ConstraintType == "positive" || l.RuleContext == "user_preference" {
+			posRules = append(posRules, l)
+		}
+	}
+
+	if len(negRules) == 0 || len(posRules) == 0 {
+		return ""
+	}
+
+	var notices []string
+	for _, neg := range negRules {
+		negTarget := strings.ToLower(neg.TargetID)
+		for _, pos := range posRules {
+			posTarget := strings.ToLower(pos.TargetID)
+
+			// Detect domain collision between negative restriction and positive preference
+			collision := false
+			if (strings.Contains(negTarget, "token") && strings.Contains(posTarget, "log")) ||
+				(strings.Contains(negTarget, "ip") && strings.Contains(posTarget, "verbose")) ||
+				(strings.Contains(negTarget, "format") && strings.Contains(posTarget, "format")) {
+				collision = true
+			}
+
+			if collision {
+				negRat := neg.RuleRationale
+				if negRat == "" {
+					negRat = "Security & Global Policy"
+				}
+				posRat := pos.RuleRationale
+				if posRat == "" {
+					posRat = "User Style Preference"
+				}
+
+				notice := fmt.Sprintf("⚠️ RULE RATIONALE CONFRONTATION RESOLVED: Negative restriction '%s' (Rationale: %s, Scope: %s) supersedes positive directive '%s' (Rationale: %s, Scope: %s).",
+					neg.TargetID, negRat, neg.RuleContext, pos.TargetID, posRat, pos.RuleContext)
+				notices = append(notices, notice)
+			}
+		}
+	}
+
+	return strings.Join(notices, "\n")
+}
+
+

@@ -320,5 +320,39 @@ func TestTurnCountBoundConstraints(t *testing.T) {
 	}
 }
 
+func TestRuleRationaleConfrontation(t *testing.T) {
+	links := []memory.SemanticLink{
+		{
+			SourceID:       "sys-security",
+			TargetID:       "constraint-no-token",
+			Relationship:   "has_constraint",
+			ConstraintType: "negative",
+			RuleContext:    "global",
+			RuleRationale:  "Security & Access Governance",
+		},
+		{
+			SourceID:       "user-bob",
+			TargetID:       "rule-verbose-logging",
+			Relationship:   "is_preference",
+			ConstraintType: "positive",
+			RuleContext:    "user_preference",
+			RuleRationale:  "API Endpoint Debugging",
+		},
+	}
+
+	diag := ConfrontRuleRationales(links)
+	if diag == "" {
+		t.Fatalf("Expected confrontation diagnostic, got empty string")
+	}
+
+	if !strings.Contains(diag, "constraint-no-token") || !strings.Contains(diag, "rule-verbose-logging") {
+		t.Errorf("Diagnostic missing rule IDs: %s", diag)
+	}
+	if !strings.Contains(diag, "Security & Access Governance") || !strings.Contains(diag, "API Endpoint Debugging") {
+		t.Errorf("Diagnostic missing rationales: %s", diag)
+	}
+}
+
+
 
 
