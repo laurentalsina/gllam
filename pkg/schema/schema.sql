@@ -44,7 +44,8 @@ CREATE TABLE IF NOT EXISTS semantic_links (
     valid_from TEXT NOT NULL,             -- Unix timestamp string OR 'temporal_note'
     valid_until TEXT,                     -- Unix timestamp string OR 'temporal_note' (NULL = currently active)
     temporal_anchor_id TEXT,              -- Grounded node ID reference for relative timing (e.g. 'event-db-migration')
-    temporal_relation TEXT,               -- 'before', 'after', 'during', 'co_occurs', 'causes'
+    temporal_relation TEXT,               -- Allen Interval Algebra: 'before', 'after', 'equals', 'overlaps', 'during', 'contains', 'starts', 'finishes', 'meets'
+
     temporal_note TEXT,                   -- Qualitative phrase describing imprecise timestamp
     updated_at INTEGER NOT NULL,
     PRIMARY KEY (source_id, target_id, relationship),

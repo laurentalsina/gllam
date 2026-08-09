@@ -59,14 +59,21 @@ func CompileGraphToPDDL(nodes []memory.SemanticNode, links []memory.SemanticLink
 		// Create the PDDL initial state declaration
 		initStatements = append(initStatements, fmt.Sprintf("    (%s %s %s)", rel, src, tgt))
 
-		// If a grounded temporal anchor ID and relation exist, emit grounded temporal predicates
+		// If a grounded temporal anchor ID and relation exist, emit grounded temporal predicates using Allen's Interval Algebra
 		if link.TemporalAnchorID != "" && link.TemporalRelation != "" {
 			anchor := SanitizePDDLName(link.TemporalAnchorID)
 			tempRel := SanitizePDDLName(link.TemporalRelation)
-			if tempRel == "before" || tempRel == "happened_before" {
+			switch tempRel {
+			case "before":
 				tempRel = "happened_before"
-			} else if tempRel == "after" || tempRel == "happened_after" {
+			case "after":
 				tempRel = "happened_after"
+			case "during":
+				tempRel = "during_interval"
+			case "contains":
+				tempRel = "contains_interval"
+			case "equals", "overlaps", "starts", "finishes", "meets":
+				// keep sanitized name as predicate
 			}
 			predicates[tempRel] = true
 			if _, exists := nodeTypeMap[anchor]; !exists {
@@ -75,6 +82,7 @@ func CompileGraphToPDDL(nodes []memory.SemanticNode, links []memory.SemanticLink
 			}
 			initStatements = append(initStatements, fmt.Sprintf("    (%s %s %s)", tempRel, src, anchor))
 		}
+
 
 	}
 
