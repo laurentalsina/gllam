@@ -52,9 +52,11 @@ CREATE TABLE IF NOT EXISTS semantic_links (
     rule_context TEXT DEFAULT 'global',   -- 'user_preference' | 'session' | 'source' | 'global'
     constraint_type TEXT DEFAULT 'positive',-- 'positive' | 'negative'
     rule_rationale TEXT,                  -- Justification / 'because' clause (e.g. 'Security Compliance', 'Accessibility')
+    resolution_rationale TEXT,            -- Explanation when resolving a contradiction
     duration_turns INTEGER DEFAULT -1,    -- -1 for infinite, N for N-turn bound constraints
     remaining_turns INTEGER DEFAULT -1,   -- Remaining turns before automatic expiration
     updated_at INTEGER NOT NULL,
+
 
 
     PRIMARY KEY (source_id, target_id, relationship),

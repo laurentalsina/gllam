@@ -82,7 +82,7 @@ func (e *GllamEngine) RouteAndAssemble(ctx context.Context, userPrompt string, e
                 nodes = append(nodes, node)
             }
             query := `
-                SELECT source_id, target_id, relationship, caveats, valid_from, valid_until, temporal_anchor_id, temporal_relation, temporal_offset_seconds, temporal_granularity, temporal_note, origin_source_id, rule_context, constraint_type, rule_rationale, updated_at
+                SELECT source_id, target_id, relationship, caveats, valid_from, valid_until, temporal_anchor_id, temporal_relation, temporal_offset_seconds, temporal_granularity, temporal_note, origin_source_id, rule_context, constraint_type, rule_rationale, resolution_rationale, duration_turns, remaining_turns, updated_at
                 FROM semantic_links
                 WHERE valid_until IS NULL AND (source_id = ? OR target_id = ?)
                 LIMIT 15`
@@ -94,9 +94,10 @@ func (e *GllamEngine) RouteAndAssemble(ctx context.Context, userPrompt string, e
 
             for rows.Next() {
                 var link memory.SemanticLink
-                var anchorID, tempRel, tempGran, tempNote, origSource, rCtx, cType, ratVal sql.NullString
+                var anchorID, tempRel, tempGran, tempNote, origSource, rCtx, cType, ratVal, resRatVal sql.NullString
+                var durTurns, remTurns sql.NullInt64
                 if err := rows.Scan(&link.SourceID, &link.TargetID, &link.Relationship, &link.Caveats,
-                    &link.ValidFrom, &link.ValidUntil, &anchorID, &tempRel, &link.TemporalOffsetSeconds, &tempGran, &tempNote, &origSource, &rCtx, &cType, &ratVal, &link.UpdatedAt); err != nil {
+                    &link.ValidFrom, &link.ValidUntil, &anchorID, &tempRel, &link.TemporalOffsetSeconds, &tempGran, &tempNote, &origSource, &rCtx, &cType, &ratVal, &resRatVal, &durTurns, &remTurns, &link.UpdatedAt); err != nil {
                     rows.Close()
                     return nil, fmt.Errorf("failed to scan link: %w", err)
                 }
@@ -124,8 +125,22 @@ func (e *GllamEngine) RouteAndAssemble(ctx context.Context, userPrompt string, e
                 if ratVal.Valid {
                     link.RuleRationale = ratVal.String
                 }
+                if resRatVal.Valid {
+                    link.ResolutionRationale = resRatVal.String
+                }
+                if durTurns.Valid {
+                    link.DurationTurns = durTurns.Int64
+                } else {
+                    link.DurationTurns = -1
+                }
+                if remTurns.Valid {
+                    link.RemainingTurns = remTurns.Int64
+                } else {
+                    link.RemainingTurns = -1
+                }
                 links = append(links, link)
             }
+
 
 
 
