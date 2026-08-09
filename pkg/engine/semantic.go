@@ -1314,6 +1314,120 @@ func ResolveSpatialContainment(nodes []memory.SemanticNode, links []memory.Seman
 	return locations
 }
 
+// FormatSalienceAnchoredSummary builds a ground-truth anchored summary (Trap 1, 2, 4, 5)
+// preserving exact entity IDs, active relationships, hard temporal boundaries, and global user directives.
+func FormatSalienceAnchoredSummary(nodes []memory.SemanticNode, links []memory.SemanticLink, episodes []memory.EpisodicSummary) string {
+	// 1. Filter out obsolete state links (Trap 2 - Knowledge Update Active State Filter)
+	activeLinks := FilterActiveSummaryFacts(links)
+
+	// 2. Extract global user preferences & negative constraints (Trap 5)
+	globalDirectives := PreserveGlobalDirectives(activeLinks)
+
+	// 3. Compute node salience degree scores
+	degreeMap := make(map[string]int)
+	for _, l := range activeLinks {
+		degreeMap[l.SourceID]++
+		degreeMap[l.TargetID]++
+	}
+
+	var sb strings.Builder
+	sb.WriteString("=== GROUND-TRUTH ANCHORED SUMMARY ===\n")
+
+	if globalDirectives != "" {
+		sb.WriteString("--- GLOBAL DIRECTIVES & RULES ---\n")
+		sb.WriteString(globalDirectives)
+		sb.WriteString("\n")
+	}
+
+	sb.WriteString("--- SALIENT GROUND-TRUTH ENTITIES & STATES ---\n")
+	for _, n := range nodes {
+		deg := degreeMap[n.ID]
+		salienceScore := float64(deg) / 10.0
+		if salienceScore > 1.0 {
+			salienceScore = 1.0
+		}
+
+		if deg >= 1 || n.ContextPrompt != "" {
+			sb.WriteString(fmt.Sprintf("• Entity: %s (ID: %s, Type: %s, Salience: %.2f)\n", n.Name, n.ID, n.Type, salienceScore))
+			if n.ContextPrompt != "" {
+				sb.WriteString(fmt.Sprintf("  Context: %s\n", n.ContextPrompt))
+			}
+		}
+	}
+
+	sb.WriteString("\n--- ACTIVE FACTUAL RELATIONSHIPS & TEMPORAL BOUNDS ---\n")
+	for _, l := range activeLinks {
+		tempStr := ""
+		if l.TemporalRelation != "" || l.TemporalAnchorID != "" {
+			tempStr = fmt.Sprintf(" [Timing: %s %s offset %ds]", l.TemporalRelation, l.TemporalAnchorID, l.TemporalOffsetSeconds)
+		}
+		turnStr := ""
+		if l.RemainingTurns > 0 {
+			turnStr = fmt.Sprintf(" [Turns Remaining: %d/%d]", l.RemainingTurns, l.DurationTurns)
+		}
+		caveatStr := ""
+		if l.Caveats != "" {
+			caveatStr = fmt.Sprintf(" (Caveat: %s)", l.Caveats)
+		}
+
+		sb.WriteString(fmt.Sprintf("• %s --(%s)--> %s%s%s%s\n", l.SourceID, l.Relationship, l.TargetID, caveatStr, tempStr, turnStr))
+	}
+
+	if len(episodes) > 0 {
+		sb.WriteString("\n--- EPISODIC TIMELINE SUMMARY ---\n")
+		for _, ep := range episodes {
+			sb.WriteString(fmt.Sprintf("• Episode %s: %s\n", ep.ID, ep.SummaryText))
+		}
+	}
+
+	return sb.String()
+}
+
+// FilterActiveSummaryFacts filters out links where valid_until IS NOT NULL (Trap 2).
+func FilterActiveSummaryFacts(links []memory.SemanticLink) []memory.SemanticLink {
+	var active []memory.SemanticLink
+	for _, l := range links {
+		if l.ValidUntil == nil || *l.ValidUntil == "" {
+			active = append(active, l)
+		}
+	}
+	return active
+}
+
+// PreserveGlobalDirectives extracts user_preference and negative constraint rules (Trap 5).
+func PreserveGlobalDirectives(links []memory.SemanticLink) string {
+	var directives []string
+	for _, l := range links {
+		if l.RuleContext == "user_preference" || l.ConstraintType == "negative" || l.Relationship == "is_preference" {
+			directive := fmt.Sprintf("• Rule (%s/%s): %s --(%s)--> %s", l.RuleContext, l.ConstraintType, l.SourceID, l.Relationship, l.TargetID)
+			if l.Caveats != "" {
+				directive += fmt.Sprintf(" [Rationale: %s]", l.Caveats)
+			}
+			directives = append(directives, directive)
+		}
+	}
+	return strings.Join(directives, "\n")
+}
+
+// ExtractProceduralWorkflow detects repeated operational step patterns and persists a reusable procedural recipe (Trap 3).
+func (e *GllamEngine) ExtractProceduralWorkflow(ctx context.Context, name string, triggerContext string, instructions string, feedbackRules string) error {
+	now := time.Now().Unix()
+	taskType := strings.ToLower(strings.ReplaceAll(name, " ", "_"))
+	query := `
+		INSERT INTO procedural_knowledge (id, task_type, scope, trigger_context, instructions, user_feedback_rules, times_applied, is_highly_helpful, version, updated_at)
+		VALUES (?, ?, 'external', ?, ?, ?, 1, 1, 1, ?)
+		ON CONFLICT(task_type) DO UPDATE SET instructions = excluded.instructions, times_applied = times_applied + 1, updated_at = excluded.updated_at`
+
+	id := fmt.Sprintf("proc-%s", strings.ToLower(strings.ReplaceAll(name, " ", "-")))
+	_, err := e.db.ExecContext(ctx, query, id, taskType, triggerContext, instructions, feedbackRules, now)
+	if err != nil {
+		return fmt.Errorf("failed to insert procedural workflow %s: %w", name, err)
+	}
+	return nil
+}
+
+
+
 
 
 
