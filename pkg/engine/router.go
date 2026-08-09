@@ -111,9 +111,18 @@ func (e *GllamEngine) RouteAndAssemble(ctx context.Context, userPrompt string, e
 
 
         }
-        ctxResult.SemanticLinks = links
-        ctxResult.SemanticNodes = nodes
+
+        // Perform 2-hop temporal graph expansion to capture full transitive chains (A -> B -> C)
+        expandedNodes, expandedLinks, err := e.ExpandTemporalNeighbors(ctx, nodes, links, 2)
+        if err == nil {
+            ctxResult.SemanticNodes = expandedNodes
+            ctxResult.SemanticLinks = expandedLinks
+        } else {
+            ctxResult.SemanticLinks = links
+            ctxResult.SemanticNodes = nodes
+        }
     }
+
 
     // Append relevant episodic summaries
     var episodes []memory.EpisodicSummary

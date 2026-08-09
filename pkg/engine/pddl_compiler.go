@@ -152,8 +152,20 @@ func CompileGraphToPDDL(nodes []memory.SemanticNode, links []memory.SemanticLink
 func ExtractPDDLGoal(userPrompt string, nodes []memory.SemanticNode, links []memory.SemanticLink) string {
 	promptLower := strings.ToLower(userPrompt)
 
-	// 1. Check for temporal event ordering queries ("before", "after", "sequence", "order")
+	// 1. Entity name and ID matching against prompt
+	matchedNodes := matchQueryEntities(userPrompt, nodes)
+
+	// 2. Check for temporal event ordering queries ("before", "after", "sequence", "order")
 	if strings.Contains(promptLower, "before") || strings.Contains(promptLower, "after") || strings.Contains(promptLower, "sequence") || strings.Contains(promptLower, "order") {
+		// Prefer matched nodes if at least two were ground-matched in prompt
+		if len(matchedNodes) >= 2 {
+			if strings.Contains(promptLower, "after") && !strings.Contains(promptLower, "before") {
+				return fmt.Sprintf("(and (verified_sequence %s %s))", matchedNodes[1], matchedNodes[0])
+			}
+			return fmt.Sprintf("(and (verified_sequence %s %s))", matchedNodes[0], matchedNodes[1])
+		}
+
+		// Fallback to event nodes in retrieved context
 		var eventIDs []string
 		for _, n := range nodes {
 			if strings.ToLower(n.Type) == memory.NodeTypeEvent {
@@ -165,14 +177,14 @@ func ExtractPDDLGoal(userPrompt string, nodes []memory.SemanticNode, links []mem
 		}
 	}
 
-	// 2. Check for contradiction nodes
+	// 3. Check for contradiction nodes
 	for _, n := range nodes {
 		if strings.ToLower(n.Type) == memory.NodeTypeContradiction {
 			return fmt.Sprintf("(and (resolved %s))", SanitizePDDLName(n.ID))
 		}
 	}
 
-	// 3. Fallback to verifying the primary retrieved link relationship
+	// 4. Fallback to verifying the primary retrieved link relationship
 	if len(links) > 0 {
 		rel := SanitizePDDLName(links[0].Relationship)
 		src := SanitizePDDLName(links[0].SourceID)
@@ -182,5 +194,29 @@ func ExtractPDDLGoal(userPrompt string, nodes []memory.SemanticNode, links []mem
 
 	return "(and )"
 }
+
+// matchQueryEntities matches substrings of node names and IDs within the prompt text
+func matchQueryEntities(userPrompt string, nodes []memory.SemanticNode) []string {
+	promptLower := strings.ToLower(userPrompt)
+	var matched []string
+	matchedMap := make(map[string]bool)
+
+	for _, n := range nodes {
+		sanitizedID := SanitizePDDLName(n.ID)
+		nameLower := strings.ToLower(n.Name)
+		idLower := strings.ToLower(n.ID)
+
+		if (nameLower != "" && strings.Contains(promptLower, nameLower)) ||
+			(idLower != "" && strings.Contains(promptLower, idLower)) {
+			if !matchedMap[sanitizedID] {
+				matchedMap[sanitizedID] = true
+				matched = append(matched, sanitizedID)
+			}
+		}
+	}
+
+	return matched
+}
+
 
 

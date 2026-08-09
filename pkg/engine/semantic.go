@@ -279,5 +279,103 @@ func (e *GllamEngine) GetActiveLinksAtTime(ctx context.Context, timestamp int64)
     return links, rows.Err()
 }
 
+// ExpandTemporalNeighbors performs N-hop traversal over temporal links and temporal anchors
+// to ensure complete transitive ordering chains (e.g. A -> B -> C) are loaded into context.
+func (e *GllamEngine) ExpandTemporalNeighbors(ctx context.Context, seedNodes []memory.SemanticNode, existingLinks []memory.SemanticLink, maxHops int) ([]memory.SemanticNode, []memory.SemanticLink, error) {
+	nodeMap := make(map[string]memory.SemanticNode)
+	linkMap := make(map[string]memory.SemanticLink)
+
+	for _, n := range seedNodes {
+		nodeMap[n.ID] = n
+	}
+	for _, l := range existingLinks {
+		key := fmt.Sprintf("%s-%s-%s", l.SourceID, l.TargetID, l.Relationship)
+		linkMap[key] = l
+	}
+
+	visitedNodes := make(map[string]bool)
+	frontier := make([]string, 0, len(seedNodes))
+	for _, n := range seedNodes {
+		frontier = append(frontier, n.ID)
+		visitedNodes[n.ID] = true
+	}
+
+	for hop := 0; hop < maxHops && len(frontier) > 0; hop++ {
+		var nextFrontier []string
+
+		for _, currentID := range frontier {
+			query := `
+				SELECT source_id, target_id, relationship, caveats, valid_from, valid_until, temporal_anchor_id, temporal_relation, temporal_note, updated_at
+				FROM semantic_links
+				WHERE source_id = ? OR target_id = ? OR temporal_anchor_id = ?`
+
+			rows, err := e.dbRO.QueryContext(ctx, query, currentID, currentID, currentID)
+			if err != nil {
+				continue
+			}
+
+			for rows.Next() {
+				var l memory.SemanticLink
+				var anchorID, tempRel, tempNote sql.NullString
+				if err := rows.Scan(&l.SourceID, &l.TargetID, &l.Relationship, &l.Caveats, &l.ValidFrom, &l.ValidUntil, &anchorID, &tempRel, &tempNote, &l.UpdatedAt); err != nil {
+					continue
+				}
+				if anchorID.Valid {
+					l.TemporalAnchorID = anchorID.String
+				}
+				if tempRel.Valid {
+					l.TemporalRelation = tempRel.String
+				}
+				if tempNote.Valid {
+					l.TemporalNote = tempNote.String
+				}
+
+				key := fmt.Sprintf("%s-%s-%s", l.SourceID, l.TargetID, l.Relationship)
+				linkMap[key] = l
+
+				// Collect connected neighbor node IDs
+				neighbors := []string{l.SourceID, l.TargetID}
+				if l.TemporalAnchorID != "" {
+					neighbors = append(neighbors, l.TemporalAnchorID)
+				}
+
+				for _, neighborID := range neighbors {
+					if !visitedNodes[neighborID] {
+						visitedNodes[neighborID] = true
+						nextFrontier = append(nextFrontier, neighborID)
+
+						// Fetch Node metadata if missing
+						var node memory.SemanticNode
+						var ctxPrompt sql.NullString
+						nodeQuery := `SELECT id, name, type, context_prompt FROM semantic_nodes WHERE id = ?`
+						if err := e.dbRO.QueryRowContext(ctx, nodeQuery, neighborID).Scan(&node.ID, &node.Name, &node.Type, &ctxPrompt); err == nil {
+							if ctxPrompt.Valid {
+								node.ContextPrompt = ctxPrompt.String
+							}
+							nodeMap[node.ID] = node
+						}
+					}
+				}
+			}
+			rows.Close()
+		}
+
+		frontier = nextFrontier
+	}
+
+	resultNodes := make([]memory.SemanticNode, 0, len(nodeMap))
+	for _, n := range nodeMap {
+		resultNodes = append(resultNodes, n)
+	}
+
+	resultLinks := make([]memory.SemanticLink, 0, len(linkMap))
+	for _, l := range linkMap {
+		resultLinks = append(resultLinks, l)
+	}
+
+	return resultNodes, resultLinks, nil
+}
+
+
 
 
