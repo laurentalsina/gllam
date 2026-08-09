@@ -117,8 +117,8 @@ func (e *GllamEngine) AddEdge(ctx context.Context, link memory.SemanticLink) err
 
 
     insertQuery := `
-        INSERT INTO semantic_links (source_id, target_id, relationship, caveats, valid_from, valid_until, temporal_anchor_id, temporal_relation, temporal_offset_seconds, temporal_granularity, temporal_note, origin_source_id, rule_context, constraint_type, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO semantic_links (source_id, target_id, relationship, caveats, valid_from, valid_until, temporal_anchor_id, temporal_relation, temporal_offset_seconds, temporal_granularity, temporal_note, origin_source_id, rule_context, constraint_type, rule_rationale, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(source_id, target_id, relationship) DO UPDATE SET 
             caveats = excluded.caveats,
             valid_from = excluded.valid_from,
@@ -131,9 +131,10 @@ func (e *GllamEngine) AddEdge(ctx context.Context, link memory.SemanticLink) err
             origin_source_id = excluded.origin_source_id,
             rule_context = excluded.rule_context,
             constraint_type = excluded.constraint_type,
+            rule_rationale = excluded.rule_rationale,
             updated_at = excluded.updated_at`
 
-    var anchorID, tempRel, tempNote, origSource sql.NullString
+    var anchorID, tempRel, tempNote, origSource, rationaleVal sql.NullString
     if link.TemporalAnchorID != "" {
         anchorID = sql.NullString{String: link.TemporalAnchorID, Valid: true}
     }
@@ -146,10 +147,14 @@ func (e *GllamEngine) AddEdge(ctx context.Context, link memory.SemanticLink) err
     if link.OriginSourceID != "" {
         origSource = sql.NullString{String: link.OriginSourceID, Valid: true}
     }
+    if link.RuleRationale != "" {
+        rationaleVal = sql.NullString{String: link.RuleRationale, Valid: true}
+    }
 
     _, err = e.db.ExecContext(ctx, insertQuery,
         link.SourceID, link.TargetID, link.Relationship, link.Caveats,
-        link.ValidFrom, link.ValidUntil, anchorID, tempRel, link.TemporalOffsetSeconds, gran, tempNote, origSource, ruleCtx, cType, now)
+        link.ValidFrom, link.ValidUntil, anchorID, tempRel, link.TemporalOffsetSeconds, gran, tempNote, origSource, ruleCtx, cType, rationaleVal, now)
+
 
 
 
@@ -297,7 +302,7 @@ func (e *GllamEngine) SearchSimilarNodes(ctx context.Context, queryText string, 
 // It dynamically resolves temporal_anchor_id timestamps when valid_from or valid_until is "temporal_note".
 func (e *GllamEngine) GetActiveLinksAtTime(ctx context.Context, timestamp int64) ([]memory.SemanticLink, error) {
     query := `
-        SELECT source_id, target_id, relationship, caveats, valid_from, valid_until, temporal_anchor_id, temporal_relation, temporal_offset_seconds, temporal_granularity, temporal_note, origin_source_id, rule_context, constraint_type, updated_at
+        SELECT source_id, target_id, relationship, caveats, valid_from, valid_until, temporal_anchor_id, temporal_relation, temporal_offset_seconds, temporal_granularity, temporal_note, origin_source_id, rule_context, constraint_type, rule_rationale, updated_at
         FROM semantic_links
         WHERE (valid_from = 'temporal_note' OR CAST(valid_from AS INTEGER) <= ?) 
           AND (valid_until IS NULL OR valid_until = 'temporal_note' OR CAST(valid_until AS INTEGER) > ?)
@@ -312,8 +317,8 @@ func (e *GllamEngine) GetActiveLinksAtTime(ctx context.Context, timestamp int64)
     var candidates []memory.SemanticLink
     for rows.Next() {
         var l memory.SemanticLink
-        var anchorID, tempRel, tempGran, tempNote, origSource, rCtx, cType sql.NullString
-        if err := rows.Scan(&l.SourceID, &l.TargetID, &l.Relationship, &l.Caveats, &l.ValidFrom, &l.ValidUntil, &anchorID, &tempRel, &l.TemporalOffsetSeconds, &tempGran, &tempNote, &origSource, &rCtx, &cType, &l.UpdatedAt); err != nil {
+        var anchorID, tempRel, tempGran, tempNote, origSource, rCtx, cType, ratVal sql.NullString
+        if err := rows.Scan(&l.SourceID, &l.TargetID, &l.Relationship, &l.Caveats, &l.ValidFrom, &l.ValidUntil, &anchorID, &tempRel, &l.TemporalOffsetSeconds, &tempGran, &tempNote, &origSource, &rCtx, &cType, &ratVal, &l.UpdatedAt); err != nil {
             return nil, fmt.Errorf("failed to scan link: %w", err)
         }
         if anchorID.Valid {
@@ -338,6 +343,9 @@ func (e *GllamEngine) GetActiveLinksAtTime(ctx context.Context, timestamp int64)
         }
         if cType.Valid {
             l.ConstraintType = cType.String
+        }
+        if ratVal.Valid {
+            l.RuleRationale = ratVal.String
         }
         candidates = append(candidates, l)
     }
@@ -421,7 +429,7 @@ func (e *GllamEngine) ExpandTemporalNeighbors(ctx context.Context, seedNodes []m
 
 		for _, currentID := range frontier {
 			query := `
-				SELECT source_id, target_id, relationship, caveats, valid_from, valid_until, temporal_anchor_id, temporal_relation, temporal_offset_seconds, temporal_granularity, temporal_note, origin_source_id, rule_context, constraint_type, updated_at
+				SELECT source_id, target_id, relationship, caveats, valid_from, valid_until, temporal_anchor_id, temporal_relation, temporal_offset_seconds, temporal_granularity, temporal_note, origin_source_id, rule_context, constraint_type, rule_rationale, updated_at
 				FROM semantic_links
 				WHERE source_id = ? OR target_id = ? OR temporal_anchor_id = ?`
 
@@ -432,8 +440,8 @@ func (e *GllamEngine) ExpandTemporalNeighbors(ctx context.Context, seedNodes []m
 
 			for rows.Next() {
 				var l memory.SemanticLink
-				var anchorID, tempRel, tempGran, tempNote, origSource, rCtx, cType sql.NullString
-				if err := rows.Scan(&l.SourceID, &l.TargetID, &l.Relationship, &l.Caveats, &l.ValidFrom, &l.ValidUntil, &anchorID, &tempRel, &l.TemporalOffsetSeconds, &tempGran, &tempNote, &origSource, &rCtx, &cType, &l.UpdatedAt); err != nil {
+				var anchorID, tempRel, tempGran, tempNote, origSource, rCtx, cType, ratVal sql.NullString
+				if err := rows.Scan(&l.SourceID, &l.TargetID, &l.Relationship, &l.Caveats, &l.ValidFrom, &l.ValidUntil, &anchorID, &tempRel, &l.TemporalOffsetSeconds, &tempGran, &tempNote, &origSource, &rCtx, &cType, &ratVal, &l.UpdatedAt); err != nil {
 					continue
 				}
 				if anchorID.Valid {
@@ -459,9 +467,9 @@ func (e *GllamEngine) ExpandTemporalNeighbors(ctx context.Context, seedNodes []m
 				if cType.Valid {
 					l.ConstraintType = cType.String
 				}
-
-
-
+				if ratVal.Valid {
+					l.RuleRationale = ratVal.String
+				}
 
 				key := fmt.Sprintf("%s-%s-%s", l.SourceID, l.TargetID, l.Relationship)
 				linkMap[key] = l
@@ -492,7 +500,6 @@ func (e *GllamEngine) ExpandTemporalNeighbors(ctx context.Context, seedNodes []m
 			}
 			rows.Close()
 		}
-
 		frontier = nextFrontier
 	}
 
@@ -511,14 +518,13 @@ func (e *GllamEngine) ExpandTemporalNeighbors(ctx context.Context, seedNodes []m
 // GetActiveConstraintsForSource retrieves active rules, preferences, and constraints for a given source_id or rule_context
 func (e *GllamEngine) GetActiveConstraintsForSource(ctx context.Context, sourceID string, targetContext string) ([]memory.SemanticLink, error) {
 	query := `
-		SELECT source_id, target_id, relationship, caveats, valid_from, valid_until, temporal_anchor_id, temporal_relation, temporal_offset_seconds, temporal_granularity, temporal_note, origin_source_id, rule_context, constraint_type, updated_at
+		SELECT source_id, target_id, relationship, caveats, valid_from, valid_until, temporal_anchor_id, temporal_relation, temporal_offset_seconds, temporal_granularity, temporal_note, origin_source_id, rule_context, constraint_type, rule_rationale, updated_at
 		FROM semantic_links
 		WHERE valid_until IS NULL 
 		  AND relationship NOT IN ('supersedes_rule', 'conflicting_claim', 'has_unresolved_conflict')
 		  AND (relationship IN ('has_constraint', 'is_preference', 'applies_rule') OR target_id LIKE 'rule%' OR target_id LIKE 'constraint%')
 		  AND (origin_source_id = ? OR source_id = ? OR rule_context = 'global' OR rule_context = ?)
 		ORDER BY valid_from ASC`
-
 
 	rows, err := e.dbRO.QueryContext(ctx, query, sourceID, sourceID, targetContext)
 	if err != nil {
@@ -529,8 +535,8 @@ func (e *GllamEngine) GetActiveConstraintsForSource(ctx context.Context, sourceI
 	var links []memory.SemanticLink
 	for rows.Next() {
 		var l memory.SemanticLink
-		var anchorID, tempRel, tempGran, tempNote, origSource, rCtx, cType sql.NullString
-		if err := rows.Scan(&l.SourceID, &l.TargetID, &l.Relationship, &l.Caveats, &l.ValidFrom, &l.ValidUntil, &anchorID, &tempRel, &l.TemporalOffsetSeconds, &tempGran, &tempNote, &origSource, &rCtx, &cType, &l.UpdatedAt); err != nil {
+		var anchorID, tempRel, tempGran, tempNote, origSource, rCtx, cType, ratVal sql.NullString
+		if err := rows.Scan(&l.SourceID, &l.TargetID, &l.Relationship, &l.Caveats, &l.ValidFrom, &l.ValidUntil, &anchorID, &tempRel, &l.TemporalOffsetSeconds, &tempGran, &tempNote, &origSource, &rCtx, &cType, &ratVal, &l.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("failed to scan constraint link: %w", err)
 		}
 		if anchorID.Valid {
@@ -554,10 +560,14 @@ func (e *GllamEngine) GetActiveConstraintsForSource(ctx context.Context, sourceI
 		if cType.Valid {
 			l.ConstraintType = cType.String
 		}
+		if ratVal.Valid {
+			l.RuleRationale = ratVal.String
+		}
 		links = append(links, l)
 	}
 	return links, rows.Err()
 }
+
 
 // RevokeOrSupersedeRule revokes a rule/constraint or marks it as superseded by a newer rule ID
 func (e *GllamEngine) RevokeOrSupersedeRule(ctx context.Context, oldRuleID string, newRuleID string) error {

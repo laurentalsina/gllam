@@ -78,7 +78,7 @@ func (e *GllamEngine) RouteAndAssemble(ctx context.Context, userPrompt string, e
                 nodes = append(nodes, node)
             }
             query := `
-                SELECT source_id, target_id, relationship, caveats, valid_from, valid_until, temporal_anchor_id, temporal_relation, temporal_offset_seconds, temporal_granularity, temporal_note, origin_source_id, rule_context, constraint_type, updated_at
+                SELECT source_id, target_id, relationship, caveats, valid_from, valid_until, temporal_anchor_id, temporal_relation, temporal_offset_seconds, temporal_granularity, temporal_note, origin_source_id, rule_context, constraint_type, rule_rationale, updated_at
                 FROM semantic_links
                 WHERE valid_until IS NULL AND (source_id = ? OR target_id = ?)
                 LIMIT 15`
@@ -90,9 +90,9 @@ func (e *GllamEngine) RouteAndAssemble(ctx context.Context, userPrompt string, e
 
             for rows.Next() {
                 var link memory.SemanticLink
-                var anchorID, tempRel, tempGran, tempNote, origSource, rCtx, cType sql.NullString
+                var anchorID, tempRel, tempGran, tempNote, origSource, rCtx, cType, ratVal sql.NullString
                 if err := rows.Scan(&link.SourceID, &link.TargetID, &link.Relationship, &link.Caveats,
-                    &link.ValidFrom, &link.ValidUntil, &anchorID, &tempRel, &link.TemporalOffsetSeconds, &tempGran, &tempNote, &origSource, &rCtx, &cType, &link.UpdatedAt); err != nil {
+                    &link.ValidFrom, &link.ValidUntil, &anchorID, &tempRel, &link.TemporalOffsetSeconds, &tempGran, &tempNote, &origSource, &rCtx, &cType, &ratVal, &link.UpdatedAt); err != nil {
                     rows.Close()
                     return nil, fmt.Errorf("failed to scan link: %w", err)
                 }
@@ -117,8 +117,12 @@ func (e *GllamEngine) RouteAndAssemble(ctx context.Context, userPrompt string, e
                 if cType.Valid {
                     link.ConstraintType = cType.String
                 }
+                if ratVal.Valid {
+                    link.RuleRationale = ratVal.String
+                }
                 links = append(links, link)
             }
+
 
 
             rows.Close()

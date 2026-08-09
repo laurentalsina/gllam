@@ -57,7 +57,9 @@ type SemanticLink struct {
     OriginSourceID        string  `json:"origin_source_id"`       // FK to semantic_nodes(id) for human/agent/system origin
     RuleContext           string  `json:"rule_context"`           // "user_preference" | "session" | "source" | "global"
     ConstraintType        string  `json:"constraint_type"`         // "positive" | "negative"
+    RuleRationale         string  `json:"rule_rationale"`          // Justification / "because" clause
     UpdatedAt             int64   `json:"updated_at"`
+
 }
 
 

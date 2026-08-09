@@ -51,7 +51,9 @@ CREATE TABLE IF NOT EXISTS semantic_links (
     origin_source_id TEXT,                -- Origin source node ID (human, agent, system)
     rule_context TEXT DEFAULT 'global',   -- 'user_preference' | 'session' | 'source' | 'global'
     constraint_type TEXT DEFAULT 'positive',-- 'positive' | 'negative'
+    rule_rationale TEXT,                  -- Justification / 'because' clause (e.g. 'Security Compliance', 'Accessibility')
     updated_at INTEGER NOT NULL,
+
     PRIMARY KEY (source_id, target_id, relationship),
     FOREIGN KEY (source_id) REFERENCES semantic_nodes(id),
     FOREIGN KEY (target_id) REFERENCES semantic_nodes(id),
