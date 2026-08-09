@@ -11,9 +11,9 @@ import (
 	"github.com/laurentalsina/gllam/pkg/memory"
 )
 
-// CompactNodeEdgeCaveats ranks and compacts edge caveats for a specific node when total caveats exceed maxInline.
+// CompactNodeCaveats ranks and compacts node caveats for a specific entity node when total caveats exceed maxInline.
 // High-priority active caveats remain inline, while older/lower-trust caveats are synthesized into a node-level CaveatSummary.
-func (e *GllamEngine) CompactNodeEdgeCaveats(ctx context.Context, nodeID string, maxInline int) (string, int, int, error) {
+func (e *GllamEngine) CompactNodeCaveats(ctx context.Context, nodeID string, maxInline int) (string, int, int, error) {
 	if maxInline <= 0 {
 		maxInline = 5
 	}
@@ -94,7 +94,7 @@ func (e *GllamEngine) CompactNodeEdgeCaveats(ctx context.Context, nodeID string,
 		caveatTexts = append(caveatTexts, fmt.Sprintf("[%s -> %s (%s)]: %s", c.link.SourceID, c.link.TargetID, c.link.Relationship, c.link.Caveats))
 	}
 
-	summaryText := fmt.Sprintf("Compacted Edge Caveat Epoch (%d historical items): %s", len(compacted), strings.Join(caveatTexts, "; "))
+	summaryText := fmt.Sprintf("Compacted Node Caveat Epoch (%d historical items): %s", len(compacted), strings.Join(caveatTexts, "; "))
 
 	// Update semantic_nodes caveat_summary
 	updateQuery := `UPDATE semantic_nodes SET caveat_summary = ? WHERE id = ?`
@@ -105,7 +105,7 @@ func (e *GllamEngine) CompactNodeEdgeCaveats(ctx context.Context, nodeID string,
 	return summaryText, len(retained), len(compacted), nil
 }
 
-// BatchCompactHubCaveats scans for hub entity nodes exceeding caveatThreshold and runs CompactNodeEdgeCaveats.
+// BatchCompactHubCaveats scans for hub entity nodes exceeding caveatThreshold and runs CompactNodeCaveats.
 func (e *GllamEngine) BatchCompactHubCaveats(ctx context.Context, caveatThreshold int, maxInline int) (int, error) {
 	if caveatThreshold <= 0 {
 		caveatThreshold = 10
@@ -138,10 +138,11 @@ func (e *GllamEngine) BatchCompactHubCaveats(ctx context.Context, caveatThreshol
 
 	compactedHubs := 0
 	for _, id := range hubIDs {
-		if _, _, pruned, err := e.CompactNodeEdgeCaveats(ctx, id, maxInline); err == nil && pruned > 0 {
+		if _, _, pruned, err := e.CompactNodeCaveats(ctx, id, maxInline); err == nil && pruned > 0 {
 			compactedHubs++
 		}
 	}
+
 
 	return compactedHubs, nil
 }

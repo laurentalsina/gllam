@@ -1,8 +1,8 @@
-# Edge Caveat Compaction & Salience Windowing Walkthrough
+# Node Caveat Compaction & Salience Windowing Walkthrough
 
 ## Summary of Completed Work
 
-We have implemented **Edge Caveat Compaction & Salience Windowing** (`CompactNodeEdgeCaveats`, `BatchCompactHubCaveats`, `caveat_summary`).
+We have implemented **Node Caveat Compaction & Salience Windowing** (`CompactNodeCaveats`, `BatchCompactHubCaveats`, `caveat_summary`).
 
 ---
 
@@ -14,9 +14,9 @@ We have implemented **Edge Caveat Compaction & Salience Windowing** (`CompactNod
 | [`pkg/memory/types.go`](file:///home/laurent/gllam/pkg/memory/types.go#L42-L51) | Added `CaveatSummary string` to `SemanticNode` struct. |
 | [`pkg/engine/engine.go`](file:///home/laurent/gllam/pkg/engine/engine.go#L220-L225) | Added schema migration for `caveat_summary` column. |
 | [`pkg/engine/semantic.go`](file:///home/laurent/gllam/pkg/engine/semantic.go) | Updated `UpsertNode` and `SELECT` queries to retrieve `caveat_summary`. |
-| [`pkg/engine/caveat_compaction.go`](file:///home/laurent/gllam/pkg/engine/caveat_compaction.go) | Added `CompactNodeEdgeCaveats` and `BatchCompactHubCaveats`. |
+| [`pkg/engine/caveat_compaction.go`](file:///home/laurent/gllam/pkg/engine/caveat_compaction.go) | Added `CompactNodeCaveats` and `BatchCompactHubCaveats`. |
 | [`pkg/engine/caveat_compaction_test.go`](file:///home/laurent/gllam/pkg/engine/caveat_compaction_test.go) | Unit test suite verifying caveat ranking, windowing, and hub compaction. |
-| [`README.md`](file:///home/laurent/gllam/README.md) | Documented Edge Caveat Compaction APIs. |
+| [`README.md`](file:///home/laurent/gllam/README.md) | Documented Node Caveat Compaction APIs. |
 
 ---
 

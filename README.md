@@ -417,21 +417,22 @@ if drift {
 }
 ```
 
-### Edge Caveat Compaction & Salience Windowing
+### Node Caveat Compaction & Salience Windowing
 
-Core enterprise hub entities (e.g. *"Auth Service"* or *"Production Database"*) accumulate hundreds of edge caveats across years of Jira tickets, causing context window bloat and confusing LLM reasoning. GLLAM implements salience windowing and edge caveat compaction:
+Core enterprise hub entities (e.g. *"Auth Service"* or *"Production Database"*) accumulate hundreds of caveats across years of Jira tickets, causing context window bloat and confusing LLM reasoning. GLLAM implements salience windowing and node caveat compaction:
 
 1. **Caveat Ranking:** Orders caveats by Active Validity (`valid_until IS NULL`), Source Trust Weight ($W_{\text{trust}}$), and Recency.
 2. **Inline Windowing (`maxInline`):** Retains Top-K (default 5) active high-trust caveats inline.
-3. **Historical Epoch Compaction (`CompactNodeEdgeCaveats`):** Synthesizes older/lower-trust edge caveats into a node-level `caveat_summary` string stored on `semantic_nodes`.
+3. **Historical Epoch Compaction (`CompactNodeCaveats`):** Synthesizes older/lower-trust caveats into a node-level `caveat_summary` string stored on `semantic_nodes`.
 
 ```go
-// Compact edge caveats for a hub entity node, retaining Top 5 inline caveats
-summaryText, retainedCount, prunedCount, err := gllam.CompactNodeEdgeCaveats(ctx, "node-auth-service", 5)
+// Compact caveats for a hub entity node, retaining Top 5 inline caveats
+summaryText, retainedCount, prunedCount, err := gllam.CompactNodeCaveats(ctx, "node-auth-service", 5)
 
 // Run batch compaction across all hub entities with > 10 caveats
 compactedHubs, err := gllam.BatchCompactHubCaveats(ctx, 10, 5)
 ```
+
 
 
 

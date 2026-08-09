@@ -52,11 +52,12 @@ func TestEdgeCaveatCompactionAndHubWindowing(t *testing.T) {
 		_ = gllam.AddEdge(ctx, link)
 	}
 
-	// 3. Run CompactNodeEdgeCaveats with maxInline = 5
-	summaryText, retainedCount, prunedCount, err := gllam.CompactNodeEdgeCaveats(ctx, "node-auth-service", 5)
+	// 3. Run CompactNodeCaveats with maxInline = 5
+	summaryText, retainedCount, prunedCount, err := gllam.CompactNodeCaveats(ctx, "node-auth-service", 5)
 	if err != nil {
-		t.Fatalf("CompactNodeEdgeCaveats failed: %v", err)
+		t.Fatalf("CompactNodeCaveats failed: %v", err)
 	}
+
 
 	if retainedCount != 5 {
 		t.Errorf("Expected 5 retained inline caveats, got %d", retainedCount)
