@@ -91,3 +91,29 @@ func (e *GllamEngine) RunTaxonomyConsolidationPass(ctx context.Context) (int, er
 	}
 	return mergedCount, nil
 }
+
+// StartTaxonomyWorker launches a background worker that periodically processes uncategorized node batches
+// and executes taxonomy consolidation passes.
+func (e *GllamEngine) StartTaxonomyWorker(ctx context.Context, interval time.Duration) {
+	if interval <= 0 {
+		interval = 5 * time.Second
+	}
+
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-e.stopTaxonomyWorker:
+				return
+			case <-ticker.C:
+				_, _ = e.ProcessUncategorizedBatch(ctx, 50)
+				_, _ = e.RunTaxonomyConsolidationPass(ctx)
+			}
+		}
+	}()
+}
+

@@ -26,7 +26,9 @@ type GllamEngine struct {
 	AllowUserGrilling     bool                               // Set false for non-interactive benchmark evaluation (e.g. BEAM)
 	stopWALManager        chan struct{}                      // Control channel for background WAL checkpoint manager
 	stopVectorWorkers     chan struct{}                      // Control channel for background vector worker pool
+	stopTaxonomyWorker    chan struct{}                      // Control channel for background taxonomy worker
 }
+
 
 
 func (e *GllamEngine) SetPlannerExecutablePath(path string) {
@@ -109,17 +111,19 @@ func NewGllamEngine(dbPath string, embedder Embedder) (*GllamEngine, error) {
 	}
 
 	engine := &GllamEngine{
-		db:                db,
-		dbRO:              dbRO,
-		embedder:          embedder,
-		SystemPrompts:     config.DefaultAgenticMemorySystemPrompts(),
-		AllowUserGrilling: true,
-		stopWALManager:    make(chan struct{}),
-		stopVectorWorkers: make(chan struct{}),
+		db:                 db,
+		dbRO:               dbRO,
+		embedder:           embedder,
+		SystemPrompts:      config.DefaultAgenticMemorySystemPrompts(),
+		AllowUserGrilling:  true,
+		stopWALManager:     make(chan struct{}),
+		stopVectorWorkers:  make(chan struct{}),
+		stopTaxonomyWorker: make(chan struct{}),
 	}
 
 	return engine, nil
 }
+
 
 
 // CheckpointWAL triggers an explicit SQLite WAL checkpoint using the specified mode ("RESTART", "TRUNCATE", "PASSIVE", or "FULL").
@@ -173,6 +177,10 @@ func (e *GllamEngine) Close() error {
 	if e.stopVectorWorkers != nil {
 		close(e.stopVectorWorkers)
 	}
+	if e.stopTaxonomyWorker != nil {
+		close(e.stopTaxonomyWorker)
+	}
+
 
 
 	// Final WAL truncation checkpoint before closing DB connections

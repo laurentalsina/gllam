@@ -218,3 +218,45 @@ func TestTaxonomyCyclePrevention(t *testing.T) {
 	}
 }
 
+func TestStartTaxonomyWorker(t *testing.T) {
+	tempDir := t.TempDir()
+	dbPath := filepath.Join(tempDir, "test_tax_worker.db")
+
+	gllam, err := NewGllamEngine(dbPath, nil)
+	if err != nil {
+		t.Fatalf("Failed to create engine: %v", err)
+	}
+	defer gllam.Close()
+
+	if err := gllam.InitSchema(); err != nil {
+		t.Fatalf("Failed to init schema: %v", err)
+	}
+
+	ctx := context.Background()
+
+	// Seed orphaned node
+	orphanedNode := memory.SemanticNode{
+		ID:            "node-postgres-test",
+		Name:          "Postgres Server",
+		Type:          memory.NodeTypeService,
+		ContextPrompt: "Relational Database Engine",
+		TaxonomyPath:  "/",
+	}
+	_ = gllam.UpsertNode(ctx, orphanedNode)
+
+	// Launch background TaxonomyWorker
+	subCtx, cancel := context.WithCancel(ctx)
+	gllam.StartTaxonomyWorker(subCtx, 30*time.Millisecond)
+
+	time.Sleep(100 * time.Millisecond)
+	cancel()
+
+	// Verify orphaned node was categorized by background TaxonomyWorker
+	var updatedPath string
+	err = gllam.dbRO.QueryRowContext(ctx, "SELECT taxonomy_path FROM semantic_nodes WHERE id = ?", "node-postgres-test").Scan(&updatedPath)
+	if err != nil || updatedPath == "/" || updatedPath == "" {
+		t.Fatalf("Expected node to be categorized by background TaxonomyWorker, got path '%s', err=%v", updatedPath, err)
+	}
+}
+
+
