@@ -81,3 +81,28 @@ func TestExtractPDDLGoalEntityDisambiguation(t *testing.T) {
 		t.Errorf("Expected goal %q, got %q", expected, goal)
 	}
 }
+
+func TestDetectTemporalCycles(t *testing.T) {
+	cyclicLinks := []memory.SemanticLink{
+		{SourceID: "event-postgres", TargetID: "event-redis", Relationship: "happened_before"},
+		{SourceID: "event-redis", TargetID: "event-postgres", Relationship: "happened_before"},
+	}
+
+	res := DetectTemporalCycles(cyclicLinks)
+	if !res.HasCycle {
+		t.Errorf("Expected cycle detection to return true for cyclic links")
+	}
+	if len(res.CycleNodes) < 2 {
+		t.Errorf("Expected cycle nodes to be populated, got %v", res.CycleNodes)
+	}
+
+	acyclicLinks := []memory.SemanticLink{
+		{SourceID: "event-a", TargetID: "event-b", Relationship: "happened_before"},
+		{SourceID: "event-b", TargetID: "event-c", Relationship: "happened_before"},
+	}
+	resAcyclic := DetectTemporalCycles(acyclicLinks)
+	if resAcyclic.HasCycle {
+		t.Errorf("Expected cycle detection to return false for acyclic links")
+	}
+}
+

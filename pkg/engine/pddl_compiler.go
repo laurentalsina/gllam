@@ -25,6 +25,9 @@ func CompileGraphToPDDL(nodes []memory.SemanticNode, links []memory.SemanticLink
 	nodeTypeMap := make(map[string]string)     // nodeID -> type
 	predicates := make(map[string]bool)
 
+	// Detect temporal cycles in graph edges
+	cycleRes := DetectTemporalCycles(links)
+
 	// Register explicit nodes
 	for _, node := range nodes {
 		sanitizedID := SanitizePDDLName(node.ID)
@@ -39,6 +42,15 @@ func CompileGraphToPDDL(nodes []memory.SemanticNode, links []memory.SemanticLink
 	}
 
 	var initStatements []string
+
+	// If temporal cycles exist, inject explicit contradiction facts into initial state
+	if cycleRes.HasCycle && len(cycleRes.CycleNodes) >= 2 {
+		predicates["has_temporal_cycle"] = true
+		c1 := cycleRes.CycleNodes[0]
+		c2 := cycleRes.CycleNodes[1]
+		initStatements = append(initStatements, fmt.Sprintf("    (has_temporal_cycle %s %s)", c1, c2))
+	}
+
 	for _, link := range links {
 		rel := SanitizePDDLName(link.Relationship)
 		src := SanitizePDDLName(link.SourceID)
@@ -310,6 +322,84 @@ func matchQueryEntities(userPrompt string, nodes []memory.SemanticNode) []string
 
 	return matched
 }
+
+type CycleResult struct {
+	HasCycle   bool
+	CycleNodes []string
+}
+
+// DetectTemporalCycles performs Depth First Search to identify directed cycles in ordering links
+func DetectTemporalCycles(links []memory.SemanticLink) CycleResult {
+	adj := make(map[string][]string)
+
+	for _, l := range links {
+		src := SanitizePDDLName(l.SourceID)
+		tgt := SanitizePDDLName(l.TargetID)
+		rel := strings.ToLower(l.Relationship)
+		tempRel := strings.ToLower(l.TemporalRelation)
+		anchor := SanitizePDDLName(l.TemporalAnchorID)
+
+		if rel == "happened_before" || tempRel == "before" {
+			targetNode := tgt
+			if anchor != "" && tempRel == "before" {
+				targetNode = anchor
+			}
+			adj[src] = append(adj[src], targetNode)
+		} else if rel == "happened_after" || tempRel == "after" {
+			targetNode := tgt
+			if anchor != "" && tempRel == "after" {
+				targetNode = anchor
+			}
+			adj[targetNode] = append(adj[targetNode], src)
+		}
+	}
+
+	visited := make(map[string]int) // 0 = unvisited, 1 = visiting (in stack), 2 = visited
+	var cycleNodes []string
+
+	var dfs func(node string, path []string) bool
+	dfs = func(node string, path []string) bool {
+		visited[node] = 1
+		currentPath := append(path, node)
+
+		for _, neighbor := range adj[node] {
+			if visited[neighbor] == 1 {
+				// Found cycle
+				cycleStartIdx := -1
+				for idx, p := range currentPath {
+					if p == neighbor {
+						cycleStartIdx = idx
+						break
+					}
+				}
+				if cycleStartIdx != -1 {
+					cycleNodes = append(cycleNodes, currentPath[cycleStartIdx:]...)
+				} else {
+					cycleNodes = append(cycleNodes, neighbor, node)
+				}
+				return true
+			} else if visited[neighbor] == 0 {
+				if dfs(neighbor, currentPath) {
+					return true
+				}
+			}
+		}
+
+		visited[node] = 2
+		return false
+	}
+
+	for node := range adj {
+		if visited[node] == 0 {
+			if dfs(node, nil) {
+				return CycleResult{HasCycle: true, CycleNodes: cycleNodes}
+			}
+		}
+	}
+
+	return CycleResult{HasCycle: false}
+}
+
 
 
 

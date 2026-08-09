@@ -166,13 +166,20 @@ func (e *GllamEngine) RouteAndAssemble(ctx context.Context, userPrompt string, e
     }
 
     if requiresPlanning {
-        // 1. Dynamic PDDL Goal Extraction
+        // 1. Detect temporal cycles in retrieved semantic links
+        cycleRes := DetectTemporalCycles(ctxResult.SemanticLinks)
+        var cycleNotice string
+        if cycleRes.HasCycle {
+            cycleNotice = fmt.Sprintf("⚠️ TIMELINE CONTRADICTION DETECTED: A cyclic ordering dependency was found between nodes: %s.\n", strings.Join(cycleRes.CycleNodes, " -> "))
+        }
+
+        // 2. Dynamic PDDL Goal Extraction
         goalPredicate := ExtractPDDLGoal(userPrompt, ctxResult.SemanticNodes, ctxResult.SemanticLinks)
 
-        // 2. Compile the retrieved graph into PDDL strings using our typed compiler
+        // 3. Compile the retrieved graph into PDDL strings using our typed compiler
         domainStr, problemStr := CompileGraphToPDDL(ctxResult.SemanticNodes, ctxResult.SemanticLinks, goalPredicate, ctxResult.Procedural)
 
-        // 3. Invoke the dual-tier planning engine
+        // 4. Invoke the dual-tier planning engine
         planner := NewNativePlanner()
         _, err := planner.Solve(ctx, domainStr, problemStr)
         if err != nil {
@@ -180,17 +187,26 @@ func (e *GllamEngine) RouteAndAssemble(ctx context.Context, userPrompt string, e
                 extPlanner := NewFastDownwardPlanner(e.PlannerExecutablePath)
                 extPlan, extErr := extPlanner.Solve(ctx, domainStr, problemStr)
                 if extErr != nil {
-                    ctxResult.PlannerOutput = fmt.Sprintf("Planning Engine triggered for timeline analysis.\n\nExtracted Goal: %s\n\nGenerated PDDL Domain:\n%s\nNative solver status: %v\nExternal solver status: %v", goalPredicate, domainStr, err, extErr)
+                    if cycleRes.HasCycle {
+                        ctxResult.PlannerOutput = fmt.Sprintf("%sPlanning Engine failed to resolve sequence due to temporal cycle contradiction.\nExtracted Goal: %s", cycleNotice, goalPredicate)
+                    } else {
+                        ctxResult.PlannerOutput = fmt.Sprintf("Planning Engine triggered for timeline analysis.\n\nExtracted Goal: %s\n\nGenerated PDDL Domain:\n%s\nNative solver status: %v\nExternal solver status: %v", goalPredicate, domainStr, err, extErr)
+                    }
                 } else {
-                    ctxResult.PlannerOutput = fmt.Sprintf("Planning Engine triggered via External PDDL Planner. Plan length: %d actions.", len(extPlan))
+                    ctxResult.PlannerOutput = fmt.Sprintf("%sPlanning Engine triggered via External PDDL Planner. Plan length: %d actions.", cycleNotice, len(extPlan))
                 }
             } else {
-                ctxResult.PlannerOutput = fmt.Sprintf("Planning Engine triggered for timeline analysis.\n\nExtracted Goal: %s\n\nGenerated PDDL Domain:\n%s\nNative solver status: %v", goalPredicate, domainStr, err)
+                if cycleRes.HasCycle {
+                    ctxResult.PlannerOutput = fmt.Sprintf("%sPlanning Engine failed to resolve sequence due to temporal cycle contradiction.\nExtracted Goal: %s", cycleNotice, goalPredicate)
+                } else {
+                    ctxResult.PlannerOutput = fmt.Sprintf("Planning Engine triggered for timeline analysis.\n\nExtracted Goal: %s\n\nGenerated PDDL Domain:\n%s\nNative solver status: %v", goalPredicate, domainStr, err)
+                }
             }
         } else {
-            ctxResult.PlannerOutput = "Planning Engine triggered. Sequence mathematically verified."
+            ctxResult.PlannerOutput = fmt.Sprintf("%sPlanning Engine triggered. Sequence mathematically verified.", cycleNotice)
         }
     }
+
 
     return ctxResult, nil
 }
