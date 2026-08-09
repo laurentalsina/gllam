@@ -1,12 +1,10 @@
 {
  "mcpServers": {
   "github": {
-   "command": "npx",
-    "args": ["-y", "@modelcontextprotocol/server-github"],
-    "env": {
-     "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_MCP_CONFIG}"
-   }
+   "command": "bash",
+   "args": ["-c", "GITHUB_PERSONAL_ACCESS_TOKEN=\"$GITHUB_MCP_CONFIG\" exec npx -y @modelcontextprotocol/server-github"]
   }
  }
 }
+
 
