@@ -78,7 +78,7 @@ func (e *GllamEngine) RouteAndAssemble(ctx context.Context, userPrompt string, e
                 nodes = append(nodes, node)
             }
             query := `
-                SELECT source_id, target_id, relationship, caveats, valid_from, valid_until, temporal_note, updated_at
+                SELECT source_id, target_id, relationship, caveats, valid_from, valid_until, temporal_anchor_id, temporal_relation, temporal_note, updated_at
                 FROM semantic_links
                 WHERE valid_until IS NULL AND (source_id = ? OR target_id = ?)
                 LIMIT 15`
@@ -90,11 +90,17 @@ func (e *GllamEngine) RouteAndAssemble(ctx context.Context, userPrompt string, e
 
             for rows.Next() {
                 var link memory.SemanticLink
-                var tempNote sql.NullString
+                var anchorID, tempRel, tempNote sql.NullString
                 if err := rows.Scan(&link.SourceID, &link.TargetID, &link.Relationship, &link.Caveats,
-                    &link.ValidFrom, &link.ValidUntil, &tempNote, &link.UpdatedAt); err != nil {
+                    &link.ValidFrom, &link.ValidUntil, &anchorID, &tempRel, &tempNote, &link.UpdatedAt); err != nil {
                     rows.Close()
                     return nil, fmt.Errorf("failed to scan link: %w", err)
+                }
+                if anchorID.Valid {
+                    link.TemporalAnchorID = anchorID.String
+                }
+                if tempRel.Valid {
+                    link.TemporalRelation = tempRel.String
                 }
                 if tempNote.Valid {
                     link.TemporalNote = tempNote.String
@@ -102,6 +108,7 @@ func (e *GllamEngine) RouteAndAssemble(ctx context.Context, userPrompt string, e
                 links = append(links, link)
             }
             rows.Close()
+
 
         }
         ctxResult.SemanticLinks = links

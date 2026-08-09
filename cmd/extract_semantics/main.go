@@ -72,7 +72,7 @@ Node Types:
 
 Temporal Guidelines for Links:
 - If precise timestamps or dates are mentioned (e.g. "May 2024"), extract them into valid_from / valid_until as strings or ISO dates.
-- If timing is relative or imprecise (e.g. "before the migration", "sometime last week", "after release v1.0"), set valid_from or valid_until to "temporal_note" AND provide the descriptive phrase in "temporal_note".
+- If timing is relative to another event or entity (e.g. "before the database migration"), set valid_from or valid_until to "temporal_note", provide the descriptive phrase in "temporal_note", AND set "temporal_anchor_id" to the node ID of that referenced event/entity (e.g. "event_db_migration") with "temporal_relation" ("before" | "after" | "during" | "co_occurs" | "causes").
 
 You must output ONLY valid JSON matching this exact structure, with no markdown formatting or extra text:
 {
@@ -87,10 +87,13 @@ You must output ONLY valid JSON matching this exact structure, with no markdown 
       "caveats": "optional conditions",
       "valid_from": "timestamp_or_temporal_note",
       "valid_until": "timestamp_or_temporal_note_or_null",
+      "temporal_anchor_id": "node_id_of_referenced_event_or_entity_if_relative",
+      "temporal_relation": "before|after|during|co_occurs|causes",
       "temporal_note": "relative or imprecise timing phrase if applicable"
     }
   ]
 }
+
 If the chat contains a contradiction (e.g. user changes their mind), extract the conflicting claims as distinct relationships.`
 
 	for _, ep := range episodes {

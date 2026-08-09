@@ -35,7 +35,7 @@ CREATE TABLE IF NOT EXISTS semantic_nodes (
     context_prompt TEXT
 );
 
--- 4. SEMANTIC LINKS (Caveat-qualified, temporally bounded relationships with uncertainty support)
+-- 4. SEMANTIC LINKS (Caveat-qualified, temporally bounded relationships with grounded uncertainty support)
 CREATE TABLE IF NOT EXISTS semantic_links (
     source_id TEXT NOT NULL,
     target_id TEXT NOT NULL,
@@ -43,12 +43,16 @@ CREATE TABLE IF NOT EXISTS semantic_links (
     caveats TEXT NOT NULL,                -- Conditions, constraints, or exceptions
     valid_from TEXT NOT NULL,             -- Unix timestamp string OR 'temporal_note'
     valid_until TEXT,                     -- Unix timestamp string OR 'temporal_note' (NULL = currently active)
+    temporal_anchor_id TEXT,              -- Grounded node ID reference for relative timing (e.g. 'event-db-migration')
+    temporal_relation TEXT,               -- 'before', 'after', 'during', 'co_occurs', 'causes'
     temporal_note TEXT,                   -- Qualitative phrase describing imprecise timestamp
     updated_at INTEGER NOT NULL,
     PRIMARY KEY (source_id, target_id, relationship),
     FOREIGN KEY (source_id) REFERENCES semantic_nodes(id),
-    FOREIGN KEY (target_id) REFERENCES semantic_nodes(id)
+    FOREIGN KEY (target_id) REFERENCES semantic_nodes(id),
+    FOREIGN KEY (temporal_anchor_id) REFERENCES semantic_nodes(id)
 );
+
 
 
 CREATE INDEX IF NOT EXISTS idx_links_lookup ON semantic_links(source_id, target_id);

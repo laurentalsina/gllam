@@ -49,20 +49,34 @@ func TestExtractPDDLGoal(t *testing.T) {
 	}
 }
 
-func TestTemporalUncertaintyLink(t *testing.T) {
-	link := memory.SemanticLink{
-		SourceID:     "pkg-react",
-		TargetID:     "state-deprecated",
-		Relationship: "has_state",
-		ValidFrom:    "temporal_note",
-		TemporalNote: "sometime during Q3 2024 before the major release",
+func TestGroundedTemporalAnchorPDDL(t *testing.T) {
+	nodes := []memory.SemanticNode{
+		{ID: "caddy", Name: "Caddy Service", Type: memory.NodeTypeService},
+		{ID: "state-v2-8", Name: "Version 2.8", Type: memory.NodeTypeState},
+		{ID: "event-db-migration", Name: "Database Migration", Type: memory.NodeTypeEvent},
 	}
 
-	if link.ValidFrom != "temporal_note" {
-		t.Errorf("Expected ValidFrom to be 'temporal_note', got %s", link.ValidFrom)
+	links := []memory.SemanticLink{
+		{
+			SourceID:         "caddy",
+			TargetID:         "state-v2-8",
+			Relationship:     "has_state",
+			ValidFrom:        "temporal_note",
+			TemporalAnchorID: "event-db-migration",
+			TemporalRelation: "before",
+			TemporalNote:     "before the database migration",
+		},
 	}
-	if link.TemporalNote == "" {
-		t.Errorf("Expected non-empty TemporalNote")
+
+	domain, problem := CompileGraphToPDDL(nodes, links, "(and (has_state caddy state_v2_8))", nil)
+
+	if !strings.Contains(domain, "(happened_before ?a ?b)") {
+		t.Errorf("Domain missing happened_before predicate: %s", domain)
+	}
+
+	if !strings.Contains(problem, "(happened_before caddy event_db_migration)") {
+		t.Errorf("Problem missing grounded happened_before predicate: %s", problem)
 	}
 }
+
 

@@ -58,6 +58,24 @@ func CompileGraphToPDDL(nodes []memory.SemanticNode, links []memory.SemanticLink
 
 		// Create the PDDL initial state declaration
 		initStatements = append(initStatements, fmt.Sprintf("    (%s %s %s)", rel, src, tgt))
+
+		// If a grounded temporal anchor ID and relation exist, emit grounded temporal predicates
+		if link.TemporalAnchorID != "" && link.TemporalRelation != "" {
+			anchor := SanitizePDDLName(link.TemporalAnchorID)
+			tempRel := SanitizePDDLName(link.TemporalRelation)
+			if tempRel == "before" || tempRel == "happened_before" {
+				tempRel = "happened_before"
+			} else if tempRel == "after" || tempRel == "happened_after" {
+				tempRel = "happened_after"
+			}
+			predicates[tempRel] = true
+			if _, exists := nodeTypeMap[anchor]; !exists {
+				nodeTypeMap[anchor] = memory.NodeTypeEntity
+				objectsByType[memory.NodeTypeEntity] = append(objectsByType[memory.NodeTypeEntity], anchor)
+			}
+			initStatements = append(initStatements, fmt.Sprintf("    (%s %s %s)", tempRel, src, anchor))
+		}
+
 	}
 
 	// 2. Build Domain String

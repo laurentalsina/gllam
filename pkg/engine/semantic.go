@@ -93,24 +93,38 @@ func (e *GllamEngine) AddEdge(ctx context.Context, link memory.SemanticLink) err
 
     // Insert the new link (idempotent update if it already exists)
     insertQuery := `
-        INSERT INTO semantic_links (source_id, target_id, relationship, caveats, valid_from, valid_until, temporal_note, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO semantic_links (source_id, target_id, relationship, caveats, valid_from, valid_until, temporal_anchor_id, temporal_relation, temporal_note, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(source_id, target_id, relationship) DO UPDATE SET 
             caveats = excluded.caveats,
             valid_from = excluded.valid_from,
             valid_until = excluded.valid_until,
+            temporal_anchor_id = excluded.temporal_anchor_id,
+            temporal_relation = excluded.temporal_relation,
             temporal_note = excluded.temporal_note,
             updated_at = excluded.updated_at`
 
+    var anchorID, tempRel, tempNote sql.NullString
+    if link.TemporalAnchorID != "" {
+        anchorID = sql.NullString{String: link.TemporalAnchorID, Valid: true}
+    }
+    if link.TemporalRelation != "" {
+        tempRel = sql.NullString{String: link.TemporalRelation, Valid: true}
+    }
+    if link.TemporalNote != "" {
+        tempNote = sql.NullString{String: link.TemporalNote, Valid: true}
+    }
+
     _, err = e.db.ExecContext(ctx, insertQuery,
         link.SourceID, link.TargetID, link.Relationship, link.Caveats,
-        link.ValidFrom, link.ValidUntil, link.TemporalNote, now)
+        link.ValidFrom, link.ValidUntil, anchorID, tempRel, tempNote, now)
     if err != nil {
         return fmt.Errorf("failed to add edge: %w", err)
     }
 
     return nil
 }
+
 
 // InvalidateObsoleteEdge marks an older link as expired when a new preference supersedes it
 func (e *GllamEngine) InvalidateObsoleteEdge(ctx context.Context, sourceID, relationship, targetID string) error {
@@ -232,7 +246,7 @@ func (e *GllamEngine) SearchSimilarNodes(ctx context.Context, queryText string, 
 func (e *GllamEngine) GetActiveLinksAtTime(ctx context.Context, timestamp int64) ([]memory.SemanticLink, error) {
     timestampStr := fmt.Sprintf("%d", timestamp)
     query := `
-        SELECT source_id, target_id, relationship, caveats, valid_from, valid_until, temporal_note, updated_at
+        SELECT source_id, target_id, relationship, caveats, valid_from, valid_until, temporal_anchor_id, temporal_relation, temporal_note, updated_at
         FROM semantic_links
         WHERE (valid_from <= ? OR valid_from = 'temporal_note') 
           AND (valid_until IS NULL OR valid_until > ? OR valid_until = 'temporal_note')
@@ -247,9 +261,15 @@ func (e *GllamEngine) GetActiveLinksAtTime(ctx context.Context, timestamp int64)
     var links []memory.SemanticLink
     for rows.Next() {
         var l memory.SemanticLink
-        var tempNote sql.NullString
-        if err := rows.Scan(&l.SourceID, &l.TargetID, &l.Relationship, &l.Caveats, &l.ValidFrom, &l.ValidUntil, &tempNote, &l.UpdatedAt); err != nil {
+        var anchorID, tempRel, tempNote sql.NullString
+        if err := rows.Scan(&l.SourceID, &l.TargetID, &l.Relationship, &l.Caveats, &l.ValidFrom, &l.ValidUntil, &anchorID, &tempRel, &tempNote, &l.UpdatedAt); err != nil {
             return nil, fmt.Errorf("failed to scan link: %w", err)
+        }
+        if anchorID.Valid {
+            l.TemporalAnchorID = anchorID.String
+        }
+        if tempRel.Valid {
+            l.TemporalRelation = tempRel.String
         }
         if tempNote.Valid {
             l.TemporalNote = tempNote.String
@@ -258,5 +278,6 @@ func (e *GllamEngine) GetActiveLinksAtTime(ctx context.Context, timestamp int64)
     }
     return links, rows.Err()
 }
+
 
 

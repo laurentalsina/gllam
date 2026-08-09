@@ -38,15 +38,18 @@ type SemanticNode struct {
 }
 
 type SemanticLink struct {
-    SourceID     string  `json:"source_id"`
-    TargetID     string  `json:"target_id"`
-    Relationship string  `json:"relationship"`
-    Caveats      string  `json:"caveats"`
-    ValidFrom    string  `json:"valid_from"`    // Unix timestamp string OR "temporal_note"
-    ValidUntil   *string `json:"valid_until"`   // Unix timestamp string OR "temporal_note" OR nil
-    TemporalNote string  `json:"temporal_note"` // Qualitative phrase describing imprecise timestamp
-    UpdatedAt    int64   `json:"updated_at"`
+    SourceID         string  `json:"source_id"`
+    TargetID         string  `json:"target_id"`
+    Relationship     string  `json:"relationship"`
+    Caveats          string  `json:"caveats"`
+    ValidFrom        string  `json:"valid_from"`          // Unix timestamp string OR "temporal_note"
+    ValidUntil       *string `json:"valid_until"`         // Unix timestamp string OR "temporal_note" OR nil
+    TemporalAnchorID string  `json:"temporal_anchor_id"` // Grounded node ID reference for relative timing
+    TemporalRelation string  `json:"temporal_relation"` // "before" | "after" | "during" | "co_occurs" | "causes"
+    TemporalNote     string  `json:"temporal_note"`       // Qualitative phrase describing imprecise timestamp
+    UpdatedAt        int64   `json:"updated_at"`
 }
+
 
 
 type CompiledContext struct {
