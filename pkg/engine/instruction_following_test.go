@@ -353,6 +353,75 @@ func TestRuleRationaleConfrontation(t *testing.T) {
 	}
 }
 
+func TestDisambiguateEntityForSource(t *testing.T) {
+	tempDir := t.TempDir()
+	dbPath := filepath.Join(tempDir, "test_disambig.db")
+
+	gllam, err := NewGllamEngine(dbPath, nil)
+	if err != nil {
+		t.Fatalf("Failed to create engine: %v", err)
+	}
+	defer gllam.Close()
+
+	if err := gllam.InitSchema(); err != nil {
+		t.Fatalf("Failed to init schema: %v", err)
+	}
+
+	ctx := context.Background()
+
+	_ = gllam.UpsertNode(ctx, memory.SemanticNode{ID: "user-alice", Name: "Alice", Type: memory.NodeTypeHuman})
+	_ = gllam.UpsertNode(ctx, memory.SemanticNode{ID: "user-bob", Name: "Bob", Type: memory.NodeTypeHuman})
+
+	_ = gllam.UpsertNode(ctx, memory.SemanticNode{ID: "db-primary", Name: "Main Postgres Database", Type: memory.NodeTypeService})
+	_ = gllam.UpsertNode(ctx, memory.SemanticNode{ID: "db-replica", Name: "Read Replica Database", Type: memory.NodeTypeService})
+
+	// Alice only interacts with db-replica
+	_ = gllam.AddEdge(ctx, memory.SemanticLink{
+		SourceID:       "user-alice",
+		TargetID:       "db-replica",
+		Relationship:   "depends_on",
+		ValidFrom:      "1000",
+		OriginSourceID: "user-alice",
+	})
+
+	// Bob interacts with db-primary
+	_ = gllam.AddEdge(ctx, memory.SemanticLink{
+		SourceID:       "user-bob",
+		TargetID:       "db-primary",
+		Relationship:   "depends_on",
+		ValidFrom:      "1000",
+		OriginSourceID: "user-bob",
+	})
+
+	// 1. Disambiguate "Database" for Alice -> resolves to db-replica
+	resAlice, err := gllam.DisambiguateEntityForSource(ctx, "Database", "user-alice")
+	if err != nil {
+		t.Fatalf("Disambiguate for Alice failed: %v", err)
+	}
+	if resAlice.ResolvedNodeID != "db-replica" {
+		t.Errorf("Expected db-replica for Alice, got %q", resAlice.ResolvedNodeID)
+	}
+
+	// 2. Disambiguate "Database" for Bob -> resolves to db-primary
+	resBob, err := gllam.DisambiguateEntityForSource(ctx, "Database", "user-bob")
+	if err != nil {
+		t.Fatalf("Disambiguate for Bob failed: %v", err)
+	}
+	if resBob.ResolvedNodeID != "db-primary" {
+		t.Errorf("Expected db-primary for Bob, got %q", resBob.ResolvedNodeID)
+	}
+
+	// 3. Disambiguate for unknown source -> triggers TIMELINE NAMING AMBIGUITY diagnostic
+	resUnknown, err := gllam.DisambiguateEntityForSource(ctx, "Database", "user-charlie")
+	if err != nil {
+		t.Fatalf("Disambiguate for Charlie failed: %v", err)
+	}
+	if !resUnknown.IsAmbiguous || !strings.Contains(resUnknown.Diagnostic, "TIMELINE NAMING AMBIGUITY") {
+		t.Errorf("Expected ambiguity diagnostic for Charlie, got %v", resUnknown)
+	}
+}
+
+
 
 
 

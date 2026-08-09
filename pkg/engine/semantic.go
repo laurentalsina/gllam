@@ -703,4 +703,106 @@ func ConfrontRuleRationales(links []memory.SemanticLink) string {
 	return strings.Join(notices, "\n")
 }
 
+// DisambiguityResult holds the resolved node ID or diagnostic warning when disambiguating ambiguous terms
+type DisambiguityResult struct {
+	ResolvedNodeID string
+	IsAmbiguous    bool
+	Candidates     []memory.SemanticNode
+	Diagnostic     string
+}
+
+// DisambiguateEntityForSource resolves ambiguous entity mentions (Trap 10) by grounding candidate nodes
+// in the epistemic interaction history and role context of the active sourceID.
+func (e *GllamEngine) DisambiguateEntityForSource(ctx context.Context, term string, sourceID string) (DisambiguityResult, error) {
+	termLower := strings.ToLower(strings.TrimSpace(term))
+	if termLower == "" {
+		return DisambiguityResult{}, nil
+	}
+
+	// 1. Query candidate nodes matching the term in ID or Name
+	query := `
+		SELECT id, name, type, context_prompt
+		FROM semantic_nodes
+		WHERE LOWER(name) LIKE ? OR LOWER(id) LIKE ?`
+	pattern := "%" + termLower + "%"
+
+	rows, err := e.dbRO.QueryContext(ctx, query, pattern, pattern)
+	if err != nil {
+		return DisambiguityResult{}, fmt.Errorf("failed to query candidate nodes for term %s: %w", term, err)
+	}
+	defer rows.Close()
+
+	var candidates []memory.SemanticNode
+	for rows.Next() {
+		var n memory.SemanticNode
+		var ctxPrompt sql.NullString
+		if err := rows.Scan(&n.ID, &n.Name, &n.Type, &ctxPrompt); err == nil {
+			if ctxPrompt.Valid {
+				n.ContextPrompt = ctxPrompt.String
+			}
+			candidates = append(candidates, n)
+		}
+	}
+
+	if len(candidates) == 0 {
+		return DisambiguityResult{}, nil
+	}
+	if len(candidates) == 1 {
+		return DisambiguityResult{
+			ResolvedNodeID: candidates[0].ID,
+			Candidates:     candidates,
+		}, nil
+	}
+
+	// 2. Score candidates by interaction affinity with sourceID
+	bestScore := -1
+	var bestCandidate string
+	var tiedCandidates []memory.SemanticNode
+
+	for _, cand := range candidates {
+		score := 0
+		if sourceID != "" {
+			var linkCount int
+			linkQuery := `
+				SELECT COUNT(*) 
+				FROM semantic_links 
+				WHERE (source_id = ? OR target_id = ?) AND origin_source_id = ?`
+			if err := e.dbRO.QueryRowContext(ctx, linkQuery, cand.ID, cand.ID, sourceID).Scan(&linkCount); err == nil {
+				score += linkCount * 10
+			}
+		}
+
+		if score > bestScore {
+			bestScore = score
+			bestCandidate = cand.ID
+			tiedCandidates = []memory.SemanticNode{cand}
+		} else if score == bestScore {
+			tiedCandidates = append(tiedCandidates, cand)
+		}
+	}
+
+	if len(tiedCandidates) == 1 && bestScore > 0 {
+		return DisambiguityResult{
+			ResolvedNodeID: bestCandidate,
+			Candidates:     candidates,
+		}, nil
+	}
+
+	// 3. Ambiguity impasse (Trap 10 diagnostic)
+	candNames := make([]string, len(candidates))
+	for i, c := range candidates {
+		candNames[i] = fmt.Sprintf("'%s' (%s)", c.Name, c.ID)
+	}
+
+	diag := fmt.Sprintf("⚠️ TIMELINE NAMING AMBIGUITY: Term '%s' matches multiple semantic entities [%s] for source '%s'. Please specify which entity is intended.",
+		term, strings.Join(candNames, ", "), sourceID)
+
+	return DisambiguityResult{
+		IsAmbiguous: true,
+		Candidates:  candidates,
+		Diagnostic:  diag,
+	}, nil
+}
+
+
 
