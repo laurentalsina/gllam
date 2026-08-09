@@ -242,7 +242,7 @@ ORDER BY distance
 LIMIT 10;
 ```
 
-## Contradiction Model
+## Contradiction Model & Byzantine Fallacy Handling
 
 Contradictions that remain stored will be of a temporal nature, eg. only version x of some software supports feature y.
 
@@ -252,6 +252,24 @@ When `AddEdge()` detects an existing active link with the same `source_id` and a
 3. It adds `conflicting_claim` edges from the contradiction node to all mutually exclusive targets.
 
 The router detects the presence of `has_unresolved_conflict` edges and surfaces a warning to the LLM to ask the user for clarification.
+
+### Logical Fallacy Taxonomy & Terminology Guide
+
+GLLAM treats logical fallacies in user or agent input as first-class cognitive nodes (`NodeTypeFallacy`) to prevent deceptive or flawed premises from corrupting automated reasoning.
+
+Fallacies are classified across **6 major categories** (referencing the [Wikipedia List of Fallacies](https://en.wikipedia.org/wiki/List_of_fallacies)):
+
+| Fallacy Key | Plain English Meaning & Example | Engine Impact |
+| :--- | :--- | :--- |
+| **`post_hoc`** *(Post Hoc Ergo Propter Hoc)* | *"After this, therefore because of this"* — Blindly assuming Event A caused Event B simply because B occurred after A *(e.g. "We deployed Caddy, then the server rebooted, so Caddy crashed the server")*. | Downgrades `causes` link to a weak `happened_before` temporal observation. |
+| **`cum_hoc`** *(Cum Hoc Ergo Propter Hoc)* | *"With this, therefore because of this"* — Confusing correlation with causation *(e.g. "CPU usage rose whenever user logins increased")*. | Prevents inserting hard `depends_on` dependencies without explicit proof. |
+| **`false_dilemma`** | *"False Dichotomy"* — Forcing a fake binary choice when middle options exist *(e.g. "Either we delete the database or the migration fails")*. | Prevents promoting either choice to a `global` or `must_follow_rule` constraint. |
+| **`begging_question`** *(Circularity)* | Premise assumes the unproven conclusion *(e.g. "Postgres is reliable because Postgres never fails")*. | Disables cyclic PDDL action preconditions. |
+| **`equivocation`** | Using an ambiguous term in two different senses within the same premise *(e.g. using "service" to mean both systemd service and cloud API)*. | Triggers `DisambiguateEntityForSource` to split ambiguous nodes. |
+| **`ad_hominem`** | Attacking the person or agent issuing the claim rather than addressing the claim's substance. | Preserves the underlying claim, flags source attack edge. |
+| **`straw_man`** | Misrepresenting a rule or claim to make it easy to refute or override. | Prevents overriding established rules without matching rationale. |
+| **`red_herring`** | Introducing an irrelevant topic to distract from an active contradiction. | Suppresses multi-hop graph expansion for that sub-graph during retrieval. |
+
 
 ## Benchmarking Tools
 
