@@ -4,11 +4,13 @@ import (
     "context"
     "database/sql"
     "fmt"
+    "sort"
     "strings"
     "time"
 
     "github.com/laurentalsina/gllam/pkg/memory"
 )
+
 
 
 // UpsertNode inserts or updates a semantic node
@@ -932,6 +934,124 @@ func DetectFallacySubversion(links []memory.SemanticLink, nodes []memory.Semanti
 
 	return strings.Join(diagnostics, "\n")
 }
+
+// NeedleScoredNode wraps a SemanticNode with its Reciprocal Rank Fusion score and attached links/caveats
+type NeedleScoredNode struct {
+	Node       memory.SemanticNode   `json:"node"`
+	Links      []memory.SemanticLink `json:"links"`
+	RRFScore   float64               `json:"rrf_score"`
+	VectorRank int                   `json:"vector_rank"`
+	GraphRank  int                   `json:"graph_rank"`
+}
+
+// RetrieveHybridNeedle performs dual-channel RRF hybrid retrieval over vector embeddings and exact graph traversal
+func (e *GllamEngine) RetrieveHybridNeedle(ctx context.Context, query string, entityIDs []string, sourceID string, limit int) ([]NeedleScoredNode, error) {
+	if limit <= 0 {
+		limit = 10
+	}
+	k := 60.0 // RRF standard smoothing constant
+
+	// 1. Vector Channel: SearchSimilarNodes
+	var vectorNodes []memory.SemanticNode
+	if query != "" {
+		simResults, err := e.SearchSimilarNodes(ctx, query, limit*2)
+		if err == nil {
+			for _, res := range simResults {
+				var node memory.SemanticNode
+				var ctxPrompt sql.NullString
+				nodeQuery := `SELECT id, name, type, context_prompt FROM semantic_nodes WHERE id = ?`
+				if err := e.dbRO.QueryRowContext(ctx, nodeQuery, res.NodeID).Scan(&node.ID, &node.Name, &node.Type, &ctxPrompt); err == nil {
+					if ctxPrompt.Valid {
+						node.ContextPrompt = ctxPrompt.String
+					}
+					vectorNodes = append(vectorNodes, node)
+				}
+			}
+		}
+	}
+
+	// 2. Disambiguation Channel: Disambiguate entityIDs for sourceID
+	resolvedEntities := make([]string, 0, len(entityIDs))
+	for _, ent := range entityIDs {
+		disRes, err := e.DisambiguateEntityForSource(ctx, ent, sourceID)
+		if err == nil && disRes.ResolvedNodeID != "" {
+			resolvedEntities = append(resolvedEntities, disRes.ResolvedNodeID)
+		} else {
+			resolvedEntities = append(resolvedEntities, ent)
+		}
+	}
+
+	// 3. Graph Channel: Fetch seed nodes & ExpandTemporalNeighbors (2 hops)
+	var seedNodes []memory.SemanticNode
+	for _, entID := range resolvedEntities {
+		var node memory.SemanticNode
+		var ctxPrompt sql.NullString
+		nodeQuery := `SELECT id, name, type, context_prompt FROM semantic_nodes WHERE id = ?`
+		if err := e.dbRO.QueryRowContext(ctx, nodeQuery, entID).Scan(&node.ID, &node.Name, &node.Type, &ctxPrompt); err == nil {
+			if ctxPrompt.Valid {
+				node.ContextPrompt = ctxPrompt.String
+			}
+			seedNodes = append(seedNodes, node)
+		}
+	}
+
+	expNodes, expLinks, _ := e.ExpandTemporalNeighbors(ctx, seedNodes, nil, 2)
+
+	// Map links to source/target nodes
+	linksByNode := make(map[string][]memory.SemanticLink)
+	for _, l := range expLinks {
+		linksByNode[l.SourceID] = append(linksByNode[l.SourceID], l)
+		linksByNode[l.TargetID] = append(linksByNode[l.TargetID], l)
+	}
+
+	// 4. Compute RRF Scores
+	nodeMap := make(map[string]*NeedleScoredNode)
+
+	// Add vector ranks
+	for rank, vNode := range vectorNodes {
+		nodeID := vNode.ID
+		if _, exists := nodeMap[nodeID]; !exists {
+			nodeMap[nodeID] = &NeedleScoredNode{
+				Node:       vNode,
+				Links:      linksByNode[nodeID],
+				VectorRank: rank + 1,
+			}
+		}
+		nodeMap[nodeID].RRFScore += 1.0 / (k + float64(rank+1))
+	}
+
+	// Add graph ranks
+	for rank, gNode := range expNodes {
+		nodeID := gNode.ID
+		if _, exists := nodeMap[nodeID]; !exists {
+			nodeMap[nodeID] = &NeedleScoredNode{
+				Node:      gNode,
+				Links:     linksByNode[nodeID],
+				GraphRank: rank + 1,
+			}
+		} else {
+			nodeMap[nodeID].GraphRank = rank + 1
+		}
+		nodeMap[nodeID].RRFScore += 1.0 / (k + float64(rank+1))
+	}
+
+	// 5. Sort by RRFScore DESC
+	scoredList := make([]NeedleScoredNode, 0, len(nodeMap))
+	for _, sn := range nodeMap {
+		scoredList = append(scoredList, *sn)
+	}
+
+	sort.Slice(scoredList, func(i, j int) bool {
+		return scoredList[i].RRFScore > scoredList[j].RRFScore
+	})
+
+	if len(scoredList) > limit {
+		scoredList = scoredList[:limit]
+	}
+
+	return scoredList, nil
+}
+
 
 
 
