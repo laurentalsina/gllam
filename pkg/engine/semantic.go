@@ -116,9 +116,22 @@ func (e *GllamEngine) AddEdge(ctx context.Context, link memory.SemanticLink) err
     }
 
 
+    durTurns := link.DurationTurns
+    if durTurns == 0 {
+        durTurns = -1
+    }
+    remTurns := link.RemainingTurns
+    if remTurns == 0 {
+        if durTurns > 0 {
+            remTurns = durTurns
+        } else {
+            remTurns = -1
+        }
+    }
+
     insertQuery := `
-        INSERT INTO semantic_links (source_id, target_id, relationship, caveats, valid_from, valid_until, temporal_anchor_id, temporal_relation, temporal_offset_seconds, temporal_granularity, temporal_note, origin_source_id, rule_context, constraint_type, rule_rationale, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO semantic_links (source_id, target_id, relationship, caveats, valid_from, valid_until, temporal_anchor_id, temporal_relation, temporal_offset_seconds, temporal_granularity, temporal_note, origin_source_id, rule_context, constraint_type, rule_rationale, duration_turns, remaining_turns, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(source_id, target_id, relationship) DO UPDATE SET 
             caveats = excluded.caveats,
             valid_from = excluded.valid_from,
@@ -132,6 +145,8 @@ func (e *GllamEngine) AddEdge(ctx context.Context, link memory.SemanticLink) err
             rule_context = excluded.rule_context,
             constraint_type = excluded.constraint_type,
             rule_rationale = excluded.rule_rationale,
+            duration_turns = excluded.duration_turns,
+            remaining_turns = excluded.remaining_turns,
             updated_at = excluded.updated_at`
 
     var anchorID, tempRel, tempNote, origSource, rationaleVal sql.NullString
@@ -153,7 +168,8 @@ func (e *GllamEngine) AddEdge(ctx context.Context, link memory.SemanticLink) err
 
     _, err = e.db.ExecContext(ctx, insertQuery,
         link.SourceID, link.TargetID, link.Relationship, link.Caveats,
-        link.ValidFrom, link.ValidUntil, anchorID, tempRel, link.TemporalOffsetSeconds, gran, tempNote, origSource, ruleCtx, cType, rationaleVal, now)
+        link.ValidFrom, link.ValidUntil, anchorID, tempRel, link.TemporalOffsetSeconds, gran, tempNote, origSource, ruleCtx, cType, rationaleVal, durTurns, remTurns, now)
+
 
 
 
@@ -518,9 +534,10 @@ func (e *GllamEngine) ExpandTemporalNeighbors(ctx context.Context, seedNodes []m
 // GetActiveConstraintsForSource retrieves active rules, preferences, and constraints for a given source_id or rule_context
 func (e *GllamEngine) GetActiveConstraintsForSource(ctx context.Context, sourceID string, targetContext string) ([]memory.SemanticLink, error) {
 	query := `
-		SELECT source_id, target_id, relationship, caveats, valid_from, valid_until, temporal_anchor_id, temporal_relation, temporal_offset_seconds, temporal_granularity, temporal_note, origin_source_id, rule_context, constraint_type, rule_rationale, updated_at
+		SELECT source_id, target_id, relationship, caveats, valid_from, valid_until, temporal_anchor_id, temporal_relation, temporal_offset_seconds, temporal_granularity, temporal_note, origin_source_id, rule_context, constraint_type, rule_rationale, duration_turns, remaining_turns, updated_at
 		FROM semantic_links
 		WHERE valid_until IS NULL 
+		  AND (remaining_turns < 0 OR remaining_turns > 0)
 		  AND relationship NOT IN ('supersedes_rule', 'conflicting_claim', 'has_unresolved_conflict')
 		  AND (relationship IN ('has_constraint', 'is_preference', 'applies_rule') OR target_id LIKE 'rule%' OR target_id LIKE 'constraint%')
 		  AND (origin_source_id = ? OR source_id = ? OR rule_context = 'global' OR rule_context = ?)
@@ -536,7 +553,8 @@ func (e *GllamEngine) GetActiveConstraintsForSource(ctx context.Context, sourceI
 	for rows.Next() {
 		var l memory.SemanticLink
 		var anchorID, tempRel, tempGran, tempNote, origSource, rCtx, cType, ratVal sql.NullString
-		if err := rows.Scan(&l.SourceID, &l.TargetID, &l.Relationship, &l.Caveats, &l.ValidFrom, &l.ValidUntil, &anchorID, &tempRel, &l.TemporalOffsetSeconds, &tempGran, &tempNote, &origSource, &rCtx, &cType, &ratVal, &l.UpdatedAt); err != nil {
+		var durTurns, remTurns sql.NullInt64
+		if err := rows.Scan(&l.SourceID, &l.TargetID, &l.Relationship, &l.Caveats, &l.ValidFrom, &l.ValidUntil, &anchorID, &tempRel, &l.TemporalOffsetSeconds, &tempGran, &tempNote, &origSource, &rCtx, &cType, &ratVal, &durTurns, &remTurns, &l.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("failed to scan constraint link: %w", err)
 		}
 		if anchorID.Valid {
@@ -563,11 +581,20 @@ func (e *GllamEngine) GetActiveConstraintsForSource(ctx context.Context, sourceI
 		if ratVal.Valid {
 			l.RuleRationale = ratVal.String
 		}
+		if durTurns.Valid {
+			l.DurationTurns = durTurns.Int64
+		} else {
+			l.DurationTurns = -1
+		}
+		if remTurns.Valid {
+			l.RemainingTurns = remTurns.Int64
+		} else {
+			l.RemainingTurns = -1
+		}
 		links = append(links, l)
 	}
 	return links, rows.Err()
 }
-
 
 // RevokeOrSupersedeRule revokes a rule/constraint or marks it as superseded by a newer rule ID
 func (e *GllamEngine) RevokeOrSupersedeRule(ctx context.Context, oldRuleID string, newRuleID string) error {
@@ -595,3 +622,32 @@ func (e *GllamEngine) RevokeOrSupersedeRule(ctx context.Context, oldRuleID strin
 	}
 	return nil
 }
+
+// DecrementActiveTurnConstraints decrements remaining_turns on active turn-bounded rules and auto-expires rules that hit 0 turns
+func (e *GllamEngine) DecrementActiveTurnConstraints(ctx context.Context) error {
+	nowStr := fmt.Sprintf("%d", time.Now().Unix())
+	now := time.Now().Unix()
+
+	// 1. Expire rules where remaining_turns == 1 (about to hit 0 after this turn)
+	expireQuery := `
+		UPDATE semantic_links
+		SET valid_until = ?, remaining_turns = 0, updated_at = ?
+		WHERE valid_until IS NULL AND remaining_turns = 1`
+
+	if _, err := e.db.ExecContext(ctx, expireQuery, nowStr, now); err != nil {
+		return fmt.Errorf("failed to expire 1-turn remaining constraints: %w", err)
+	}
+
+	// 2. Decrement rules where remaining_turns > 1
+	decQuery := `
+		UPDATE semantic_links
+		SET remaining_turns = remaining_turns - 1, updated_at = ?
+		WHERE valid_until IS NULL AND remaining_turns > 1`
+
+	if _, err := e.db.ExecContext(ctx, decQuery, now); err != nil {
+		return fmt.Errorf("failed to decrement remaining turns: %w", err)
+	}
+
+	return nil
+}
+

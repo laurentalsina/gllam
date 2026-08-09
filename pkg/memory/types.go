@@ -58,7 +58,10 @@ type SemanticLink struct {
     RuleContext           string  `json:"rule_context"`           // "user_preference" | "session" | "source" | "global"
     ConstraintType        string  `json:"constraint_type"`         // "positive" | "negative"
     RuleRationale         string  `json:"rule_rationale"`          // Justification / "because" clause
+    DurationTurns         int64   `json:"duration_turns"`          // -1 for infinite, N for turn-bounded rules
+    RemainingTurns        int64   `json:"remaining_turns"`         // Remaining turns before auto-expiration
     UpdatedAt             int64   `json:"updated_at"`
+
 
 }
 

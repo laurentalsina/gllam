@@ -14,7 +14,9 @@ import (
 
 // RouteAndAssemble classifies the user prompt and assembles a structured context (read-only → dbRO)
 func (e *GllamEngine) RouteAndAssemble(ctx context.Context, userPrompt string, entities []string) (*memory.CompiledContext, error) {
+    _ = e.DecrementActiveTurnConstraints(ctx)
     ctxResult := &memory.CompiledContext{}
+
 
     // 1. Procedural Knowledge: Try Vector Search first, fallback to heuristic
     var procedures []memory.ProceduralKnowledge

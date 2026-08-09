@@ -78,7 +78,7 @@ Node Types:
 Temporal & Rule Guidelines for Links:
 - If precise timestamps or dates are mentioned (e.g. "May 2024"), extract them into valid_from / valid_until as strings or ISO dates.
 - If timing is relative to another event or entity (e.g. "3 days after the migration"), set valid_from or valid_until to "temporal_note", provide the descriptive phrase in "temporal_note", set "temporal_anchor_id" to the referenced node ID, "temporal_relation" using Allen's Interval Algebra ("before" | "after" | "equals" | "overlaps" | "during" | "contains" | "starts" | "finishes" | "meets"), AND "temporal_offset_seconds" (e.g. +259200 for 3 days after, -172800 for 2 days before).
-- If a link expresses a rule, constraint, or preference, set "rule_context" ("user_preference" | "session" | "source" | "global"), "constraint_type" ("positive" | "negative"), and set "origin_source_id" to the node ID of the human/agent/system that issued it.
+- If a link expresses a rule, constraint, or preference, set "rule_context" ("user_preference" | "session" | "source" | "global"), "constraint_type" ("positive" | "negative"), set "origin_source_id" to the node ID of the human/agent/system that issued it, AND if it is turn-bounded (e.g. "for the next 3 questions"), set "duration_turns" (e.g. 3) and "remaining_turns" (e.g. 3). Otherwise set -1.
 
 You must output ONLY valid JSON matching this exact structure, with no markdown formatting or extra text:
 {
@@ -99,10 +99,13 @@ You must output ONLY valid JSON matching this exact structure, with no markdown 
       "temporal_note": "relative or imprecise timing phrase if applicable",
       "origin_source_id": "source_node_id_if_issued_by_human_agent_system",
       "rule_context": "user_preference|session|source|global",
-      "constraint_type": "positive|negative"
+      "constraint_type": "positive|negative",
+      "duration_turns": -1,
+      "remaining_turns": -1
     }
   ]
 }
+
 
 
 
