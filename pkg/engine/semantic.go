@@ -58,11 +58,12 @@ func (e *GllamEngine) AddEdge(ctx context.Context, link memory.SemanticLink) err
 
         // Add edge from source to conflict
         now := time.Now().Unix()
+        nowStr := fmt.Sprintf("%d", now)
         _ = e.AddEdge(ctx, memory.SemanticLink{
             SourceID:     link.SourceID,
             TargetID:     conflictID,
             Relationship: "has_unresolved_conflict",
-            ValidFrom:    now,
+            ValidFrom:    nowStr,
         })
 
         // Add edges from conflict to targets
@@ -70,38 +71,46 @@ func (e *GllamEngine) AddEdge(ctx context.Context, link memory.SemanticLink) err
             SourceID:     conflictID,
             TargetID:     existingTargetID,
             Relationship: "conflicting_claim",
-            ValidFrom:    now,
+            ValidFrom:    nowStr,
         })
         _ = e.AddEdge(ctx, memory.SemanticLink{
             SourceID:     conflictID,
             TargetID:     link.TargetID,
             Relationship: "conflicting_claim",
-            ValidFrom:    now,
+            ValidFrom:    nowStr,
         })
+    }
+
+    // Default valid_from if unassigned
+    now := time.Now().Unix()
+    if link.ValidFrom == "" {
+        if link.TemporalNote != "" {
+            link.ValidFrom = "temporal_note"
+        } else {
+            link.ValidFrom = fmt.Sprintf("%d", now)
+        }
     }
 
     // Insert the new link (idempotent update if it already exists)
     insertQuery := `
-        INSERT INTO semantic_links (source_id, target_id, relationship, caveats, valid_from, valid_until, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO semantic_links (source_id, target_id, relationship, caveats, valid_from, valid_until, temporal_note, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(source_id, target_id, relationship) DO UPDATE SET 
             caveats = excluded.caveats,
             valid_from = excluded.valid_from,
             valid_until = excluded.valid_until,
+            temporal_note = excluded.temporal_note,
             updated_at = excluded.updated_at`
 
-    now := time.Now().Unix()
     _, err = e.db.ExecContext(ctx, insertQuery,
         link.SourceID, link.TargetID, link.Relationship, link.Caveats,
-        link.ValidFrom, link.ValidUntil, now)
+        link.ValidFrom, link.ValidUntil, link.TemporalNote, now)
     if err != nil {
         return fmt.Errorf("failed to add edge: %w", err)
     }
 
     return nil
 }
-
-
 
 // InvalidateObsoleteEdge marks an older link as expired when a new preference supersedes it
 func (e *GllamEngine) InvalidateObsoleteEdge(ctx context.Context, sourceID, relationship, targetID string) error {
@@ -111,13 +120,15 @@ func (e *GllamEngine) InvalidateObsoleteEdge(ctx context.Context, sourceID, rela
         WHERE source_id = ? AND relationship = ? AND target_id = ? AND valid_until IS NULL`
 
     now := time.Now().Unix()
-    _, err := e.db.ExecContext(ctx, query, now, now, sourceID, relationship, targetID)
+    nowStr := fmt.Sprintf("%d", now)
+    _, err := e.db.ExecContext(ctx, query, nowStr, now, sourceID, relationship, targetID)
     if err != nil {
         return fmt.Errorf("failed to invalidate obsolete edge: %w", err)
     }
 
     return nil
 }
+
 
 // StoreNodeEmbedding generates and stores an embedding vector for a semantic node.
 // The embedding is generated from the node's name using the configured embedder.
@@ -216,3 +227,36 @@ func (e *GllamEngine) SearchSimilarNodes(ctx context.Context, queryText string, 
     fmt.Printf("SearchSimilarNodes found %d nodes\n", len(results))
     return results, rows.Err()
 }
+
+// GetActiveLinksAtTime retrieves semantic links that were active at a specific Unix timestamp (read-only -> dbRO)
+func (e *GllamEngine) GetActiveLinksAtTime(ctx context.Context, timestamp int64) ([]memory.SemanticLink, error) {
+    timestampStr := fmt.Sprintf("%d", timestamp)
+    query := `
+        SELECT source_id, target_id, relationship, caveats, valid_from, valid_until, temporal_note, updated_at
+        FROM semantic_links
+        WHERE (valid_from <= ? OR valid_from = 'temporal_note') 
+          AND (valid_until IS NULL OR valid_until > ? OR valid_until = 'temporal_note')
+        ORDER BY valid_from ASC`
+
+    rows, err := e.dbRO.QueryContext(ctx, query, timestampStr, timestampStr)
+    if err != nil {
+        return nil, fmt.Errorf("failed to query active links at timestamp %d: %w", timestamp, err)
+    }
+    defer rows.Close()
+
+    var links []memory.SemanticLink
+    for rows.Next() {
+        var l memory.SemanticLink
+        var tempNote sql.NullString
+        if err := rows.Scan(&l.SourceID, &l.TargetID, &l.Relationship, &l.Caveats, &l.ValidFrom, &l.ValidUntil, &tempNote, &l.UpdatedAt); err != nil {
+            return nil, fmt.Errorf("failed to scan link: %w", err)
+        }
+        if tempNote.Valid {
+            l.TemporalNote = tempNote.String
+        }
+        links = append(links, l)
+    }
+    return links, rows.Err()
+}
+
+

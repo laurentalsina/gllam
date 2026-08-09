@@ -125,7 +125,8 @@ If the chat contains a contradiction (e.g. user changes their mind), extract the
 				continue
 			}
 			// Use the episode's timestamp for the relationship validity
-			link.ValidFrom = ep.CreatedAt
+			link.ValidFrom = fmt.Sprintf("%d", ep.CreatedAt)
+
 			if err := gllam.AddEdge(ctx, link); err != nil {
 				if strings.Contains(err.Error(), "FOREIGN KEY constraint failed") {
 					// Self-healing: Check and create missing Source node

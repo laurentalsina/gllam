@@ -2,11 +2,13 @@ package engine
 
 import (
     "context"
+    "database/sql"
     "fmt"
     "strings"
 
     "github.com/laurentalsina/gllam/pkg/memory"
 )
+
 
 // RouteAndAssemble classifies the user prompt and assembles a structured context (read-only → dbRO)
 func (e *GllamEngine) RouteAndAssemble(ctx context.Context, userPrompt string, entities []string) (*memory.CompiledContext, error) {
@@ -76,7 +78,7 @@ func (e *GllamEngine) RouteAndAssemble(ctx context.Context, userPrompt string, e
                 nodes = append(nodes, node)
             }
             query := `
-                SELECT source_id, target_id, relationship, caveats, valid_from, valid_until, updated_at
+                SELECT source_id, target_id, relationship, caveats, valid_from, valid_until, temporal_note, updated_at
                 FROM semantic_links
                 WHERE valid_until IS NULL AND (source_id = ? OR target_id = ?)
                 LIMIT 15`
@@ -88,14 +90,19 @@ func (e *GllamEngine) RouteAndAssemble(ctx context.Context, userPrompt string, e
 
             for rows.Next() {
                 var link memory.SemanticLink
+                var tempNote sql.NullString
                 if err := rows.Scan(&link.SourceID, &link.TargetID, &link.Relationship, &link.Caveats,
-                    &link.ValidFrom, &link.ValidUntil, &link.UpdatedAt); err != nil {
+                    &link.ValidFrom, &link.ValidUntil, &tempNote, &link.UpdatedAt); err != nil {
                     rows.Close()
                     return nil, fmt.Errorf("failed to scan link: %w", err)
+                }
+                if tempNote.Valid {
+                    link.TemporalNote = tempNote.String
                 }
                 links = append(links, link)
             }
             rows.Close()
+
         }
         ctxResult.SemanticLinks = links
         ctxResult.SemanticNodes = nodes
@@ -143,20 +150,11 @@ func (e *GllamEngine) RouteAndAssemble(ctx context.Context, userPrompt string, e
     }
 
     if requiresPlanning {
-        // 1. LLM Goal Extraction Prompt Mockup
-        _ = fmt.Sprintf(`You are a PDDL logic translator. Your ONLY job is to extract the goal state from the user's question.
-Output ONLY the raw PDDL predicate string representing the target goal state, nothing else. Do not wrap in markdown blocks.
-Example output: (and (deployed app) (secured db))
+        // 1. Dynamic PDDL Goal Extraction
+        goalPredicate := ExtractPDDLGoal(userPrompt, ctxResult.SemanticNodes, ctxResult.SemanticLinks)
 
-User Question: %s
-PDDL Goal:`, userPrompt)
-
-        // In GLLAM 0.2 we would run: goalPredicate, _ := llmClient.Generate(ctx, goalPrompt, "")
-        // For now, we mock the extracted output:
-        mockedGoalPredicate := "(and (resolved user_conflict))"
-
-        // 2. Compile the retrieved graph into PDDL strings using our new compiler
-        domainStr, problemStr := CompileGraphToPDDL(ctxResult.SemanticNodes, ctxResult.SemanticLinks, mockedGoalPredicate, ctxResult.Procedural)
+        // 2. Compile the retrieved graph into PDDL strings using our typed compiler
+        domainStr, problemStr := CompileGraphToPDDL(ctxResult.SemanticNodes, ctxResult.SemanticLinks, goalPredicate, ctxResult.Procedural)
 
         // 3. Invoke the dual-tier planning engine
         planner := NewNativePlanner()
@@ -166,21 +164,21 @@ PDDL Goal:`, userPrompt)
                 extPlanner := NewFastDownwardPlanner(e.PlannerExecutablePath)
                 extPlan, extErr := extPlanner.Solve(ctx, domainStr, problemStr)
                 if extErr != nil {
-                    ctxResult.PlannerOutput = fmt.Sprintf("Planning Engine triggered for timeline analysis.\n\nExtracted Goal: %s\n\nGenerated PDDL Domain:\n%s\nNative solver status: %v\nExternal solver status: %v", mockedGoalPredicate, domainStr, err, extErr)
+                    ctxResult.PlannerOutput = fmt.Sprintf("Planning Engine triggered for timeline analysis.\n\nExtracted Goal: %s\n\nGenerated PDDL Domain:\n%s\nNative solver status: %v\nExternal solver status: %v", goalPredicate, domainStr, err, extErr)
                 } else {
                     ctxResult.PlannerOutput = fmt.Sprintf("Planning Engine triggered via External PDDL Planner. Plan length: %d actions.", len(extPlan))
                 }
             } else {
-                ctxResult.PlannerOutput = fmt.Sprintf("Planning Engine triggered for timeline analysis.\n\nExtracted Goal: %s\n\nGenerated PDDL Domain:\n%s\nNative solver status: %v", mockedGoalPredicate, domainStr, err)
+                ctxResult.PlannerOutput = fmt.Sprintf("Planning Engine triggered for timeline analysis.\n\nExtracted Goal: %s\n\nGenerated PDDL Domain:\n%s\nNative solver status: %v", goalPredicate, domainStr, err)
             }
         } else {
             ctxResult.PlannerOutput = "Planning Engine triggered. Sequence mathematically verified."
         }
-
     }
 
     return ctxResult, nil
 }
+
 
 // FormatSystemPrompt formats the compiled context into a Markdown block for LLM consumption
 func FormatSystemPrompt(ctx *memory.CompiledContext) string {

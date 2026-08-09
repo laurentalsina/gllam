@@ -111,8 +111,9 @@ func main() {
 						TargetID:     targetID,
 						Relationship: "supports_format",
 						Caveats:      fmt.Sprintf("Format variant: %s", f),
-						ValidFrom:    time.Now().Unix(),
+						ValidFrom:    fmt.Sprintf("%d", time.Now().Unix()),
 						UpdatedAt:    time.Now().Unix(),
+
 					}
 					if err := gllam.AddEdge(ctx, link); err != nil {
 						// Might already exist

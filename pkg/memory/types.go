@@ -1,6 +1,15 @@
 package memory
 
+const (
+	NodeTypeEvent         = "event"
+	NodeTypeState         = "state"
+	NodeTypeEntity        = "entity"
+	NodeTypeService       = "service"
+	NodeTypeContradiction = "contradiction"
+)
+
 type EpisodicSummary struct {
+
     ID          string `json:"id"`
     SessionID   string `json:"session_id"`
     SummaryText string `json:"summary_text"`
@@ -29,14 +38,16 @@ type SemanticNode struct {
 }
 
 type SemanticLink struct {
-    SourceID     string `json:"source_id"`
-    TargetID     string `json:"target_id"`
-    Relationship string `json:"relationship"`
-    Caveats      string `json:"caveats"`
-    ValidFrom    int64  `json:"valid_from"`
-    ValidUntil   *int64 `json:"valid_until"` // nil means currently active
-    UpdatedAt    int64  `json:"updated_at"`
+    SourceID     string  `json:"source_id"`
+    TargetID     string  `json:"target_id"`
+    Relationship string  `json:"relationship"`
+    Caveats      string  `json:"caveats"`
+    ValidFrom    string  `json:"valid_from"`    // Unix timestamp string OR "temporal_note"
+    ValidUntil   *string `json:"valid_until"`   // Unix timestamp string OR "temporal_note" OR nil
+    TemporalNote string  `json:"temporal_note"` // Qualitative phrase describing imprecise timestamp
+    UpdatedAt    int64   `json:"updated_at"`
 }
+
 
 type CompiledContext struct {
 	Procedural    []ProceduralKnowledge

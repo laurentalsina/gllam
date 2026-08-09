@@ -114,8 +114,9 @@ func main() {
 				TargetID:     depID,
 				Relationship: "depends_on",
 				Caveats:      fmt.Sprintf("Version constraint: %s", version),
-				ValidFrom:    time.Now().Unix(),
+				ValidFrom:    fmt.Sprintf("%d", time.Now().Unix()),
 				UpdatedAt:    time.Now().Unix(),
+
 			}
 
 			if err := gllam.AddEdge(ctx, link); err != nil && !strings.Contains(err.Error(), "UNIQUE constraint") {

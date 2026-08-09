@@ -61,40 +61,43 @@ func main() {
 		}
 	}
 
+	nowStr := fmt.Sprintf("%d", now)
+
 	// 2. Define Links
 	links := []memory.SemanticLink{
 		// Release to Package mapping
-		{SourceID: "rel-react-18.0.0", TargetID: "pkg-react", Relationship: "is_release_of", ValidFrom: now, UpdatedAt: now},
-		{SourceID: "rel-react-17.0.2", TargetID: "pkg-react", Relationship: "is_release_of", ValidFrom: now, UpdatedAt: now},
+		{SourceID: "rel-react-18.0.0", TargetID: "pkg-react", Relationship: "is_release_of", ValidFrom: nowStr, UpdatedAt: now},
+		{SourceID: "rel-react-17.0.2", TargetID: "pkg-react", Relationship: "is_release_of", ValidFrom: nowStr, UpdatedAt: now},
 		
 		// Dependencies for React 18.0.0
 		{
 			SourceID: "rel-react-18.0.0", TargetID: "rel-loose-envify-1.4.0", 
 			Relationship: "depends_on", Caveats: "Required for production builds", 
-			ValidFrom: now, UpdatedAt: now,
+			ValidFrom: nowStr, UpdatedAt: now,
 		},
 		
 		// Dependencies for React 17.0.2
 		{
 			SourceID: "rel-react-17.0.2", TargetID: "rel-loose-envify-1.3.1", 
 			Relationship: "depends_on", Caveats: "Required for production builds", 
-			ValidFrom: now, UpdatedAt: now,
+			ValidFrom: nowStr, UpdatedAt: now,
 		},
 
 		// Features
 		{
 			SourceID: "rel-react-18.0.0", TargetID: "feat-concurrent", 
 			Relationship: "introduces_feature", Caveats: "Requires opt-in via createRoot API", 
-			ValidFrom: now, UpdatedAt: now,
+			ValidFrom: nowStr, UpdatedAt: now,
 		},
 
 		// Vulnerabilities
 		{
 			SourceID: "cve-2023-12345", TargetID: "rel-loose-envify-1.4.0", 
 			Relationship: "affects", Caveats: "Critical RCE if parsing untrusted environment variables. Fixed in 1.4.1", 
-			ValidFrom: now, UpdatedAt: now,
+			ValidFrom: nowStr, UpdatedAt: now,
 		},
 	}
+
 
 	for _, l := range links {
 		if err := gllam.AddEdge(ctx, l); err != nil {

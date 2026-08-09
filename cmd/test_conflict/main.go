@@ -35,13 +35,15 @@ func main() {
 		_ = gllam.StoreNodeEmbedding(ctx, n.ID)
 	}
 
+	nowStr := fmt.Sprintf("%d", now)
+
 	// Insert conflicting edges
 	// Edge 1
 	_ = gllam.AddEdge(ctx, memory.SemanticLink{
 		SourceID:     "pkg-react",
 		TargetID:     "state-active",
 		Relationship: "has_state",
-		ValidFrom:    now,
+		ValidFrom:    nowStr,
 	})
 
 	// Edge 2 (triggers conflict)
@@ -49,8 +51,9 @@ func main() {
 		SourceID:     "pkg-react",
 		TargetID:     "state-deprecated",
 		Relationship: "has_state",
-		ValidFrom:    now,
+		ValidFrom:    nowStr,
 	})
+
 
 	fmt.Println("Inserted conflicting edges successfully.")
 }
