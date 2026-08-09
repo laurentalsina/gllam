@@ -1598,6 +1598,24 @@ func (e *GllamEngine) SetIndividualAuthorTrustWeight(authorID string, adjustment
 	e.SystemPrompts.AuthorReliabilityHeuristics[strings.ToLower(authorID)] = adjustment
 }
 
+// DetermineDocumentIngestionStrategy queries agentic steering directives to decide whether
+// revision history, comment history, status transitions, or branch merges should be ingested for a document type.
+func (e *GllamEngine) DetermineDocumentIngestionStrategy(docType string) config.IngestionStrategy {
+	if e.SystemPrompts == nil {
+		e.SystemPrompts = config.DefaultAgenticMemorySystemPrompts()
+	}
+	key := strings.ToLower(docType)
+	if strat, ok := e.SystemPrompts.IngestionSteeringDirectives[key]; ok {
+		return strat
+	}
+	// Baseline default strategy
+	return config.IngestionStrategy{
+		TrackRevisionHistory: true,
+		CompactAuthorEpochs:  true,
+	}
+}
+
+
 // GaugeAndUpsertSourceNode evaluates multi-factor trust input (document type, individual author reliability, internal coherence, temporal freshness)
 // to compute composite trust weight and upserts the source node into SQLite.
 func (e *GllamEngine) GaugeAndUpsertSourceNode(ctx context.Context, id string, name string, nodeType string, input SourceTrustInput) (int, error) {

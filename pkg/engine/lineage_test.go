@@ -110,4 +110,34 @@ func TestStrictInformationLineage(t *testing.T) {
 	}
 }
 
+func TestIngestionSteeringDirectives(t *testing.T) {
+	tempDir := t.TempDir()
+	dbPath := filepath.Join(tempDir, "test_steering.db")
+
+	gllam, err := NewGllamEngine(dbPath, nil)
+	if err != nil {
+		t.Fatalf("Failed to create engine: %v", err)
+	}
+	defer gllam.Close()
+
+	// 1. Confluence strategy
+	confStrat := gllam.DetermineDocumentIngestionStrategy("confluence")
+	if !confStrat.TrackRevisionHistory || !confStrat.CompactAuthorEpochs {
+		t.Errorf("Expected Confluence strategy to track revision history and compact author epochs, got %+v", confStrat)
+	}
+
+	// 2. Jira strategy
+	jiraStrat := gllam.DetermineDocumentIngestionStrategy("jira")
+	if !jiraStrat.TrackCommentHistory || !jiraStrat.TrackStatusTransitions {
+		t.Errorf("Expected Jira strategy to track comments and status transitions, got %+v", jiraStrat)
+	}
+
+	// 3. Git strategy
+	gitStrat := gllam.DetermineDocumentIngestionStrategy("git")
+	if !gitStrat.TrackBranchMerges || !gitStrat.TrackRevisionHistory {
+		t.Errorf("Expected Git strategy to track branch merges and revision history, got %+v", gitStrat)
+	}
+}
+
+
 

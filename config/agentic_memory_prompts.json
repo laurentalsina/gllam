@@ -1,6 +1,15 @@
 {
   "allow_user_grilling": true,
+  "ingestion_steering_prompt": "INGESTION STEERING DIRECTIVES FOR MULTI-AUTHOR & VERSION HISTORY:\n1. Confluence / Wiki: Parse page revision history and author edit epochs into CompactedRevisionEpochs.\n2. Jira / Issue Trackers: Parse comment history, author provenance, and status transitions (Open -> Resolved).\n3. Git Repositories / PRs: Parse branch merge history, commit signatures, and PR review comments.\n4. Chat / Slack: Parse thread reply chains and author message timestamps.",
+  "ingestion_steering_directives": {
+    "confluence": { "track_revision_history": true, "max_revision_depth": 10, "compact_author_epochs": true },
+    "jira": { "track_comment_history": true, "track_status_transitions": true, "compact_author_epochs": true },
+    "git": { "track_branch_merges": true, "track_revision_history": true, "compact_author_epochs": true },
+    "pull_request": { "track_branch_merges": true, "track_comment_history": true, "compact_author_epochs": true },
+    "slack": { "track_thread_replies": true, "compact_author_epochs": true }
+  },
   "trust_weight_prompt": "EVALUATION RULESET FOR SOURCE TRUST WEIGHTING (W in [10, 1000]):\n1. Formal resolved ticketing systems (e.g. Jira Resolved, GitHub Merged PRs, Git commits) carry baseline weight 800.\n2. Approved architecture and design documents carry baseline weight 700.\n3. Open tickets, Slack channels, and incident logs carry baseline weight 500.\n4. Unstructured meeting notes, support tickets, and email threads carry baseline weight 400.\n5. Drafts and personal scratchpads carry baseline weight 200.\n6. Individual author reliability heuristics adjust scores per person (e.g. Alice +150, Dave -150).\n7. Penalize incoherent or high-entropy gibberish text (-250).",
+
   "author_reliability_prompt": "INDIVIDUAL AUTHOR & SOURCE RELIABILITY HEURISTICS:\nEvaluate individual author track records based on past documentation completeness. Specific individuals who consistently deliver verified, complete implementations receive positive trust adjustments (+100 to +200). Individuals with histories of incomplete drafts, unverified claims, or abandoned proposals receive negative trust adjustments (-100 to -200).",
   "author_reliability_heuristics": {
     "alice": 150,

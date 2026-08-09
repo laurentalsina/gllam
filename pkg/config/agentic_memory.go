@@ -7,24 +7,48 @@ import (
 )
 
 // AgenticMemorySystemPrompts defines configurable system prompts and heuristics
-// for epistemic trust weighting, corpus historical context, semantic extraction,
-// procedural generalization, and salience scoring.
+type IngestionStrategy struct {
+	TrackRevisionHistory   bool `json:"track_revision_history"`
+	TrackCommentHistory    bool `json:"track_comment_history"`
+	TrackStatusTransitions bool `json:"track_status_transitions"`
+	TrackBranchMerges      bool `json:"track_branch_merges"`
+	TrackThreadReplies     bool `json:"track_thread_replies"`
+	MaxRevisionDepth       int  `json:"max_revision_depth,omitempty"`
+	CompactAuthorEpochs    bool `json:"compact_author_epochs"`
+}
+
 type AgenticMemorySystemPrompts struct {
-	AllowUserGrilling              bool              `json:"allow_user_grilling"` // Set false in non-interactive benchmark evaluation (e.g. BEAM)
-	TrustWeightPrompt              string            `json:"trust_weight_prompt"`
-	AuthorReliabilityPrompt        string            `json:"author_reliability_prompt"`
-	AuthorReliabilityHeuristics    map[string]int    `json:"author_reliability_heuristics,omitempty"` // Individual author/person trust adjustments (e.g. "alice": +150, "dave": -150)
-	HistoricalContextPrompt        string            `json:"historical_context_prompt"`
-	SemanticExtractionPrompt       string            `json:"semantic_extraction_prompt"`
-	ProceduralGeneralizationPrompt string            `json:"procedural_generalization_prompt"`
-	SalienceQueryPrompt            string            `json:"salience_query_prompt"`
-	CustomCategoryPrompts          map[string]string `json:"custom_category_prompts,omitempty"`
+	AllowUserGrilling              bool                         `json:"allow_user_grilling"` // Set false in non-interactive benchmark evaluation (e.g. BEAM)
+	TrustWeightPrompt              string                       `json:"trust_weight_prompt"`
+	AuthorReliabilityPrompt        string                       `json:"author_reliability_prompt"`
+	AuthorReliabilityHeuristics    map[string]int               `json:"author_reliability_heuristics,omitempty"` // Individual author/person trust adjustments (e.g. "alice": +150, "dave": -150)
+	IngestionSteeringPrompt        string                       `json:"ingestion_steering_prompt"`
+	IngestionSteeringDirectives    map[string]IngestionStrategy `json:"ingestion_steering_directives,omitempty"` // Per-source type ingestion steering strategies
+	HistoricalContextPrompt        string                       `json:"historical_context_prompt"`
+	SemanticExtractionPrompt       string                       `json:"semantic_extraction_prompt"`
+	ProceduralGeneralizationPrompt string                       `json:"procedural_generalization_prompt"`
+	SalienceQueryPrompt            string                       `json:"salience_query_prompt"`
+	CustomCategoryPrompts          map[string]string            `json:"custom_category_prompts,omitempty"`
 }
 
 // DefaultAgenticMemorySystemPrompts returns built-in baseline system prompts.
 func DefaultAgenticMemorySystemPrompts() *AgenticMemorySystemPrompts {
 	return &AgenticMemorySystemPrompts{
 		AllowUserGrilling: true,
+		IngestionSteeringPrompt: `INGESTION STEERING DIRECTIVES FOR MULTI-AUTHOR & VERSION HISTORY:
+1. Confluence / Wiki: Parse page revision history and author edit epochs into CompactedRevisionEpochs.
+2. Jira / Issue Trackers: Parse comment history, author provenance, and status transitions (Open -> Resolved).
+3. Git Repositories / PRs: Parse branch merge history, commit signatures, and PR review comments.
+4. Chat / Slack: Parse thread reply chains and author message timestamps.`,
+
+		IngestionSteeringDirectives: map[string]IngestionStrategy{
+			"confluence":   {TrackRevisionHistory: true, MaxRevisionDepth: 10, CompactAuthorEpochs: true},
+			"jira":         {TrackCommentHistory: true, TrackStatusTransitions: true, CompactAuthorEpochs: true},
+			"git":          {TrackBranchMerges: true, TrackRevisionHistory: true, CompactAuthorEpochs: true},
+			"pull_request": {TrackBranchMerges: true, TrackCommentHistory: true, CompactAuthorEpochs: true},
+			"slack":        {TrackThreadReplies: true, CompactAuthorEpochs: true},
+		},
+
 		TrustWeightPrompt: `EVALUATION RULESET FOR SOURCE TRUST WEIGHTING (W in [10, 1000]):
 
 1. Formal resolved ticketing systems (e.g. Jira Resolved, GitHub Merged PRs, Git commits) carry baseline weight 800.
