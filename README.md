@@ -1,17 +1,18 @@
 # GLLAM: Go Lightweight Local Agentic Memory
 
 A fast agentic-memory engine:
-- In Go for speed of execution
-- SQLite + sqlite-vec for vector similarity search
-- Opinionated procedural memory: use PDDL (Plan Domain Definition Language) for event sequences
-- A semantic-graph augmented for validity-time and information-contradictions tracking 
+- uses Go for speed of execution
+- uses SQLite + sqlite-vec for vector similarity search
+- opinionated procedural memory: uses PDDL (Plan Domain Definition Language) for event sequences
+- a semantic-graph augmented for temporal-validity, contradictions tracking, fallacies-identification, sources-evaluation
+- very configurable to adapt to data sources types, but no scope creep into OCR, ingestion pipelines, etc...
 
 ## Architecture
 
-Memory layers:
-1. **Episodic** Interaction logs using sqlite-vec for semantic search.
-2. **Semantic** Entities & Relationships graph with added timeline info.
-3. **Procedural** Executable markdown, plus an embedded PDDL router with two logic engines: 1-Native STRIPS BFS, 2-delegation to Fast-Downward. Compiles the semantic graph into PDDL to remember timelines, preventing LLM's planning-logic errors.
+Classic Karpathy Memory layers:
+1. **Episodic** Interaction-log and other information source chuncks, using sqlite-vec for semantic search on embeddings.
+2. **Semantic** Entities & Relationships graph with added timeline info, contradictions, fallacies, sources...
+3. **Procedural** Not just skills markdown... Also invokes PDDL routers: 1-Native STRIPS BFS, 2-delegation (eg. Fast-Downward) of a semantic graph extract into a PDDL domain to resolve timeline questions, bypassing LLM's planning-logic weaknesses.
 
 ### Design Decisions
 
