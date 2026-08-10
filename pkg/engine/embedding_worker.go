@@ -93,7 +93,9 @@ func (e *GllamEngine) StartEmbeddingWorkerPool(ctx context.Context, numWorkers i
 				case <-e.stopEmbeddingWorkers:
 					return
 				case <-ticker.C:
-					_, _ = e.ProcessUnembeddedNodeBatch(ctx, 50)
+					if _, err := e.ProcessUnembeddedNodeBatch(ctx, 50); err != nil {
+						log.Printf("Background embedding worker failed to process batch: %v", err)
+					}
 				}
 			}
 		}(i + 1)

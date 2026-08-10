@@ -370,15 +370,15 @@ High-scale memory systems require a periodic offline **Memory Maintenance Cycle*
 2. **Synthetic Random Trace Tests & Memory Exercise (`SimulateRandomTraceTests`):**
    * Generates synthetic question/answer trace scenarios across randomly sampled entity pairs.
    * Exercises multi-hop graph retrieval (`FindMultiHopPath`).
-   * Measures quantitative metrics:
-     * **Memory Clarity Score ($\text{Clarity} \in [0.0, 1.0]$):** Proportion of unambiguous, uncontradicted graph paths.
-     * **Memory Consistency Score ($\text{Consistency} \in [0.0, 1.0]$):** Ratio of consistent simulated answers across domains.
+   * Measures quantitative metrics via `CalculateTraceClarity` and `CalculateTaxonomyPathOverlap`:
+     * **Memory Clarity Score ($\text{Clarity} \in [0.0, 1.0]$):** Calculated from multi-hop distance decay ($\frac{1.0}{1.0 + 0.1 \times (\text{hops} - 1)}$), link caveats, contradiction penalties (`resolves_conflict`, `subverts_claim`), or materialized taxonomy path segment overlap coefficients.
+     * **Memory Consistency Score ($\text{Consistency} \in [0.0, 1.0]$):** Ratio of consistent simulated answers across sampled trace pairs.
 
 ```go
 // Trigger offline memory maintenance cycle with 10 synthetic random trace tests
 report, err := gllam.EnterMemorySleepCycle(ctx, 10)
 
-fmt.Printf("Pruned Stale Links: %d\n", report.PrunedStaleLinksCount)
+fmt.Printf("Compacted Revisions: %d\n", report.CompactedRevisionsCount)
 fmt.Printf("Memory Clarity Score: %.2f\n", report.MemoryClarityScore)
 fmt.Printf("Memory Consistency Score: %.2f\n", report.MemoryConsistencyScore)
 ```

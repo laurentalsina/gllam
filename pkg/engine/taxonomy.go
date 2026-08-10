@@ -357,18 +357,22 @@ func (e *GllamEngine) ConsolidateTaxonomyBranch(ctx context.Context, sourceCateg
 	err = tx.QueryRowContext(ctx, "SELECT id FROM semantic_nodes WHERE taxonomy_path = ? AND is_category = 1 LIMIT 1", cleanSource).Scan(&sourceID)
 	if err == nil && sourceID != "" {
 		var targetID string
-		_ = tx.QueryRowContext(ctx, "SELECT id FROM semantic_nodes WHERE taxonomy_path = ? AND is_category = 1 LIMIT 1", cleanTarget).Scan(&targetID)
+		errTarget := tx.QueryRowContext(ctx, "SELECT id FROM semantic_nodes WHERE taxonomy_path = ? AND is_category = 1 LIMIT 1", cleanTarget).Scan(&targetID)
 
-		if targetID != "" {
+		if errTarget == nil && targetID != "" {
 			redirectTargetQuery := `
 				UPDATE semantic_links
 				SET target_id = ?
 				WHERE target_id = ? AND relationship IN ('is_a', 'subclass_of', 'instance_of', 'part_of')`
-			_, _ = tx.ExecContext(ctx, redirectTargetQuery, targetID, sourceID)
+			if _, err := tx.ExecContext(ctx, redirectTargetQuery, targetID, sourceID); err != nil {
+				return fmt.Errorf("failed to redirect links from category %s to %s: %w", sourceID, targetID, err)
+			}
 
 			// Preserve the old category node by merging its path and setting is_category = 0 (never delete nodes!)
 			mergeOldCategoryQuery := `UPDATE semantic_nodes SET taxonomy_path = ?, is_category = 0 WHERE id = ?`
-			_, _ = tx.ExecContext(ctx, mergeOldCategoryQuery, cleanTarget, sourceID)
+			if _, err := tx.ExecContext(ctx, mergeOldCategoryQuery, cleanTarget, sourceID); err != nil {
+				return fmt.Errorf("failed to demote merged category node %s: %w", sourceID, err)
+			}
 		}
 	}
 

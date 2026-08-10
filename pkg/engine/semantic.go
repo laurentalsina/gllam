@@ -107,7 +107,9 @@ func (e *GllamEngine) AddEdge(ctx context.Context, link memory.SemanticLink) err
 		if newTrustWeight > existingTrustWeight {
 			// Incoming claim has HIGHER trust weight (e.g. Jira Resolved 900 vs Draft 100) -> Expire existing claim automatically!
 			expireQuery := `UPDATE semantic_links SET valid_until = ? WHERE source_id = ? AND target_id = ? AND relationship = ? AND valid_until IS NULL`
-			_, _ = e.db.ExecContext(ctx, expireQuery, nowStr, link.SourceID, existingTargetID, link.Relationship)
+			if _, err := e.db.ExecContext(ctx, expireQuery, nowStr, link.SourceID, existingTargetID, link.Relationship); err != nil {
+				return fmt.Errorf("failed to expire existing lower-trust claim: %w", err)
+			}
 
 			// Insert resolves_conflict edge
 			_ = e.AddEdge(ctx, memory.SemanticLink{
@@ -134,7 +136,9 @@ func (e *GllamEngine) AddEdge(ctx context.Context, link memory.SemanticLink) err
 			// Equal trust weights & User Grilling is DISABLED (e.g. BEAM Benchmark Evaluation Mode):
 			// Automatically resolve by Recency Preference (newer incoming claim supersedes older claim)
 			expireQuery := `UPDATE semantic_links SET valid_until = ? WHERE source_id = ? AND target_id = ? AND relationship = ? AND valid_until IS NULL`
-			_, _ = e.db.ExecContext(ctx, expireQuery, nowStr, link.SourceID, existingTargetID, link.Relationship)
+			if _, err := e.db.ExecContext(ctx, expireQuery, nowStr, link.SourceID, existingTargetID, link.Relationship); err != nil {
+				return fmt.Errorf("failed to expire older claim in benchmark mode: %w", err)
+			}
 
 			_ = e.AddEdge(ctx, memory.SemanticLink{
 				SourceID:            link.TargetID,
@@ -367,7 +371,9 @@ func (e *GllamEngine) IndexNodeVector(ctx context.Context, nodeID string, vec []
 		return fmt.Errorf("failed to serialize embedding: %w", err)
 	}
 
-	_, _ = e.db.ExecContext(ctx, "DELETE FROM semantic_embeddings WHERE node_id = ?", nodeID)
+	if _, err := e.db.ExecContext(ctx, "DELETE FROM semantic_embeddings WHERE node_id = ?", nodeID); err != nil {
+		return fmt.Errorf("failed to clear previous embedding for node %s: %w", nodeID, err)
+	}
 	_, err = e.db.ExecContext(ctx, "INSERT INTO semantic_embeddings (node_id, embedding) VALUES (?, vec_f32(?))", nodeID, vecBytes)
 	if err != nil {
 		return fmt.Errorf("failed to store embedding for node %s: %w", nodeID, err)
@@ -995,7 +1001,9 @@ func (e *GllamEngine) ResolveContradiction(ctx context.Context, contradictionID 
 			UPDATE semantic_links
 			SET valid_until = ?, updated_at = ?
 			WHERE (source_id = ? OR target_id = ?) AND valid_until IS NULL`
-		_, _ = e.db.ExecContext(ctx, expireContrQuery, nowStr, now, contradictionID, contradictionID)
+		if _, err := e.db.ExecContext(ctx, expireContrQuery, nowStr, now, contradictionID, contradictionID); err != nil {
+			return fmt.Errorf("failed to expire contradiction node links for %s: %w", contradictionID, err)
+		}
 	}
 
 	// 3. Insert resolves_conflict link

@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"fmt"
+	"log"
 	"math/rand"
 	"strings"
 	"time"
@@ -11,7 +12,7 @@ import (
 )
 
 // EnterMemorySleepCycle puts the memory engine into a maintenance sleep state, performing
-// graph compaction, stale link pruning, taxonomy consolidation, and synthetic random trace tests.
+// graph caveat compaction, taxonomy consolidation, uncategorized node classification, and synthetic random trace tests.
 func (e *GllamEngine) EnterMemorySleepCycle(ctx context.Context, numTraceTests int) (*memory.MemorySleepReport, error) {
 	start := time.Now()
 	nowTS := start.Unix()
@@ -30,16 +31,22 @@ func (e *GllamEngine) EnterMemorySleepCycle(ctx context.Context, numTraceTests i
 	compactedHubs, err := e.BatchCompactHubCaveats(ctx, 10, 5)
 	if err == nil {
 		report.CompactedRevisionsCount = compactedHubs
+	} else {
+		log.Printf("Sleep cycle hub caveat compaction warning: %v", err)
 	}
 	report.PrunedStaleLinksCount = 0 // Historical links are preserved with valid_until timestamps for temporal lineage!
 
-
 	// Phase 2: Consolidate Taxonomy Branches
-	consolidatedCount, _ := e.RunTaxonomyConsolidationPass(ctx)
+	consolidatedCount, err := e.RunTaxonomyConsolidationPass(ctx)
+	if err != nil {
+		log.Printf("Sleep cycle taxonomy consolidation warning: %v", err)
+	}
 	report.ConsolidatedTaxonomyCount = consolidatedCount
 
 	// Phase 3: Process Uncategorized Batch
-	_, _ = e.ProcessUncategorizedBatch(ctx, 100)
+	if _, err := e.ProcessUncategorizedBatch(ctx, 100); err != nil {
+		log.Printf("Sleep cycle uncategorized batch processing warning: %v", err)
+	}
 
 	// Phase 4: Synthetic Random Trace Tests & Memory Exercise
 	traces, clarityScore, consistencyScore, err := e.SimulateRandomTraceTests(ctx, numTraceTests)
@@ -102,23 +109,16 @@ func (e *GllamEngine) SimulateRandomTraceTests(ctx context.Context, numTraceTest
 		simulatedQuery := fmt.Sprintf("What is the structural relationship between '%s' (%s) and '%s' (%s)?", n1.Name, n1.TaxonomyPath, n2.Name, n2.TaxonomyPath)
 
 		// Exercise graph traversal path finder
-		path, pathErr := e.FindMultiHopPath(ctx, []string{n1.ID, n2.ID}, 4)
+		paths, _ := e.FindMultiHopPath(ctx, []string{n1.ID, n2.ID}, 4)
 
-		isConsistent := pathErr == nil && len(path) > 0
-		clarity := 0.85
+		clarity, isConsistent := e.CalculateTraceClarity(ctx, n1, n2, paths)
 		if isConsistent {
-			clarity = 1.0
-			consistentCount++
-		} else if strings.HasPrefix(n1.TaxonomyPath, n2.TaxonomyPath) || strings.HasPrefix(n2.TaxonomyPath, n1.TaxonomyPath) {
-			// Related taxonomy domain boost
-			clarity = 0.90
-			isConsistent = true
 			consistentCount++
 		}
 
-		simulatedAnswer := fmt.Sprintf("Trace exercise: %s -> %s. Path steps: %d. Domain context: %s", n1.Name, n2.Name, len(path), n1.TaxonomyPath)
+		simulatedAnswer := fmt.Sprintf("Trace exercise: %s -> %s. Path count: %d. Clarity score: %.2f. Domain context: %s", n1.Name, n2.Name, len(paths), clarity, n1.TaxonomyPath)
 		if !isConsistent {
-			simulatedAnswer = fmt.Sprintf("Trace exercise: Disjoint nodes %s and %s in separate domains.", n1.Name, n2.Name)
+			simulatedAnswer = fmt.Sprintf("Trace exercise: Disjoint nodes %s and %s in separate domains. Clarity score: %.2f.", n1.Name, n2.Name, clarity)
 		}
 
 		traceScenario := memory.SyntheticTraceTestScenario{
@@ -138,5 +138,81 @@ func (e *GllamEngine) SimulateRandomTraceTests(ctx context.Context, numTraceTest
 	consistencyRatio := float64(consistentCount) / float64(numTraceTests)
 
 	return traces, avgClarity, consistencyRatio, nil
+}
+
+// CalculateTaxonomyPathOverlap computes the segment overlap ratio between two materialized taxonomy paths.
+func CalculateTaxonomyPathOverlap(path1, path2 string) float64 {
+	p1 := strings.Split(strings.Trim(path1, "/"), "/")
+	p2 := strings.Split(strings.Trim(path2, "/"), "/")
+	if len(p1) == 0 || len(p2) == 0 {
+		return 0.0
+	}
+	common := 0
+	minLen := len(p1)
+	if len(p2) < minLen {
+		minLen = len(p2)
+	}
+	for i := 0; i < minLen; i++ {
+		if p1[i] != "" && p1[i] == p2[i] {
+			common++
+		} else if p1[i] != "" {
+			break
+		}
+	}
+	maxLen := len(p1)
+	if len(p2) > maxLen {
+		maxLen = len(p2)
+	}
+	if maxLen == 0 {
+		return 0.0
+	}
+	return float64(common) / float64(maxLen)
+}
+
+// CalculateTraceClarity computes a quantitative clarity score based on graph hop distance, caveat/conflict penalties,
+// or hierarchical taxonomy path segment overlap when no explicit graph path exists.
+func (e *GllamEngine) CalculateTraceClarity(ctx context.Context, n1, n2 memory.SemanticNode, paths []MultiHopPath) (float64, bool) {
+	if len(paths) > 0 {
+		// Pick shortest path
+		shortest := paths[0]
+		for _, p := range paths {
+			if p.HopCount < shortest.HopCount {
+				shortest = p
+			}
+		}
+
+		// Base clarity degrades with hop distance: 1.0 / (1.0 + 0.1 * (hops - 1))
+		hops := float64(shortest.HopCount)
+		if hops < 1.0 {
+			hops = 1.0
+		}
+		baseClarity := 1.0 / (1.0 + 0.1*(hops-1.0))
+
+		// Check links along shortest path for caveats or active contradictions
+		caveatPenalty := 0.0
+		for _, l := range shortest.Links {
+			if l.Caveats != "" {
+				caveatPenalty += 0.10
+			}
+			if l.Relationship == "resolves_conflict" || l.Relationship == "subverts_claim" || l.Relationship == "exhibits_fallacy" {
+				caveatPenalty += 0.20
+			}
+		}
+		clarity := baseClarity - caveatPenalty
+		if clarity < 0.10 {
+			clarity = 0.10
+		}
+		return clarity, true
+	}
+
+	// No direct graph path — evaluate taxonomy domain alignment
+	overlap := CalculateTaxonomyPathOverlap(n1.TaxonomyPath, n2.TaxonomyPath)
+	if overlap > 0.25 { // Shares at least top-level category domain
+		clarity := 0.50 + 0.50*overlap
+		return clarity, true
+	}
+
+	// Disjoint domains
+	return 0.20, false
 }
 

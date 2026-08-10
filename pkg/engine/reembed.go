@@ -27,7 +27,9 @@ func (e *GllamEngine) CheckEmbeddingModelVersion(ctx context.Context) (bool, str
 	if err == sql.ErrNoRows {
 		// First initialization: store current model version
 		insertQuery := `INSERT INTO system_metadata (key, value, updated_at) VALUES ('embedding_model_version', ?, ?)`
-		_, _ = e.db.ExecContext(ctx, insertQuery, activeVersion, time.Now().Unix())
+		if _, err := e.db.ExecContext(ctx, insertQuery, activeVersion, time.Now().Unix()); err != nil {
+			log.Printf("Failed to store initial embedding_model_version: %v", err)
+		}
 		return false, "", activeVersion, nil
 	} else if err != nil {
 		return false, "", "", fmt.Errorf("failed to query embedding_model_version: %w", err)
@@ -89,7 +91,9 @@ func (e *GllamEngine) ReembedAllSemanticNodes(ctx context.Context) (int, error) 
 
 		// Update or insert vector into semantic_embeddings
 		deleteQuery := `DELETE FROM semantic_embeddings WHERE node_id = ?`
-		_, _ = e.db.ExecContext(ctx, deleteQuery, n.id)
+		if _, err := e.db.ExecContext(ctx, deleteQuery, n.id); err != nil {
+			log.Printf("Failed to delete old embedding for node %s: %v", n.id, err)
+		}
 
 		insertQuery := `INSERT INTO semantic_embeddings (node_id, embedding) VALUES (?, ?)`
 		if _, err := e.db.ExecContext(ctx, insertQuery, n.id, vecBytes); err == nil {
@@ -101,7 +105,9 @@ func (e *GllamEngine) ReembedAllSemanticNodes(ctx context.Context) (int, error) 
 	activeVersion := e.embedder.ModelVersion()
 	updateMeta := `INSERT INTO system_metadata (key, value, updated_at) VALUES ('embedding_model_version', ?, ?)
 		ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at`
-	_, _ = e.db.ExecContext(ctx, updateMeta, activeVersion, time.Now().Unix())
+	if _, err := e.db.ExecContext(ctx, updateMeta, activeVersion, time.Now().Unix()); err != nil {
+		return reembeddedCount, fmt.Errorf("failed to update embedding_model_version in system_metadata: %w", err)
+	}
 
 	return reembeddedCount, nil
 }

@@ -4,10 +4,10 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"log"
 	"os"
 	"strings"
 	"time"
-
 
 	sqlite_vec "github.com/asg017/sqlite-vec-go-bindings/cgo"
 	_ "github.com/mattn/go-sqlite3"
@@ -164,7 +164,9 @@ func (e *GllamEngine) StartWALCheckpointManager(ctx context.Context, interval ti
 			case <-e.stopWALManager:
 				return
 			case <-ticker.C:
-				_, _, _ = e.CheckpointWAL(ctx, "RESTART")
+				if _, _, err := e.CheckpointWAL(ctx, "RESTART"); err != nil {
+					log.Printf("Background WAL checkpoint RESTART failed: %v", err)
+				}
 			}
 		}
 	}()
@@ -185,7 +187,9 @@ func (e *GllamEngine) Close() error {
 
 	// Final WAL truncation checkpoint before closing DB connections
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	_, _, _ = e.CheckpointWAL(ctx, "TRUNCATE")
+	if _, _, err := e.CheckpointWAL(ctx, "TRUNCATE"); err != nil {
+		log.Printf("Final WAL checkpoint TRUNCATE failed during engine shutdown: %v", err)
+	}
 	cancel()
 
 	var errs []error
@@ -212,35 +216,38 @@ func (e *GllamEngine) DBRO() *sql.DB {
     return e.dbRO
 }
 
-// InitSchema reads and executes schema.sql to create all tables and indexes
+// InitSchema reads and executes schema.sql to create all tables and indexes.
 func (e *GllamEngine) InitSchema() error {
-    schemaPaths := []string{
-        "pkg/schema/schema.sql",
-        "../pkg/schema/schema.sql",
-        "../../pkg/schema/schema.sql",
-    }
+	schemaPaths := []string{
+		"pkg/schema/schema.sql",
+		"../pkg/schema/schema.sql",
+		"../../pkg/schema/schema.sql",
+	}
 
-    var schemaBytes []byte
-    var lastErr error
-    for _, path := range schemaPaths {
-        schemaBytes, lastErr = os.ReadFile(path)
-        if lastErr == nil {
-            break
-        }
-    }
-    if lastErr != nil {
-        return fmt.Errorf("failed to read schema.sql from any known path: %w", lastErr)
-    }
+	var schemaBytes []byte
+	var lastErr error
+	for _, path := range schemaPaths {
+		schemaBytes, lastErr = os.ReadFile(path)
+		if lastErr == nil {
+			break
+		}
+	}
+	if lastErr != nil {
+		return fmt.Errorf("failed to read schema.sql from any known path: %w", lastErr)
+	}
 
-    if _, err := e.db.Exec(string(schemaBytes)); err != nil {
-        return fmt.Errorf("failed to execute schema.sql: %w", err)
-    }
+	if _, err := e.db.Exec(string(schemaBytes)); err != nil {
+		return fmt.Errorf("failed to execute schema.sql: %w", err)
+	}
 
-    // Migration: Add trust_weight & caveat_summary columns to semantic_nodes if missing
-    _, _ = e.db.Exec("ALTER TABLE semantic_nodes ADD COLUMN trust_weight INTEGER DEFAULT 100;")
-    _, _ = e.db.Exec("ALTER TABLE semantic_nodes ADD COLUMN caveat_summary TEXT;")
+	// Migration: Add trust_weight & caveat_summary columns to semantic_nodes if missing.
+	// Ignore "duplicate column name" errors when columns already exist.
+	if _, err := e.db.Exec("ALTER TABLE semantic_nodes ADD COLUMN trust_weight INTEGER DEFAULT 100;"); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
+		return fmt.Errorf("failed to add trust_weight column: %w", err)
+	}
+	if _, err := e.db.Exec("ALTER TABLE semantic_nodes ADD COLUMN caveat_summary TEXT;"); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
+		return fmt.Errorf("failed to add caveat_summary column: %w", err)
+	}
 
-    return nil
+	return nil
 }
-
-

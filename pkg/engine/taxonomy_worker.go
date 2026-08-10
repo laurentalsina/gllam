@@ -49,8 +49,10 @@ func (e *GllamEngine) ProcessUncategorizedBatch(ctx context.Context, batchSize i
 			TaxonomyPath:  targetPath,
 			IsCategory:    true,
 		}
-		_ = e.UpsertNode(ctx, catNode)
-
+		if err := e.UpsertNode(ctx, catNode); err != nil {
+			log.Printf("Failed to upsert category node %s: %v", catID, err)
+			continue
+		}
 
 		// 2. Set node materialized taxonomy path
 		nodePath := fmt.Sprintf("%s/%s", strings.TrimRight(targetPath, "/"), strings.ReplaceAll(n.Name, " ", "_"))
@@ -67,7 +69,9 @@ func (e *GllamEngine) ProcessUncategorizedBatch(ctx context.Context, batchSize i
 			Caveats:      "Taxonomy categorization",
 			ValidFrom:    fmt.Sprintf("%d", time.Now().Unix()),
 		}
-		_ = e.AddEdge(ctx, isALink)
+		if err := e.AddEdge(ctx, isALink); err != nil {
+			log.Printf("Failed to add is_a link for node %s -> %s: %v", n.ID, catID, err)
+		}
 		processed++
 	}
 
@@ -110,8 +114,12 @@ func (e *GllamEngine) StartTaxonomyWorker(ctx context.Context, interval time.Dur
 			case <-e.stopTaxonomyWorker:
 				return
 			case <-ticker.C:
-				_, _ = e.ProcessUncategorizedBatch(ctx, 50)
-				_, _ = e.RunTaxonomyConsolidationPass(ctx)
+				if _, err := e.ProcessUncategorizedBatch(ctx, 50); err != nil {
+					log.Printf("Background taxonomy worker ProcessUncategorizedBatch failed: %v", err)
+				}
+				if _, err := e.RunTaxonomyConsolidationPass(ctx); err != nil {
+					log.Printf("Background taxonomy worker RunTaxonomyConsolidationPass failed: %v", err)
+				}
 			}
 		}
 	}()

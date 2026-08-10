@@ -70,3 +70,63 @@ func TestMemoryMaintenanceCycleAndRandomTraceTests(t *testing.T) {
 		t.Errorf("Expected 1 historical temporal link preserved in database, got %d", count)
 	}
 }
+
+func TestCalculateTraceClarityMetrics(t *testing.T) {
+	// 1. Taxonomy path overlap tests
+	overlapSame := CalculateTaxonomyPathOverlap("/Engineering/Infrastructure/Databases", "/Engineering/Infrastructure/Databases")
+	if overlapSame != 1.0 {
+		t.Errorf("Expected 1.0 overlap for identical taxonomy paths, got %f", overlapSame)
+	}
+
+	overlapPartial := CalculateTaxonomyPathOverlap("/Engineering/Infrastructure/Databases", "/Engineering/Infrastructure/Deployment")
+	if overlapPartial < 0.50 || overlapPartial > 0.70 {
+		t.Errorf("Expected ~0.66 overlap for shared /Engineering/Infrastructure branch, got %f", overlapPartial)
+	}
+
+	overlapDisjoint := CalculateTaxonomyPathOverlap("/Engineering/Services", "/Sales/Tools")
+	if overlapDisjoint != 0.0 {
+		t.Errorf("Expected 0.0 overlap for disjoint taxonomy branches, got %f", overlapDisjoint)
+	}
+
+	// 2. Trace clarity calculations
+	n1 := memory.SemanticNode{ID: "n1", Name: "Postgres", TaxonomyPath: "/Engineering/Infrastructure/Databases"}
+	n2 := memory.SemanticNode{ID: "n2", Name: "Redis", TaxonomyPath: "/Engineering/Infrastructure/Databases"}
+	n3 := memory.SemanticNode{ID: "n3", Name: "Salesforce", TaxonomyPath: "/Sales/Tools"}
+
+	gllam, _ := NewGllamEngine(filepath.Join(t.TempDir(), "clarity.db"), nil)
+	defer gllam.Close()
+
+	// Path with 1 hop and 0 caveats
+	singleHopPaths := []MultiHopPath{
+		{
+			HopCount: 1,
+			Links: []memory.SemanticLink{
+				{SourceID: "n1", TargetID: "n2", Relationship: "connects_to"},
+			},
+		},
+	}
+	clarityDirect, isConsistent := gllam.CalculateTraceClarity(context.Background(), n1, n2, singleHopPaths)
+	if !isConsistent || clarityDirect != 1.0 {
+		t.Errorf("Expected clarity 1.0 for direct uncaveated link, got clarity=%f, consistent=%v", clarityDirect, isConsistent)
+	}
+
+	// Path with caveat & conflict penalty
+	caveatPaths := []MultiHopPath{
+		{
+			HopCount: 1,
+			Links: []memory.SemanticLink{
+				{SourceID: "n1", TargetID: "n2", Relationship: "resolves_conflict", Caveats: "High latency spike"},
+			},
+		},
+	}
+	clarityCaveat, _ := gllam.CalculateTraceClarity(context.Background(), n1, n2, caveatPaths)
+	if clarityCaveat >= clarityDirect {
+		t.Errorf("Expected lower clarity for path with caveats and conflict resolution, got %f vs %f", clarityCaveat, clarityDirect)
+	}
+
+	// Disjoint taxonomy clarity
+	clarityDisjoint, isConsistentDisjoint := gllam.CalculateTraceClarity(context.Background(), n1, n3, nil)
+	if isConsistentDisjoint || clarityDisjoint != 0.20 {
+		t.Errorf("Expected clarity 0.20 and inconsistent for disjoint domains, got clarity=%f, consistent=%v", clarityDisjoint, isConsistentDisjoint)
+	}
+}
