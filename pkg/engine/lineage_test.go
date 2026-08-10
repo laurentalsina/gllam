@@ -129,10 +129,19 @@ func TestIngestionSteeringDirectives(t *testing.T) {
 	}
 
 
-	// 1. Confluence strategy
+	// 1. Confluence strategy & prompt
 	confStrat := gllam.DetermineDocumentIngestionStrategy("confluence")
 	if !confStrat.TrackRevisionHistory || !confStrat.CompactAuthorEpochs {
 		t.Errorf("Expected Confluence strategy to track revision history and compact author epochs, got %+v", confStrat)
+	}
+	jiraPrompt := gllam.SystemPrompts.GetIngestionSteeringPrompt("jira")
+	if !strings.Contains(jiraPrompt, "Jira / Issue Tracker Directives") {
+		t.Errorf("Expected targeted Jira ingestion prompt, got: %s", jiraPrompt)
+	}
+
+	fallbackPrompt := gllam.SystemPrompts.GetIngestionSteeringPrompt("unknown_custom_type")
+	if !strings.Contains(fallbackPrompt, "INGESTION STEERING DIRECTIVES FOR MULTI-AUTHOR") {
+		t.Errorf("Expected fallback global ingestion prompt for unknown type, got: %s", fallbackPrompt)
 	}
 
 	// 2. Jira strategy

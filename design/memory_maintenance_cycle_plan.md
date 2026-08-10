@@ -24,9 +24,11 @@ flowchart TD
     Phase3 --> SleepReport[Return MemorySleepReport]
 ```
 
-### 1. Phase 1: Maintenance Compaction & Cleaning
+### 1. Phase 1: Maintenance Compaction & Self-Healing
 * **Node Caveat Compaction:** Synthesizes historical edge caveats on hub entities while **preserving all expired temporal links (`valid_until <= now`) forever in SQLite for bi-temporal lineage and historical RAG**.
-* **Taxonomy Consolidation:** Merges duplicate taxonomy categories in chunked 500-row transactions with yield pauses.
+* **Self-Healing Taxonomy Discovery & Branch Consolidation:**
+  - Runs **`DiscoverTaxonomyMergeCandidates`** during sleep cycles to discover redundant, fragmented, or synonym category paths via vector centroid similarity ($\text{Sim} \ge 0.88$) and path token Jaccard distance ($\text{Jaccard} \ge 0.75$).
+  - Merges discovered duplicate taxonomy categories via **`ConsolidateTaxonomyBranch`** in chunked 500-row transactions with cycle prevention (`WouldCreateTaxonomyCycle`) and yield pauses.
 * **Orphan Classification:** Assigns uncategorized nodes to taxonomy paths (`ProcessUncategorizedBatch`).
 
 ### 2. Phase 2: Synthetic Random Trace Tests & Memory Exercise

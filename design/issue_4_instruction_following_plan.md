@@ -96,5 +96,9 @@ ALTER TABLE semantic_links ADD COLUMN constraint_type TEXT DEFAULT 'positive'; -
 4. **Phase 4: PDDL Constraint Injection & Verification**
    * Update `CompileGraphToPDDL` to emit rule predicates and verification actions.
 
-5. **Phase 5: Automated Testing & Verification**
-   * Write unit tests for rule persistence, source isolation, revocation, and PDDL verification.
+5. **Phase 5: Targeted Content-Type Ingestion Steering Prompts**
+   * Support `IngestionSteeringPrompts map[string]string` in `AgenticMemorySystemPrompts` for targeted per-content-type prompts (`"jira"`, `"confluence"`, `"git"`, `"slack"`, `"pull_request"`).
+   * Implement `GetIngestionSteeringPrompt(docType string) string` helper to serve specialized prompts during ingestion while preserving global fallback support.
+
+6. **Phase 6: Automated Testing & Verification**
+   * Write unit tests for rule persistence, source isolation, revocation, targeted ingestion prompts, and PDDL verification.

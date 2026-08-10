@@ -5,8 +5,8 @@ import (
 	"database/sql"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
-	"time"
 
 	"github.com/laurentalsina/gllam/pkg/memory"
 )
@@ -40,7 +40,6 @@ func (e *GllamEngine) CompactNodeCaveats(ctx context.Context, nodeID string, max
 	}
 	var items []caveatItem
 
-	nowTS := time.Now().Unix()
 	for rows.Next() {
 		var l memory.SemanticLink
 		var srcTrust int
@@ -54,8 +53,10 @@ func (e *GllamEngine) CompactNodeCaveats(ctx context.Context, nodeID string, max
 				l.ValidUntil = &validUntil.String
 				isActive = false
 			}
+			var fromTS int64
 			if validFrom.Valid {
 				l.ValidFrom = validFrom.String
+				fromTS, _ = strconv.ParseInt(validFrom.String, 10, 64)
 			}
 			if originSrc.Valid {
 				l.OriginSourceID = originSrc.String
@@ -65,7 +66,7 @@ func (e *GllamEngine) CompactNodeCaveats(ctx context.Context, nodeID string, max
 				link:        l,
 				srcTrust:    srcTrust,
 				isActive:    isActive,
-				validFromTS: nowTS,
+				validFromTS: fromTS,
 			})
 		}
 	}

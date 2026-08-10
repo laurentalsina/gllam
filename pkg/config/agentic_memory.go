@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 )
 
 // AgenticMemorySystemPrompts defines configurable system prompts and heuristics
@@ -36,7 +37,8 @@ type AgenticMemorySystemPrompts struct {
 	TrustWeightPrompt              string                                 `json:"trust_weight_prompt"`
 	SourceReliabilityPrompt        string                                 `json:"source_reliability_prompt"`
 	SourceReliabilityHeuristics    map[string]int                         `json:"source_reliability_heuristics,omitempty"` // Individual source trust adjustments (e.g. "alice": +150, "dave": -150)
-	IngestionSteeringPrompt        string                                 `json:"ingestion_steering_prompt"`
+	IngestionSteeringPrompt        string                                 `json:"ingestion_steering_prompt"`               // Fallback global ingestion steering prompt
+	IngestionSteeringPrompts       map[string]string                      `json:"ingestion_steering_prompts,omitempty"`    // Per-content-type targeted ingestion steering prompts (e.g. "jira", "confluence", "git", "slack")
 	IngestionSteeringDirectives    map[string]IngestionStrategy           `json:"ingestion_steering_directives,omitempty"` // Per-source type ingestion steering strategies
 	CustomDocumentTypeRules        map[string]CustomDocumentTypeRule      `json:"custom_document_type_rules,omitempty"`    // Dynamic custom document types with trust baselines and steering strategies
 	RepositoryContextDirectives    map[string]RepositoryContextDirective `json:"repository_context_directives,omitempty"` // Documentation repository-specific context extraction directives
@@ -47,7 +49,19 @@ type AgenticMemorySystemPrompts struct {
 	CustomCategoryPrompts          map[string]string                      `json:"custom_category_prompts,omitempty"`
 }
 
-
+// GetIngestionSteeringPrompt returns the content-type-specific steering prompt for a document type (e.g., "jira", "confluence"),
+// falling back to the global IngestionSteeringPrompt if unconfigured.
+func (a *AgenticMemorySystemPrompts) GetIngestionSteeringPrompt(docType string) string {
+	if a == nil {
+		return ""
+	}
+	if a.IngestionSteeringPrompts != nil {
+		if p, ok := a.IngestionSteeringPrompts[strings.ToLower(docType)]; ok && p != "" {
+			return p
+		}
+	}
+	return a.IngestionSteeringPrompt
+}
 
 // DefaultAgenticMemorySystemPrompts returns built-in baseline system prompts.
 func DefaultAgenticMemorySystemPrompts() *AgenticMemorySystemPrompts {
@@ -58,6 +72,14 @@ func DefaultAgenticMemorySystemPrompts() *AgenticMemorySystemPrompts {
 2. Jira / Issue Trackers: Parse comment history, author provenance, and status transitions (Open -> Resolved).
 3. Git Repositories / PRs: Parse branch merge history, commit signatures, and PR review comments.
 4. Chat / Slack: Parse thread reply chains and author message timestamps.`,
+
+		IngestionSteeringPrompts: map[string]string{
+			"confluence":   "Confluence / Wiki Directives: Parse page revision history and author edit epochs into CompactedRevisionEpochs.",
+			"jira":         "Jira / Issue Tracker Directives: Parse comment history, author provenance, and status transitions (Open -> Resolved).",
+			"git":          "Git Repositories / PR Directives: Parse branch merge history, commit signatures, and PR review comments.",
+			"pull_request": "Pull Request Directives: Parse branch merge history, commit signatures, and PR review comments.",
+			"slack":        "Chat / Slack Directives: Parse thread reply chains and author message timestamps.",
+		},
 
 		IngestionSteeringDirectives: map[string]IngestionStrategy{
 			"confluence":   {TrackRevisionHistory: true, MaxRevisionDepth: 10, CompactAuthorEpochs: true},

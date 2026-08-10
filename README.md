@@ -363,7 +363,7 @@ High-scale memory systems require a periodic offline **Memory Maintenance Cycle*
 
 1. **Maintenance Compaction & Cleaning:**
    * Runs Hub Node Caveat Compaction (`BatchCompactHubCaveats`) to condense historical caveats while **preserving all expired temporal links forever in SQLite for bi-temporal lineage and historical RAG queries**.
-   * Runs self-healing taxonomy branch consolidation (`ConsolidateTaxonomyBranch`) without deleting category nodes.
+   * Runs autonomous self-healing taxonomy branch discovery (`DiscoverTaxonomyMergeCandidates` & `ConsolidateTaxonomyBranch`) during sleep cycles to discover and merge redundant or synonym category paths without deleting category nodes.
    * Processes uncategorized entity nodes (`ProcessUncategorizedBatch`).
 
 
@@ -381,6 +381,22 @@ report, err := gllam.EnterMemorySleepCycle(ctx, 10)
 fmt.Printf("Compacted Revisions: %d\n", report.CompactedRevisionsCount)
 fmt.Printf("Memory Clarity Score: %.2f\n", report.MemoryClarityScore)
 fmt.Printf("Memory Consistency Score: %.2f\n", report.MemoryConsistencyScore)
+```
+
+### Targeted Ingestion Steering Prompts & Repository Directives
+
+GLLAM allows steering how documents, version histories, and multi-author transcripts are ingested via `AgenticMemorySystemPrompts`:
+
+1. **Targeted Per-Content-Type Prompts (`IngestionSteeringPrompts`):** Provides tailored extraction prompts for specific document types (`"jira"`, `"confluence"`, `"git"`, `"slack"`, `"pull_request"`). This prevents prompt token bloat and avoids diluting LLM instruction compliance with rules for unrelated document types.
+2. **Global Fallback Prompt (`IngestionSteeringPrompt`):** Serves as a global fallback prompt when ingesting custom document types without a specific prompt.
+3. **Ingestion Strategies (`IngestionSteeringDirectives` & `DetermineDocumentIngestionStrategy`):** Configures boolean flags for tracking revision histories, comment threads, status transitions, and author epoch compaction.
+
+```go
+// Retrieve targeted ingestion steering prompt for Jira issues (falls back to global if unconfigured)
+jiraPrompt := gllam.SystemPrompts.GetIngestionSteeringPrompt("jira")
+
+// Determine ingestion strategy flags for Confluence pages
+confStrategy := gllam.DetermineDocumentIngestionStrategy("confluence")
 ```
 
 ### WAL Checkpoint Management & Read-Only Handle Enforcement

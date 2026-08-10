@@ -59,11 +59,13 @@ Prevents LLM-generated taxonomy loops (e.g. `/Infrastructure/Storage` $\rightarr
 * `WouldCreateTaxonomyCycle(childID, parentID)` verifies reachable paths before writing edges or materialized paths.
 * If a cycle is detected, the engine rejects the invalid parent assignment and routes the orphaned node to `/General/Unclassified`.
 
-### 4. Self-Healing Taxonomy Consolidation (`ConsolidateTaxonomyBranch`)
-Merges redundant categories (e.g. `/Engineering/DBs` $\rightarrow$ `/Engineering/Infrastructure/Databases`) in an atomic SQLite transaction:
-1. Rewrites `taxonomy_path` string for all descendant nodes using `SUBSTR` and `REPLACE`.
+### 4. Taxonomy Branch Consolidation Engine (`ConsolidateTaxonomyBranch`)
+Provides the underlying atomic transaction mechanism to merge redundant categories (e.g. `/Engineering/DBs` $\rightarrow$ `/Engineering/Infrastructure/Databases`) in SQLite:
+1. Rewrites `taxonomy_path` string for all descendant nodes using `SUBSTR` and `REPLACE` in 500-row chunks.
 2. Redirects `is_a`, `subclass_of`, `instance_of`, and `part_of` links to the canonical target category node.
 3. Merges the old category node into the canonical target branch (`taxonomy_path = targetPath, is_category = 0`), preserving the node and its historical links in `semantic_nodes` without deletion.
+
+*(Note: Autonomous runtime discovery of duplicate branches via vector similarity and token distance is specified in [`self_healing_taxonomy_plan.md`](file:///home/laurent/gllam/design/self_healing_taxonomy_plan.md)).*
 
 
 ### 4. Domain-Bound Procedural Memory (`GetProceduresByTaxonomyPrefix`)
