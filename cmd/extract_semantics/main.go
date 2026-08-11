@@ -184,6 +184,8 @@ Node Types:
 
 CRITICAL JSON RULE: Never put unescaped double quotes inside string property values (such as context_prompt, caveats, name, temporal_note). Use single quotes or plain text for quotes inside values.
 
+CRITICAL GRAPH CONSTRAINT: You MUST extract semantic relationships (links) connecting every extracted node! Do not output floating disconnected nodes; every extracted entity, event, state, human, or preference must be connected by at least one link.
+
 You must output ONLY valid JSON matching this exact structure, with no markdown formatting or extra text:
 {
   "nodes": [
@@ -341,9 +343,19 @@ You must output ONLY valid JSON matching this exact structure, with no markdown 
 								_ = gllam.UpsertNode(ctx, memory.SemanticNode{ID: link.TargetID, Name: link.TargetID, Type: "inferred"})
 								insertedNodeIDs = append(insertedNodeIDs, link.TargetID)
 							}
+							if link.OriginSourceID != "" {
+								if errOrig := gllam.DBRO().QueryRowContext(ctx, "SELECT 1 FROM semantic_nodes WHERE id = ?", link.OriginSourceID).Scan(&dummy); errOrig != nil {
+									_ = gllam.UpsertNode(ctx, memory.SemanticNode{ID: link.OriginSourceID, Name: link.OriginSourceID, Type: "inferred"})
+									insertedNodeIDs = append(insertedNodeIDs, link.OriginSourceID)
+								}
+							}
 							if retryErr := gllam.AddEdge(ctx, link); retryErr == nil {
 								epLinks++
+							} else {
+								fmt.Printf("⚠️ AddEdge retry failed for %s link %s->%s: %v\n", episode.ID, link.SourceID, link.TargetID, retryErr)
 							}
+						} else {
+							fmt.Printf("⚠️ AddEdge failed for %s link %s->%s: %v\n", episode.ID, link.SourceID, link.TargetID, err)
 						}
 					} else {
 						epLinks++
