@@ -483,9 +483,9 @@ func SanitizeLLMJSON(s string) string {
 	strayKeyRegex := regexp.MustCompile(`(?m)\}\s*,?\s*([a-zA-Z0-9_]+)":`)
 	s = strayKeyRegex.ReplaceAllString(s, "},\n\"context_prompt\":")
 
-	// Clean up non-JSON CJK words typed right after closing brace (e.g. "},一起\n" -> "},\n")
-	cjkBraceRegex := regexp.MustCompile(`(?m)\}\s*[\p{Han}\p{Hiragana}\p{Katakana}\p{Hangul}]+\s*`)
-	s = cjkBraceRegex.ReplaceAllString(s, "}")
+	// Clean up non-JSON CJK words typed right after comma, brace, or bracket (e.g. ",一起\n" -> ",\n" or "},一起\n" -> "},\n")
+	cjkCommentRegex := regexp.MustCompile(`(?m)([,\}\]])\s*[\p{Han}\p{Hiragana}\p{Katakana}\p{Hangul}]+\s*`)
+	s = cjkCommentRegex.ReplaceAllString(s, "$1\n")
 
 	trailingCommaRegex := regexp.MustCompile(`,(\s*[\}\]])`)
 	s = trailingCommaRegex.ReplaceAllString(s, "$1")
