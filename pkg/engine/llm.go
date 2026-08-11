@@ -7,25 +7,60 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 )
 
-// LLMClient interacts with a text-to-text generation API (OpenAI compatible)
+// LLMClient interacts with a text-to-text generation API (OpenAI / OpenRouter compatible)
 type LLMClient struct {
 	BaseURL string
+	APIKey  string
+	Model   string
 	client  *http.Client
 }
 
-// NewLLMClient creates a new client
+// NewLLMClient creates a new client with TCP Keep-Alive and infinite streaming timeout
 func NewLLMClient(baseURL string) *LLMClient {
+	apiKey := os.Getenv("OPENROUTER_API_KEY")
+	model := os.Getenv("LLM_MODEL")
+	if model == "" && strings.Contains(baseURL, "openrouter.ai") {
+		model = "meta-llama/llama-3.3-70b-instruct"
+	}
+
+	transport := &http.Transport{
+		DialContext: (&net.Dialer{
+			Timeout:   30 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+		MaxIdleConns:        100,
+		IdleConnTimeout:     90 * time.Second,
+		TLSHandshakeTimeout: 10 * time.Second,
+	}
+
 	return &LLMClient{
 		BaseURL: baseURL,
+		APIKey:  apiKey,
+		Model:   model,
 		client: &http.Client{
-			Timeout: 900 * time.Second,
+			Transport: transport,
+			Timeout:   0, // Infinite timeout for long-running streaming inference
 		},
 	}
+}
+
+// NewLLMClientWithKey creates a client with explicit API Key and Model ID
+func NewLLMClientWithKey(baseURL, apiKey, model string) *LLMClient {
+	c := NewLLMClient(baseURL)
+	if apiKey != "" {
+		c.APIKey = apiKey
+	}
+	if model != "" {
+		c.Model = model
+	}
+	return c
 }
 
 type chatMessage struct {
@@ -34,6 +69,7 @@ type chatMessage struct {
 }
 
 type chatRequest struct {
+	Model       string        `json:"model,omitempty"`
 	Messages    []chatMessage `json:"messages"`
 	Temperature float32       `json:"temperature"`
 	Stream      bool          `json:"stream"`
@@ -57,6 +93,7 @@ type chatResponse struct {
 // Generate responds to a user prompt given a system prompt context
 func (c *LLMClient) Generate(ctx context.Context, systemPrompt, userPrompt string) (string, error) {
 	reqBody := chatRequest{
+		Model: c.Model,
 		Messages: []chatMessage{
 			{Role: "system", Content: systemPrompt},
 			{Role: "user", Content: userPrompt},
@@ -81,6 +118,12 @@ func (c *LLMClient) Generate(ctx context.Context, systemPrompt, userPrompt strin
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream")
+
+	if c.APIKey != "" {
+		req.Header.Set("Authorization", "Bearer "+c.APIKey)
+		req.Header.Set("HTTP-Referer", "https://github.com/laurentalsina/gllam")
+		req.Header.Set("X-Title", "GLLAM Memory System")
+	}
 
 	resp, err := c.client.Do(req)
 	if err != nil {

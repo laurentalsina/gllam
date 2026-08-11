@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/laurentalsina/gllam/pkg/engine"
 )
@@ -97,14 +98,17 @@ func main() {
 				len(compiled.SemanticNodes), len(compiled.SemanticLinks), len(compiled.Episodic))
 			fmt.Printf("   └─ Prompt Size: %d chars (~%d tokens). Submitting to LLM...\n", len(prompt), len(prompt)/4)
 
-			answer, err = llmClient.Generate(ctx, prompt, qa.Query)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "⚠️ Stream error for %s: %v. Retrying in 2s...\n", qa.InstanceID, err)
-				time.Sleep(2 * time.Second)
-				answer, err = llmClient.Generate(ctx, prompt, qa.Query)
+			var genErr error
+			for attempt := 1; attempt <= 3; attempt++ {
+				answer, genErr = llmClient.Generate(ctx, prompt, qa.Query)
+				if genErr == nil {
+					break
+				}
+				fmt.Fprintf(os.Stderr, "⚠️ Stream error for %s (attempt %d/3): %v. Retrying in %ds...\n", qa.InstanceID, attempt, genErr, attempt*2)
+				time.Sleep(time.Duration(attempt*2) * time.Second)
 			}
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "❌ Error generating answer for %s after retry: %v\n", qa.InstanceID, err)
+			if genErr != nil {
+				fmt.Fprintf(os.Stderr, "❌ Error generating answer for %s after 3 attempts: %v\n", qa.InstanceID, genErr)
 				answer = "ERROR"
 			}
 		}

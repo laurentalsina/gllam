@@ -1,0 +1,79 @@
+# Domain Grounding & Bootstrapping Configuration Example
+# File: config/example_domain_physics.yaml
+#
+# Purpose:
+# Bootstraps domain taxonomy categories, physical affordances, causal rules, 
+# and PDDL action templates into GllamEngine upon initialization (--domain-config).
+# Enables zero-shot predictive world modeling and safety simulation from Day 1.
+
+domain_name: thermal_and_kinetic_physics
+description: "Domain physics rules governing heat transfer, contact burns, and protective apparel mitigation."
+taxonomy_root: /Physics/Thermal
+
+# 1. Category Taxonomy Nodes (Grounded in semantic_nodes with is_category = 1)
+category_nodes:
+  - id: cat_thermal_source
+    name: Thermal Heat Source
+    type: category
+    taxonomy_path: /Physics/Thermal/HeatSource
+    is_category: 1
+    context_prompt: "Objects capable of generating or storing high thermal energy (e.g. stoves, soldering irons, furnaces, hot pipes)."
+
+  - id: cat_protective_gear
+    name: Protective Thermal Apparel
+    type: category
+    taxonomy_path: /Physics/Thermal/Protection
+    is_category: 1
+    context_prompt: "Thermal insulating gear (e.g. oven mitts, heat-resistant Kevlar gloves, welding aprons)."
+
+# 2. Causal Rules & Physical Affordances (Grounded in semantic_links)
+causal_rules:
+  - name: thermal_contact_burn
+    description: "Touching an active heat source without thermal protection causes a skin burn."
+    object_category: cat_thermal_source
+    afforded_action: touch
+    preconditions:
+      - state: active_hot
+      - min_temperature_celsius: 60
+    causal_effects:
+      - target_state: thermal_burn
+        energy_transfer_type: thermal
+        damage_severity: high
+    mitigating_factors:
+      - apparel_category: cat_protective_gear
+
+  - name: thermal_radiation_exposure
+    description: "Proximity to unshielded furnace causes gradual thermal degradation."
+    object_category: cat_thermal_source
+    afforded_action: stand_near
+    preconditions:
+      - state: unshielded
+      - distance_meters_less_than: 1.5
+    causal_effects:
+      - target_state: heat_exhaustion
+        energy_transfer_type: radiant_heat
+        damage_severity: medium
+
+# 3. PDDL Action Templates (Embedded into procedural_knowledge for forward simulation)
+pddl_action_templates:
+  - action_name: touch_hot_object
+    pddl_code: |
+      (:action touch_hot_object
+        :parameters (?actor - agent ?obj - cat_thermal_source)
+        :precondition (and 
+          (has_state ?obj active_hot)
+          (not (equipped ?actor cat_protective_gear))
+        )
+        :effect (and 
+          (has_state ?actor thermal_burn)
+          (not (has_state ?actor unharmed))
+        )
+      )
+
+  - action_name: equip_protective_gear
+    pddl_code: |
+      (:action equip_protective_gear
+        :parameters (?actor - agent ?item - cat_protective_gear)
+        :precondition (has_item ?actor ?item)
+        :effect (equipped ?actor ?item)
+      )

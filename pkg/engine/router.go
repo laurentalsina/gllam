@@ -142,6 +142,42 @@ func (e *GllamEngine) RouteAndAssemble(ctx context.Context, userPrompt string, e
             episodes = eps
         }
     }
+
+    // FTS5 / Keyword Corpus Back-Search Fallback (PLAN_missing_entity_corpus_fallback_and_trap_detection)
+    if len(ctxResult.SemanticNodes) < 5 {
+        words := strings.Fields(userPrompt)
+        stopWords := map[string]bool{
+            "what": true, "does": true, "did": true, "before": true, "after": true, "is": true,
+            "the": true, "a": true, "an": true, "where": true, "why": true, "who": true, "how": true,
+            "mentioned": true, "say": true, "said": true, "about": true, "with": true, "to": true,
+        }
+        for _, rawW := range words {
+            w := strings.Trim(strings.ToLower(rawW), "?!.,'\":;")
+            if len(w) < 3 || stopWords[w] {
+                continue
+            }
+            query := `SELECT id, session_id, summary_text, created_at FROM episodic_summaries WHERE summary_text LIKE ? ORDER BY created_at DESC LIMIT 3`
+            rows, err := e.dbRO.QueryContext(ctx, query, "%"+w+"%")
+            if err == nil {
+                for rows.Next() {
+                    var ep memory.EpisodicSummary
+                    if err := rows.Scan(&ep.ID, &ep.SessionID, &ep.SummaryText, &ep.CreatedAt); err == nil {
+                        isDup := false
+                        for _, existing := range episodes {
+                            if existing.ID == ep.ID {
+                                isDup = true
+                                break
+                            }
+                        }
+                        if !isDup {
+                            episodes = append(episodes, ep)
+                        }
+                    }
+                }
+                rows.Close()
+            }
+        }
+    }
     ctxResult.Episodic = episodes
 
     // 4. Internal Cognitive Procedures
@@ -279,7 +315,10 @@ func (e *GllamEngine) RouteAndAssemble(ctx context.Context, userPrompt string, e
 func FormatSystemPrompt(ctx *memory.CompiledContext) string {
     var sb strings.Builder
 
-    sb.WriteString("# GLLAM Context\n\n")
+    sb.WriteString("# GLLAM System Context & Guidelines\n\n")
+    sb.WriteString("## Temporal Reasoning Guidelines\n")
+    sb.WriteString("- Speech Act vs Reported Event Order: When a question asks whether a speaker 'did / mentioned' X before or after Y, follow the sequential order of dialogue turns in the transcripts (uttered_before / turn order), unless the prompt explicitly asks about physical external event dates.\n")
+    sb.WriteString("- Avoid self-contradictions: Do not claim an event happened in the past before a conversation while concluding it happened after.\n\n")
 
     // Dynamic warning if conflicts are present in the retrieved graph
     if len(ctx.SemanticLinks) > 0 {

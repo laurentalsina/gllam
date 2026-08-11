@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/laurentalsina/gllam/pkg/engine"
 )
@@ -68,6 +69,10 @@ Do not provide any explanations, just "CORRECT" or "INCORRECT".`
 		userPrompt := fmt.Sprintf("Question: %s\nGround Truth: %s\nModel Answer: %s\n\nVerdict:", res.Query, res.GroundTruth, res.ModelAnswer)
 
 		verdict, err := llmClient.Generate(ctx, systemPrompt, userPrompt)
+		if err != nil {
+			time.Sleep(2 * time.Second)
+			verdict, err = llmClient.Generate(ctx, systemPrompt, userPrompt)
+		}
 		if err != nil {
 			fmt.Printf("LLM grading failed for %s: %v\n", res.InstanceID, err)
 			continue

@@ -1,5 +1,10 @@
 # PLAN: Temporal Speech-Act vs. Reported Event Ontology
 
+> [!IMPORTANT]
+> **Implementation Status**: 🟡 **PARTIALLY IMPLEMENTED**
+> - ✅ **Implemented**: `origin_source_id` schema column & migrations (`schema.sql`, `engine.go`), Source-attributed link resolution & speaker disambiguation (`semantic.go`).
+> - 📋 **Planned**: Dual-layer PDDL timeline separation (`utterance_timeline` vs `real_world_timeline`).
+
 ## 1. Executive Summary & Objective
 
 A major source of reasoning failure in dialogue memory benchmarks occurs when the engine conflates **Speech Act Utterances** (the moment a statement is spoken in a conversation) with **Reported Events** (the past occurrences referenced inside the speech act).

@@ -1,4 +1,9 @@
-# GLLAM 0.2: Dual-Tier PDDL Planning Engine Architecture
+# PLAN: Domain-Bound Procedural Memory & PDDL Compiler Architecture
+
+> [!IMPORTANT]
+> **Implementation Status**: 🟡 **PARTIALLY IMPLEMENTED**
+> - ✅ **Implemented**: Dual-Tier PDDL Solver (`planner.go`), Cognitive Trigger (`router.go`), Aspect Projection & Graph Compilation (`pddl_compiler.go`).
+> - 📋 **Planned**: Dynamic PDDL `(:action)` procedural template binding & vector association.
 
 ## 1. Motivation & Problem Statement
 During the evaluation of the BEAM benchmark (100k+ token contextual interactions), GLLAM scored 0% on **Temporal Reasoning** and **Event Ordering**. LLMs natively struggle with formal logic, chronological constraints, and tracking mutually exclusive states across long horizons because they process time as probabilistic token proximity rather than strict mathematical states.
@@ -52,6 +57,14 @@ These actions form the `domain.pddl` file passed to the solvers.
 ### D. Context Injection
 Once the `PlanningEngine.Solve()` returns a slice of `PlannerAction` (or an error indicating the timeline is impossible/contradictory), the raw string proof is injected into `CompiledContext.PlannerOutput`. 
 The `FormatSystemPrompt` string builder appends this as a `## Mathematical Sequence Verification (PDDL)` block for the LLM to read.
+
+### E. PDDL Domain Persistence, Overlap Reuse & Refinement Caching
+Currently, generated `domainStr` and `problemStr` PDDL specs are **ephemeral** in-memory variables.
+To leverage domain overlap across benchmark questions and enable continuous domain refinement:
+1. **Domain Definition Persistence**: Persist generated PDDL domain definitions in a `pddl_domains` table indexed by aspect projection (`AspectTemporal`, `AspectInstruction`, `AspectStateTransition`) and entity type signatures.
+2. **Domain Overlap & Reuse**: When evaluating new queries sharing similar domain aspects, retrieve and merge existing PDDL action definitions and predicates rather than recompiling from scratch.
+3. **Domain Definition Refinement**: Incrementally refine PDDL domain action preconditions and effects as new procedural recipes or user constraints are ingested into memory.
+4. **Trace Artifact Saving**: Persist generated `domain.pddl` and `problem.pddl` files to `bench/pddl_traces/<instance_id>/` for offline auditing and solver benchmarking.
 
 ---
 

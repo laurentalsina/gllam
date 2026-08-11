@@ -1,5 +1,8 @@
 # PLAN: Missing Entity Recovery & Presupposition Trap Detection
 
+> [!IMPORTANT]
+> **Implementation Status**: 📋 **PLANNED / AWAITING IMPLEMENTATION** *(Post-Benchmark)*
+
 ## 1. Executive Summary & Problem Statement
 
 When evaluating queries against `GllamEngine`, a query may reference an entity (e.g., `"Ibrahima"`) that does not exist in the current `semantic_nodes` database table (`gllam_data.db`).

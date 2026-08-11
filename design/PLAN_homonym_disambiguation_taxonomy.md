@@ -1,5 +1,10 @@
 # PLAN: Homonym & Homograph Disambiguation via Ontological Taxonomy Binding
 
+> [!IMPORTANT]
+> **Implementation Status**: 🟡 **PARTIALLY IMPLEMENTED**
+> - ✅ **Implemented**: `taxonomy_path` & `is_category` schema columns & migrations (`schema.sql`, `engine.go`), Taxonomy tree query functions (`taxonomy.go`).
+> - 📋 **Planned**: POS tag & IPA phonetics matching for homographs in extractor.
+
 ## 1. Executive Summary & Problem Statement
 
 In semantic memory graphs, **homonymity** (identical spelling and sound with different meanings, e.g., "Crystal" the person vs. "crystal" the gem), **homography** (identical spelling with different pronunciations and distinct meanings, e.g., "tear" in the eye [tɪər] vs. "tear" in a piece of paper [tɛər]), and **polysemy** create severe context corruption and vector space drift.

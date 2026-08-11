@@ -1,5 +1,10 @@
 # PLAN: Benchmark Execution Tracing & Telemetry System
 
+> [!IMPORTANT]
+> **Implementation Status**: 🟡 **PARTIALLY IMPLEMENTED**
+> - ✅ **Implemented**: PDDL invocation trace logging (`router.go`), Context breakdown & token size indicators (`eval_d7_qa`).
+> - 📋 **Planned**: Live in-flight token streaming heartbeats in CLI runner.
+
 ## 1. Executive Summary & Objective
 
 Currently, running benchmark evaluations (such as `eval_d7_qa` or `eval_beam`) provides limited visibility into the inner workings of the `GllamEngine`. Standard output currently displays only the question being processed and the raw count of nodes returned by `SearchSimilarNodes`. During large prompt assembly and LLM inference, the runner appears "stuck" for long durations without feedback on prompt size or generation progress.

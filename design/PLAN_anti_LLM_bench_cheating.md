@@ -1,4 +1,9 @@
-# PLAN: Anti-Cheating & Data Leakage Prevention Architecture
+# PLAN: Anti-LLM Benchmark Cheating & Integrity Verification Architecture
+
+> [!IMPORTANT]
+> **Implementation Status**: 🟡 **PARTIALLY IMPLEMENTED**
+> - ✅ **Implemented**: Double-blind LLM grading without context leakage (`grade_results`), Field isolation between QA targets and memory DB.
+> - 📋 **Planned**: Automated pre-execution DB auditor script.
 
 ## 1. Executive Summary & Objective
 
