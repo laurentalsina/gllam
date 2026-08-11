@@ -501,15 +501,31 @@ Fallacies are classified across **6 major categories** (referencing the [Wikiped
 | **`red_herring`** | Introducing an irrelevant topic to distract from an active contradiction. | Suppresses multi-hop graph expansion for that sub-graph during retrieval. |
 
 
-## Benchmarking Tools
+## Benchmarking & Evaluation Tools
 
-To evaluate retrieval and reasoning accuracy on memory benchmarks:
-- **MemArena (`d7_qa`)**: Use `cmd/eval_d7_qa` to test multi-hop retrieval and temporal reasoning accuracy.
-- **BEAM 100K**: 
-  - **Ingestion**: Use `cmd/ingest_beam` to chunk 100,000-token conversations.
-  - **Evaluation**: Use `cmd/eval_beam` to query the session LLM over retrieved episodic context.
+GLLAM includes modular benchmark scripts located in **[`./bench/`](file:///home/laurent/Projects/gllam/bench)**:
 
-### Using Local LLM Server vs. OpenRouter Cloud API
+- **`./bench/run_d7_qa_extract_semantics.sh`**: Extracts semantic nodes & links into SQLite (supports `--resume` for automatic checkpointing across interruptions).
+- **`./bench/run_d7_qa_audit.sh`**: Generates model-tagged extraction snapshots (`extraction_snapshot_<model_slug>.json`) and compares node/link distributions against previous runs.
+- **`./bench/run_d7_qa_eval.sh`**: Evaluates `d7_qa` questions against `gllam_data.db`, persisting PDDL domain files to `./bench/pddl_domains/` and results to `d7_qa_results_<model_slug>.jsonl`.
+- **`./bench/run_d7_qa_grade_results.sh`**: Runs strict LLM correctness judge, printing `PASS`/`FAIL` metrics and generating markdown failure diagnostic reports (`d7_qa_failures_<model_slug>.md`).
+- **`./bench/run_d7_qa_all.sh`**: Executes the full 4-stage pipeline sequentially.
+
+### Resumable Extraction & Incremental Checkpointing
+
+`cmd/extract_semantics` maintains an `extracted_sessions` checkpoint table in SQLite:
+- **Default Resume (`--resume`)**: Automatically skips sessions that have already been extracted in prior runs.
+- **Clean Purge (`--clean`)**: Wipes existing nodes, links, and checkpoints to restart extraction from scratch.
+
+```bash
+# Resume extraction from checkpoint:
+go run ./cmd/extract_semantics/main.go --db ./bench/gllam_data.db --prefix sess_ --concurrency 10
+
+# Clean purge & restart:
+go run ./cmd/extract_semantics/main.go --db ./bench/gllam_data.db --prefix sess_ --clean
+```
+
+### Local LLM Endpoint vs. OpenRouter Cloud API
 
 GLLAM supports both local LLM endpoints (e.g. `llama.cpp`, `vLLM`) and cloud APIs like **OpenRouter**:
 
@@ -518,25 +534,18 @@ GLLAM supports both local LLM endpoints (e.g. `llama.cpp`, `vLLM`) and cloud API
 export CGO_ENABLED=1
 export CGO_CFLAGS="-I/home/laurent/vllm/.venv/lib/python3.13/site-packages/_rocm_sdk_devel/lib/rocm_sysdeps/include"
 
-go run ./cmd/eval_d7_qa/main.go \
-  --db ./bench/gllam_data.db \
-  --qa ./bench/d7_qa.jsonl \
-  --out ./bench/d7_qa_results.jsonl \
-  --text-server http://100.96.179.19:8888
+./bench/run_d7_qa_all.sh http://100.96.179.19:8888
 ```
 
 #### OpenRouter API Endpoint:
 ```bash
 export OPENROUTER_API_KEY="sk-or-v1-your-api-key-here"
-export LLM_MODEL="meta-llama/llama-3.3-70b-instruct" # or "deepseek/deepseek-chat" or "anthropic/claude-3.5-sonnet"
+export LLM_MODEL="qwen/qwen-plus" # or "qwen/qwen-2.5-vl-72b-instruct" or "deepseek/deepseek-chat"
 
 export CGO_ENABLED=1
 export CGO_CFLAGS="-I/home/laurent/vllm/.venv/lib/python3.13/site-packages/_rocm_sdk_devel/lib/rocm_sysdeps/include"
 
-go run ./cmd/eval_d7_qa/main.go \
-  --db ./bench/gllam_data.db \
-  --qa ./bench/d7_qa.jsonl \
-  --out ./bench/d7_qa_results.jsonl
+./bench/run_d7_qa_all.sh
 ```
 
 ## Embedding Architecture

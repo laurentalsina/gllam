@@ -1,9 +1,8 @@
 # PLAN: Benchmark Execution Tracing & Telemetry System
 
 > [!IMPORTANT]
-> **Implementation Status**: 🟡 **PARTIALLY IMPLEMENTED**
-> - ✅ **Implemented**: PDDL invocation trace logging (`router.go`), Context breakdown & token size indicators (`eval_d7_qa`).
-> - 📋 **Planned**: Live in-flight token streaming heartbeats in CLI runner.
+> **Implementation Status**: 🟢 **FULLY IMPLEMENTED**
+> - ✅ **Implemented**: PDDL invocation trace logging (`router.go`), Context breakdown & token size indicators (`eval_d7_qa`), PDDL domain file persistence (`./bench/pddl_domains/`), Extraction snapshot & model comparison auditing (`cmd/audit_semantic_extraction`), Resumable extraction & checkpointing (`extracted_sessions`), and Model-slugged output formatting (`d7_qa_failures_<model_slug>.md`).
 
 ## 1. Executive Summary & Objective
 

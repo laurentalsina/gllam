@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -39,6 +40,7 @@ func main() {
 	qaPath := flag.String("qa-file", "", "Optional path to QA jsonl (e.g. ./bench/d7_qa.jsonl) to extract only target benchmark sessions")
 	concurrency := flag.Int("concurrency", 4, "Number of concurrent LLM extraction workers")
 	cleanSemantics := flag.Bool("clean", false, "Purge existing semantic_nodes, semantic_links, and semantic_embeddings before extraction")
+	resumeExtraction := flag.Bool("resume", true, "Skip sessions that have already been extracted in previous runs")
 	flag.Parse()
 
 	if os.Getenv("OPENROUTER_API_KEY") != "" && (*textEndpoint == "http://100.96.179.19:8888" || *textEndpoint == defaultTextServer) {
@@ -61,11 +63,20 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Create checkpoint table for resumable extraction
+	_, _ = gllam.DB().ExecContext(ctx, `CREATE TABLE IF NOT EXISTS extracted_sessions (
+		session_id TEXT PRIMARY KEY,
+		extracted_at DATETIME,
+		node_count INTEGER,
+		link_count INTEGER
+	)`)
+
 	if *cleanSemantics {
-		fmt.Println("Purging existing semantic nodes, links, and embeddings...")
+		fmt.Println("Purging existing semantic nodes, links, embeddings, and extraction checkpoints...")
 		_, _ = gllam.DB().ExecContext(ctx, "DELETE FROM semantic_links")
 		_, _ = gllam.DB().ExecContext(ctx, "DELETE FROM semantic_nodes")
 		_, _ = gllam.DB().ExecContext(ctx, "DELETE FROM semantic_embeddings")
+		_, _ = gllam.DB().ExecContext(ctx, "DELETE FROM extracted_sessions")
 	}
 
 	// 1. Optional target session filtering via QA file
@@ -127,6 +138,31 @@ func main() {
 		fmt.Printf("Found %d episodes to process for prefix '%s'\n", len(episodes), *prefix)
 	}
 
+	if *resumeExtraction && !*cleanSemantics {
+		completedSessions := make(map[string]bool)
+		rowsDone, err := gllam.DBRO().QueryContext(ctx, "SELECT session_id FROM extracted_sessions")
+		if err == nil {
+			for rowsDone.Next() {
+				var sid string
+				if err := rowsDone.Scan(&sid); err == nil {
+					completedSessions[sid] = true
+				}
+			}
+			rowsDone.Close()
+		}
+
+		var uncompletedEpisodes []memory.EpisodicSummary
+		for _, ep := range episodes {
+			if !completedSessions[ep.SessionID] && !completedSessions[ep.ID] {
+				uncompletedEpisodes = append(uncompletedEpisodes, ep)
+			}
+		}
+		if len(completedSessions) > 0 {
+			fmt.Printf("🔄 Resuming extraction: %d of %d episodes already completed! Processing remaining %d episodes...\n", len(completedSessions), len(episodes), len(uncompletedEpisodes))
+		}
+		episodes = uncompletedEpisodes
+	}
+
 	systemPrompt := `You are an expert knowledge extractor for an agentic memory graph.
 Extract the most critical entities, states, events, and relationships from the provided conversation transcript.
 
@@ -142,6 +178,8 @@ Node Types:
 - "system": An external system or API origin (e.g. sys_github)
 - "contradiction": An active or past unresolved contradiction between two claims (e.g. contradiction_db_engine)
 - "fallacy": A logical fallacy or deceptive premise from the 6 major categories.
+
+CRITICAL JSON RULE: Never put unescaped double quotes inside string property values (such as context_prompt, caveats, name, temporal_note). Use single quotes or plain text for quotes inside values.
 
 You must output ONLY valid JSON matching this exact structure, with no markdown formatting or extra text:
 {
@@ -190,25 +228,42 @@ You must output ONLY valid JSON matching this exact structure, with no markdown 
 			var epNodes int64
 			var epLinks int64
 
+			var epLLMTime time.Duration
+			var epDBTime time.Duration
+			var epEmbedTime time.Duration
+
 			for cIdx, chunk := range chunks {
 				if !engine.ValidateTranscriptSemanticCoherence(chunk.Text) {
 					continue
 				}
 
 				userPrompt := fmt.Sprintf("Transcript Chunk (%d/%d):\n%s\n\nExtract JSON:", cIdx+1, len(chunks), chunk.Text)
-				response, err := llmClient.Generate(ctx, systemPrompt, userPrompt)
+				var response string
+				var err error
+				llmStart := time.Now()
+				for attempt := 1; attempt <= 3; attempt++ {
+					response, err = llmClient.Generate(ctx, systemPrompt, userPrompt)
+					if err == nil && strings.TrimSpace(response) != "" {
+						break
+					}
+					if err == nil {
+						err = fmt.Errorf("empty response from LLM")
+					}
+					dbMutex.Lock()
+					fmt.Printf("⚠️ OpenRouter error for %s chunk %d (attempt %d/3): %v. Retrying in %ds...\n", episode.ID, cIdx+1, attempt, err, attempt*2)
+					dbMutex.Unlock()
+					time.Sleep(time.Duration(attempt*2) * time.Second)
+				}
+				epLLMTime += time.Since(llmStart)
+
 				if err != nil {
 					dbMutex.Lock()
-					fmt.Printf("❌ LLM extraction failed for %s chunk %d: %v\n", episode.ID, cIdx+1, err)
+					fmt.Printf("❌ LLM extraction failed for %s chunk %d after 3 attempts: %v\n", episode.ID, cIdx+1, err)
 					dbMutex.Unlock()
 					continue
 				}
 
-				response = strings.TrimSpace(response)
-				response = strings.TrimPrefix(response, "```json")
-				response = strings.TrimPrefix(response, "```")
-				response = strings.TrimSuffix(response, "```")
-				response = strings.TrimSpace(response)
+				response = SanitizeLLMJSON(response)
 
 				var extraction ExtractionResponse
 				if err := json.Unmarshal([]byte(response), &extraction); err != nil {
@@ -217,12 +272,18 @@ You must output ONLY valid JSON matching this exact structure, with no markdown 
 						response = repaired
 					} else {
 						dbMutex.Lock()
-						fmt.Printf("⚠️ JSON parse error for %s chunk %d: %v\n", episode.ID, cIdx+1, err)
+						sample := response
+						if len(sample) > 100 {
+							sample = sample[:100] + "..."
+						}
+						fmt.Printf("⚠️ JSON parse error for %s chunk %d: %v | Raw: %q\n", episode.ID, cIdx+1, err, sample)
 						dbMutex.Unlock()
 						continue
 					}
 				}
 
+				var insertedNodeIDs []string
+				dbStart := time.Now()
 				dbMutex.Lock()
 				// Insert nodes
 				for _, node := range extraction.Nodes {
@@ -230,7 +291,7 @@ You must output ONLY valid JSON matching this exact structure, with no markdown 
 						continue
 					}
 					if err := gllam.UpsertNode(ctx, node); err == nil {
-						_ = gllam.StoreNodeEmbedding(ctx, node.ID)
+						insertedNodeIDs = append(insertedNodeIDs, node.ID)
 						epNodes++
 					}
 				}
@@ -253,11 +314,11 @@ You must output ONLY valid JSON matching this exact structure, with no markdown 
 							var dummy int
 							if errSrc := gllam.DBRO().QueryRowContext(ctx, "SELECT 1 FROM semantic_nodes WHERE id = ?", link.SourceID).Scan(&dummy); errSrc != nil {
 								_ = gllam.UpsertNode(ctx, memory.SemanticNode{ID: link.SourceID, Name: link.SourceID, Type: "inferred"})
-								_ = gllam.StoreNodeEmbedding(ctx, link.SourceID)
+								insertedNodeIDs = append(insertedNodeIDs, link.SourceID)
 							}
 							if errTgt := gllam.DBRO().QueryRowContext(ctx, "SELECT 1 FROM semantic_nodes WHERE id = ?", link.TargetID).Scan(&dummy); errTgt != nil {
 								_ = gllam.UpsertNode(ctx, memory.SemanticNode{ID: link.TargetID, Name: link.TargetID, Type: "inferred"})
-								_ = gllam.StoreNodeEmbedding(ctx, link.TargetID)
+								insertedNodeIDs = append(insertedNodeIDs, link.TargetID)
 							}
 							if retryErr := gllam.AddEdge(ctx, link); retryErr == nil {
 								epLinks++
@@ -268,13 +329,22 @@ You must output ONLY valid JSON matching this exact structure, with no markdown 
 					}
 				}
 				dbMutex.Unlock()
+				epDBTime += time.Since(dbStart)
+
+				// Store embeddings outside of dbMutex to prevent worker serialization
+				embedStart := time.Now()
+				for _, nid := range insertedNodeIDs {
+					_ = gllam.StoreNodeEmbedding(ctx, nid)
+				}
+				epEmbedTime += time.Since(embedStart)
 			}
 
 			atomic.AddInt64(&grandTotalNodes, epNodes)
 			atomic.AddInt64(&grandTotalLinks, epLinks)
 
 			dbMutex.Lock()
-			fmt.Printf("✅ Finished episode %s: Extracted %d nodes and %d links\n", episode.ID, epNodes, epLinks)
+			_, _ = gllam.DB().ExecContext(ctx, "INSERT OR REPLACE INTO extracted_sessions (session_id, extracted_at, node_count, link_count) VALUES (?, ?, ?, ?)", episode.SessionID, time.Now(), epNodes, epLinks)
+			fmt.Printf("✅ Finished %s (%d nodes, %d links) | LLM: %v, DB: %v, Embed: %v\n", episode.ID, epNodes, epLinks, epLLMTime.Round(time.Millisecond), epDBTime.Round(time.Millisecond), epEmbedTime.Round(time.Millisecond))
 			dbMutex.Unlock()
 		}(i, ep)
 	}
@@ -287,7 +357,7 @@ You must output ONLY valid JSON matching this exact structure, with no markdown 
 
 // RepairTruncatedJSON attempts to auto-close unclosed brackets and objects if an LLM stream cuts off
 func RepairTruncatedJSON(jsonStr string) string {
-	jsonStr = strings.TrimSpace(jsonStr)
+	jsonStr = SanitizeLLMJSON(jsonStr)
 	if jsonStr == "" {
 		return jsonStr
 	}
@@ -334,4 +404,40 @@ func RepairTruncatedJSON(jsonStr string) string {
 	}
 
 	return jsonStr
+}
+
+// SanitizeLLMJSON cleans common LLM markdown artifacts (asterisks, trailing commas, non-JSON preambles)
+func SanitizeLLMJSON(s string) string {
+	s = strings.TrimSpace(s)
+	if idx := strings.Index(s, "```json"); idx != -1 {
+		s = s[idx+7:]
+	} else if idx := strings.Index(s, "```"); idx != -1 {
+		s = s[idx+3:]
+	}
+	if idx := strings.LastIndex(s, "```"); idx != -1 {
+		s = s[:idx]
+	}
+	s = strings.TrimSpace(s)
+
+	start := strings.Index(s, "{")
+	end := strings.LastIndex(s, "}")
+	if start != -1 && end != -1 && end > start {
+		s = s[start : end+1]
+	} else if start != -1 {
+		s = s[start:]
+	} else {
+		return ""
+	}
+
+	asteriskRegex := regexp.MustCompile(`(?m)\*\*([a-zA-Z0-9_]+)\*\*\s*:`)
+	s = asteriskRegex.ReplaceAllString(s, `"$1":`)
+
+	trailingCommaRegex := regexp.MustCompile(`,(\s*[\}\]])`)
+	s = trailingCommaRegex.ReplaceAllString(s, "$1")
+
+	// Replace unescaped inner quotes inside string property values (e.g. "context_prompt": "said "Certain things" to him")
+	propQuoteRegex := regexp.MustCompile(`(?i)("(?:context_prompt|caveats|temporal_note|name)"\s*:\s*")([^"]*)"([^"]*)"([^"]*")`)
+	s = propQuoteRegex.ReplaceAllString(s, `${1}${2}'${3}'${4}`)
+
+	return strings.TrimSpace(s)
 }

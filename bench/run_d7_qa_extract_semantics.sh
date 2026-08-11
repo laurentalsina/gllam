@@ -14,17 +14,21 @@ if [ -z "$TEXT_SERVER" ]; then
     fi
 fi
 
+EXTRA_FLAGS=()
+if [ "$CLEAN" = "true" ]; then
+    EXTRA_FLAGS+=("--clean")
+fi
+
 echo "======================================================="
 echo "🧩 Extracting Semantics for MemArena d7_qa Benchmark"
 echo "Endpoint: $TEXT_SERVER"
 echo "Database: ./bench/gllam_data.db"
-echo "Target Sessions: 57 evidence sessions from ./bench/d7_qa.jsonl"
+echo "Mode: Resumable (checkpointing active; set CLEAN=true to purge)"
 echo "======================================================="
 
 go run ./cmd/extract_semantics/main.go \
   --db ./bench/gllam_data.db \
   --prefix sess_ \
-  --qa-file ./bench/d7_qa.jsonl \
-  --concurrency 1 \
-  --clean \
+  --concurrency 10 \
+  "${EXTRA_FLAGS[@]}" \
   --text-server "$TEXT_SERVER"
