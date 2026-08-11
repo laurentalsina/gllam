@@ -139,8 +139,11 @@ func main() {
 	}
 
 	if *resumeExtraction && !*cleanSemantics {
+		// Clean up any 0-node/0-link failure checkpoints from previous aborted runs
+		_, _ = gllam.DB().ExecContext(ctx, "DELETE FROM extracted_sessions WHERE node_count = 0 AND link_count = 0")
+
 		completedSessions := make(map[string]bool)
-		rowsDone, err := gllam.DBRO().QueryContext(ctx, "SELECT session_id FROM extracted_sessions")
+		rowsDone, err := gllam.DBRO().QueryContext(ctx, "SELECT session_id FROM extracted_sessions WHERE node_count > 0 OR link_count > 0")
 		if err == nil {
 			for rowsDone.Next() {
 				var sid string
@@ -158,7 +161,7 @@ func main() {
 			}
 		}
 		if len(completedSessions) > 0 {
-			fmt.Printf("🔄 Resuming extraction: %d of %d episodes already completed! Processing remaining %d episodes...\n", len(completedSessions), len(episodes), len(uncompletedEpisodes))
+			fmt.Printf("🔄 Resuming extraction: %d valid episodes already completed. Re-processing 0-yield failures and remaining %d episodes...\n", len(completedSessions), len(uncompletedEpisodes))
 		}
 		episodes = uncompletedEpisodes
 	}
@@ -272,11 +275,29 @@ You must output ONLY valid JSON matching this exact structure, with no markdown 
 						response = repaired
 					} else {
 						dbMutex.Lock()
-						sample := response
-						if len(sample) > 100 {
-							sample = sample[:100] + "..."
+						errToReport := err
+						if err2 != nil {
+							errToReport = err2
 						}
-						fmt.Printf("⚠️ JSON parse error for %s chunk %d: %v | Raw: %q\n", episode.ID, cIdx+1, err, sample)
+						offset := 0
+						if syntaxErr, ok := errToReport.(*json.SyntaxError); ok {
+							offset = int(syntaxErr.Offset)
+						}
+						sample := response
+						if offset > 0 && offset < len(response) {
+							subStart := offset - 40
+							if subStart < 0 {
+								subStart = 0
+							}
+							subEnd := offset + 40
+							if subEnd > len(response) {
+								subEnd = len(response)
+							}
+							sample = fmt.Sprintf("...%s...", response[subStart:subEnd])
+						} else if len(sample) > 200 {
+							sample = sample[:200] + "..."
+						}
+						fmt.Printf("⚠️ JSON parse error for %s chunk %d at offset %d: %v | Context: %q\n", episode.ID, cIdx+1, offset, errToReport, sample)
 						dbMutex.Unlock()
 						continue
 					}
@@ -343,8 +364,12 @@ You must output ONLY valid JSON matching this exact structure, with no markdown 
 			atomic.AddInt64(&grandTotalLinks, epLinks)
 
 			dbMutex.Lock()
-			_, _ = gllam.DB().ExecContext(ctx, "INSERT OR REPLACE INTO extracted_sessions (session_id, extracted_at, node_count, link_count) VALUES (?, ?, ?, ?)", episode.SessionID, time.Now(), epNodes, epLinks)
-			fmt.Printf("✅ Finished %s (%d nodes, %d links) | LLM: %v, DB: %v, Embed: %v\n", episode.ID, epNodes, epLinks, epLLMTime.Round(time.Millisecond), epDBTime.Round(time.Millisecond), epEmbedTime.Round(time.Millisecond))
+			if epNodes > 0 || epLinks > 0 {
+				_, _ = gllam.DB().ExecContext(ctx, "INSERT OR REPLACE INTO extracted_sessions (session_id, extracted_at, node_count, link_count) VALUES (?, ?, ?, ?)", episode.SessionID, time.Now(), epNodes, epLinks)
+				fmt.Printf("✅ Finished %s (%d nodes, %d links) | LLM: %v, DB: %v, Embed: %v\n", episode.ID, epNodes, epLinks, epLLMTime.Round(time.Millisecond), epDBTime.Round(time.Millisecond), epEmbedTime.Round(time.Millisecond))
+			} else {
+				fmt.Printf("⚠️ Finished %s with 0 nodes and 0 links (will be retried on next resume run)\n", episode.ID)
+			}
 			dbMutex.Unlock()
 		}(i, ep)
 	}
@@ -403,6 +428,24 @@ func RepairTruncatedJSON(jsonStr string) string {
 		}
 	}
 
+	lastComma := strings.LastIndex(jsonStr, ",")
+	if lastComma > 0 {
+		trimmed := jsonStr[:lastComma]
+		openBraces := strings.Count(trimmed, "{") - strings.Count(trimmed, "}")
+		openSquare := strings.Count(trimmed, "[") - strings.Count(trimmed, "]")
+		for openSquare > 0 {
+			trimmed += "]"
+			openSquare--
+		}
+		for openBraces > 0 {
+			trimmed += "}"
+			openBraces--
+		}
+		if json.Unmarshal([]byte(trimmed), &js) == nil {
+			return trimmed
+		}
+	}
+
 	return jsonStr
 }
 
@@ -432,12 +475,20 @@ func SanitizeLLMJSON(s string) string {
 	asteriskRegex := regexp.MustCompile(`(?m)\*\*([a-zA-Z0-9_]+)\*\*\s*:`)
 	s = asteriskRegex.ReplaceAllString(s, `"$1":`)
 
+	// Clean up stray unquoted bare words output after a comma before newline (e.g. ",ulp\n" -> ",\n")
+	bareWordRegex := regexp.MustCompile(`(?m),\s*[a-zA-Z_][a-zA-Z0-9_]*\s*([\r\n]+)`)
+	s = bareWordRegex.ReplaceAllString(s, ",\n")
+
+	// Clean up unquoted stray key fragments after brace before colon (e.g. "},eville\":" -> "},\n\"context_prompt\":")
+	strayKeyRegex := regexp.MustCompile(`(?m)\}\s*,?\s*([a-zA-Z0-9_]+)":`)
+	s = strayKeyRegex.ReplaceAllString(s, "},\n\"context_prompt\":")
+
+	// Clean up non-JSON CJK words typed right after closing brace (e.g. "},一起\n" -> "},\n")
+	cjkBraceRegex := regexp.MustCompile(`(?m)\}\s*[\p{Han}\p{Hiragana}\p{Katakana}\p{Hangul}]+\s*`)
+	s = cjkBraceRegex.ReplaceAllString(s, "}")
+
 	trailingCommaRegex := regexp.MustCompile(`,(\s*[\}\]])`)
 	s = trailingCommaRegex.ReplaceAllString(s, "$1")
-
-	// Replace unescaped inner quotes inside string property values (e.g. "context_prompt": "said "Certain things" to him")
-	propQuoteRegex := regexp.MustCompile(`(?i)("(?:context_prompt|caveats|temporal_note|name)"\s*:\s*")([^"]*)"([^"]*)"([^"]*")`)
-	s = propQuoteRegex.ReplaceAllString(s, `${1}${2}'${3}'${4}`)
 
 	return strings.TrimSpace(s)
 }
