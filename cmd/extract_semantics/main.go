@@ -472,12 +472,15 @@ func SanitizeLLMJSON(s string) string {
 		return ""
 	}
 
+	// Escape raw unescaped newlines inside JSON string literals FIRST
+	s = EscapeRawNewlinesInStrings(s)
+
 	asteriskRegex := regexp.MustCompile(`(?m)\*\*([a-zA-Z0-9_]+)\*\*\s*:`)
 	s = asteriskRegex.ReplaceAllString(s, `"$1":`)
 
-	// Clean up stray unquoted bare words output after a comma before newline (e.g. ",ulp\n" -> ",\n")
-	bareWordRegex := regexp.MustCompile(`(?m),\s*[a-zA-Z_][a-zA-Z0-9_]*\s*([\r\n]+)`)
-	s = bareWordRegex.ReplaceAllString(s, ",\n")
+	// Clean up stray unquoted bare words output after comma/brace before newline (e.g. "}, unwilling\"},\n" -> "},\n")
+	bareWordRegex := regexp.MustCompile(`(?m)([,\}\]])\s*[a-zA-Z_][a-zA-Z0-9_]*"*\}*\s*([\r\n]+)`)
+	s = bareWordRegex.ReplaceAllString(s, "$1\n")
 
 	// Clean up unquoted stray key fragments after brace before colon (e.g. "},eville\":" -> "},\n\"context_prompt\":")
 	strayKeyRegex := regexp.MustCompile(`(?m)\}\s*,?\s*([a-zA-Z0-9_]+)":`)
@@ -491,8 +494,56 @@ func SanitizeLLMJSON(s string) string {
 	nonJsonCharRegex := regexp.MustCompile(`(?m)([,\}\]])\s*[^,\{\}\[\]"a-zA-Z0-9_\s]+\s*`)
 	s = nonJsonCharRegex.ReplaceAllString(s, "$1\n")
 
+	// Clean up adjacent unseparated strings before brace or comma (e.g. "\"flair\"eville\"\n    }" -> "\"flair eville\"\n    }")
+	adjacentStringRegex := regexp.MustCompile(`(?m)"([^"\\]*(?:\\.[^"\\]*)*)"\s*"([a-zA-Z0-9_]+)"\s*([\r\n\s]*[\},\]])`)
+	s = adjacentStringRegex.ReplaceAllString(s, `"$1 $2"$3`)
+
+	// Escape illegal raw newlines that occur inside string values (not followed by JSON structural tokens)
+	rawNewlineRegex := regexp.MustCompile(`(?m)\r?\n(?!\s*(?:"[a-zA-Z0-9_]+"\s*:|[\}\]\{\[]|\z))`)
+	s = rawNewlineRegex.ReplaceAllString(s, `\\n`)
+
 	trailingCommaRegex := regexp.MustCompile(`,(\s*[\}\]])`)
 	s = trailingCommaRegex.ReplaceAllString(s, "$1")
 
+	// Escape any raw unescaped newlines inside JSON string literals as the final safety pass
+	s = EscapeRawNewlinesInStrings(s)
+
 	return strings.TrimSpace(s)
+}
+
+// EscapeRawNewlinesInStrings escapes illegal raw unescaped newlines and control characters inside JSON string literals
+func EscapeRawNewlinesInStrings(s string) string {
+	var out strings.Builder
+	out.Grow(len(s))
+	inString := false
+	escaped := false
+	for i := 0; i < len(s); i++ {
+		ch := s[i]
+		if inString {
+			if escaped {
+				escaped = false
+				out.WriteByte(ch)
+			} else if ch == '\\' {
+				escaped = true
+				out.WriteByte(ch)
+			} else if ch == '"' {
+				inString = false
+				out.WriteByte(ch)
+			} else if ch == '\n' {
+				out.WriteString(`\n`)
+			} else if ch == '\r' {
+				// skip raw carriage return
+			} else if ch == '\t' {
+				out.WriteString(`\t`)
+			} else {
+				out.WriteByte(ch)
+			}
+		} else {
+			if ch == '"' {
+				inString = true
+			}
+			out.WriteByte(ch)
+		}
+	}
+	return out.String()
 }
