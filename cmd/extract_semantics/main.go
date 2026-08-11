@@ -334,21 +334,27 @@ You must output ONLY valid JSON matching this exact structure, with no markdown 
 
 					if err := gllam.AddEdge(ctx, link); err != nil {
 						if strings.Contains(err.Error(), "FOREIGN KEY constraint failed") {
-							var dummy int
-							if errSrc := gllam.DBRO().QueryRowContext(ctx, "SELECT 1 FROM semantic_nodes WHERE id = ?", link.SourceID).Scan(&dummy); errSrc != nil {
-								_ = gllam.UpsertNode(ctx, memory.SemanticNode{ID: link.SourceID, Name: link.SourceID, Type: "inferred"})
-								insertedNodeIDs = append(insertedNodeIDs, link.SourceID)
-							}
-							if errTgt := gllam.DBRO().QueryRowContext(ctx, "SELECT 1 FROM semantic_nodes WHERE id = ?", link.TargetID).Scan(&dummy); errTgt != nil {
-								_ = gllam.UpsertNode(ctx, memory.SemanticNode{ID: link.TargetID, Name: link.TargetID, Type: "inferred"})
-								insertedNodeIDs = append(insertedNodeIDs, link.TargetID)
-							}
-							if link.OriginSourceID != "" {
-								if errOrig := gllam.DBRO().QueryRowContext(ctx, "SELECT 1 FROM semantic_nodes WHERE id = ?", link.OriginSourceID).Scan(&dummy); errOrig != nil {
-									_ = gllam.UpsertNode(ctx, memory.SemanticNode{ID: link.OriginSourceID, Name: link.OriginSourceID, Type: "inferred"})
-									insertedNodeIDs = append(insertedNodeIDs, link.OriginSourceID)
+							ensureNode := func(nodeID *string) {
+								if *nodeID == "" {
+									return
 								}
+								var existingID string
+								if errNode := gllam.DBRO().QueryRowContext(ctx, "SELECT id FROM semantic_nodes WHERE id = ? OR name = ?", *nodeID, *nodeID).Scan(&existingID); errNode == nil {
+									*nodeID = existingID
+									return
+								}
+								nodeName := *nodeID
+								if errUp := gllam.UpsertNode(ctx, memory.SemanticNode{ID: *nodeID, Name: nodeName, Type: "inferred"}); errUp != nil {
+									nodeName = fmt.Sprintf("%s_inf_%d", *nodeID, time.Now().UnixNano()%10000)
+									_ = gllam.UpsertNode(ctx, memory.SemanticNode{ID: *nodeID, Name: nodeName, Type: "inferred"})
+								}
+								insertedNodeIDs = append(insertedNodeIDs, *nodeID)
 							}
+							ensureNode(&link.SourceID)
+							ensureNode(&link.TargetID)
+							ensureNode(&link.OriginSourceID)
+							ensureNode(&link.TemporalAnchorID)
+
 							if retryErr := gllam.AddEdge(ctx, link); retryErr == nil {
 								epLinks++
 							} else {
