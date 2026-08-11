@@ -503,11 +503,41 @@ Fallacies are classified across **6 major categories** (referencing the [Wikiped
 
 ## Benchmarking Tools
 
-to evaluate retrieval accuracy on  memory benchmarks:
-- **MemArena**: Use cmd/eval_d7_qa to test multi-hop retrieval accuracy.
+To evaluate retrieval and reasoning accuracy on memory benchmarks:
+- **MemArena (`d7_qa`)**: Use `cmd/eval_d7_qa` to test multi-hop retrieval and temporal reasoning accuracy.
 - **BEAM 100K**: 
-  - **Ingestion**: Use cmd/ingest_beam to chunk 100,000-token conversations.
-  - **Evaluation**: Use cmd/eval_beam to query the session LLM over the  episodic context retrieved. Evaluates cognitive memory dimensions like *Contradiction Resolution* and *Abstention*. We use random sampling over the 400 total..
+  - **Ingestion**: Use `cmd/ingest_beam` to chunk 100,000-token conversations.
+  - **Evaluation**: Use `cmd/eval_beam` to query the session LLM over retrieved episodic context.
+
+### Using Local LLM Server vs. OpenRouter Cloud API
+
+GLLAM supports both local LLM endpoints (e.g. `llama.cpp`, `vLLM`) and cloud APIs like **OpenRouter**:
+
+#### Local LLM Endpoint:
+```bash
+export CGO_ENABLED=1
+export CGO_CFLAGS="-I/home/laurent/vllm/.venv/lib/python3.13/site-packages/_rocm_sdk_devel/lib/rocm_sysdeps/include"
+
+go run ./cmd/eval_d7_qa/main.go \
+  --db ./bench/gllam_data.db \
+  --qa ./bench/d7_qa.jsonl \
+  --out ./bench/d7_qa_results.jsonl \
+  --text-server http://100.96.179.19:8888
+```
+
+#### OpenRouter API Endpoint:
+```bash
+export OPENROUTER_API_KEY="sk-or-v1-your-api-key-here"
+export LLM_MODEL="meta-llama/llama-3.3-70b-instruct" # or "deepseek/deepseek-chat" or "anthropic/claude-3.5-sonnet"
+
+export CGO_ENABLED=1
+export CGO_CFLAGS="-I/home/laurent/vllm/.venv/lib/python3.13/site-packages/_rocm_sdk_devel/lib/rocm_sysdeps/include"
+
+go run ./cmd/eval_d7_qa/main.go \
+  --db ./bench/gllam_data.db \
+  --qa ./bench/d7_qa.jsonl \
+  --out ./bench/d7_qa_results.jsonl
+```
 
 ## Embedding Architecture
 

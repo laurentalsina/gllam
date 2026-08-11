@@ -30,12 +30,20 @@ type ExtractionResponse struct {
 
 func main() {
 	dbPath := flag.String("db", "./gllam_data.db", "Path to SQLite database")
-	textEndpoint := flag.String("text-server", "http://100.96.179.19:8888", "LLM text server")
+	defaultTextServer := "http://100.96.179.19:8888"
+	if os.Getenv("OPENROUTER_API_KEY") != "" {
+		defaultTextServer = "https://openrouter.ai/api/v1"
+	}
+	textEndpoint := flag.String("text-server", defaultTextServer, "LLM text server")
 	prefix := flag.String("prefix", "sess_", "Prefix of episodic sessions to process")
 	qaPath := flag.String("qa-file", "", "Optional path to QA jsonl (e.g. ./bench/d7_qa.jsonl) to extract only target benchmark sessions")
 	concurrency := flag.Int("concurrency", 4, "Number of concurrent LLM extraction workers")
 	cleanSemantics := flag.Bool("clean", false, "Purge existing semantic_nodes, semantic_links, and semantic_embeddings before extraction")
 	flag.Parse()
+
+	if os.Getenv("OPENROUTER_API_KEY") != "" && (*textEndpoint == "http://100.96.179.19:8888" || *textEndpoint == defaultTextServer) {
+		*textEndpoint = "https://openrouter.ai/api/v1"
+	}
 
 	ctx := context.Background()
 	llmClient := engine.NewLLMClient(*textEndpoint)
@@ -174,7 +182,7 @@ You must output ONLY valid JSON matching this exact structure, with no markdown 
 			defer wg.Done()
 			defer func() { <-sem }()
 
-			chunks := engine.ChunkTranscript(episode.SummaryText, 6000, 2000)
+			chunks := engine.ChunkTranscript(episode.SummaryText, 3500, 1000)
 			dbMutex.Lock()
 			fmt.Printf("[%d/%d] Processing episode %s (%d chars, %d chunks)...\n", index+1, len(episodes), episode.ID, len(episode.SummaryText), len(chunks))
 			dbMutex.Unlock()
@@ -204,10 +212,15 @@ You must output ONLY valid JSON matching this exact structure, with no markdown 
 
 				var extraction ExtractionResponse
 				if err := json.Unmarshal([]byte(response), &extraction); err != nil {
-					dbMutex.Lock()
-					fmt.Printf("⚠️ JSON parse error for %s chunk %d: %v\n", episode.ID, cIdx+1, err)
-					dbMutex.Unlock()
-					continue
+					repaired := RepairTruncatedJSON(response)
+					if err2 := json.Unmarshal([]byte(repaired), &extraction); err2 == nil {
+						response = repaired
+					} else {
+						dbMutex.Lock()
+						fmt.Printf("⚠️ JSON parse error for %s chunk %d: %v\n", episode.ID, cIdx+1, err)
+						dbMutex.Unlock()
+						continue
+					}
 				}
 
 				dbMutex.Lock()
@@ -270,4 +283,55 @@ You must output ONLY valid JSON matching this exact structure, with no markdown 
 	elapsed := time.Since(startTime)
 	fmt.Printf("\n🎉 Semantic extraction complete in %v! Ingested %d total nodes and %d total links across %d episodes.\n",
 		elapsed.Round(time.Second), grandTotalNodes, grandTotalLinks, len(episodes))
+}
+
+// RepairTruncatedJSON attempts to auto-close unclosed brackets and objects if an LLM stream cuts off
+func RepairTruncatedJSON(jsonStr string) string {
+	jsonStr = strings.TrimSpace(jsonStr)
+	if jsonStr == "" {
+		return jsonStr
+	}
+
+	var js map[string]interface{}
+	if json.Unmarshal([]byte(jsonStr), &js) == nil {
+		return jsonStr
+	}
+
+	lastBracket := strings.LastIndex(jsonStr, "}")
+	if lastBracket > 0 {
+		trimmed := jsonStr[:lastBracket+1]
+		openBraces := strings.Count(trimmed, "{") - strings.Count(trimmed, "}")
+		openSquare := strings.Count(trimmed, "[") - strings.Count(trimmed, "]")
+		for openSquare > 0 {
+			trimmed += "]"
+			openSquare--
+		}
+		for openBraces > 0 {
+			trimmed += "}"
+			openBraces--
+		}
+		if json.Unmarshal([]byte(trimmed), &js) == nil {
+			return trimmed
+		}
+	}
+
+	lastSquare := strings.LastIndex(jsonStr, "]")
+	if lastSquare > 0 {
+		trimmed := jsonStr[:lastSquare+1]
+		openBraces := strings.Count(trimmed, "{") - strings.Count(trimmed, "}")
+		openSquare := strings.Count(trimmed, "[") - strings.Count(trimmed, "]")
+		for openSquare > 0 {
+			trimmed += "]"
+			openSquare--
+		}
+		for openBraces > 0 {
+			trimmed += "}"
+			openBraces--
+		}
+		if json.Unmarshal([]byte(trimmed), &js) == nil {
+			return trimmed
+		}
+	}
+
+	return jsonStr
 }

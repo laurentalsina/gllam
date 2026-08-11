@@ -73,6 +73,7 @@ type chatRequest struct {
 	Messages    []chatMessage `json:"messages"`
 	Temperature float32       `json:"temperature"`
 	Stream      bool          `json:"stream"`
+	MaxTokens   int           `json:"max_tokens,omitempty"`
 }
 
 type chatStreamResponse struct {
@@ -100,6 +101,7 @@ func (c *LLMClient) Generate(ctx context.Context, systemPrompt, userPrompt strin
 		},
 		Temperature: 0.1,
 		Stream:      true,
+		MaxTokens:   4096,
 	}
 
 	body, err := json.Marshal(reqBody)
@@ -107,34 +109,55 @@ func (c *LLMClient) Generate(ctx context.Context, systemPrompt, userPrompt strin
 		return "", fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	url := c.BaseURL
-	if !strings.HasSuffix(url, "/v1/chat/completions") && !strings.HasSuffix(url, "/completions") {
-		url = strings.TrimRight(url, "/") + "/v1/chat/completions"
+	url := strings.TrimRight(c.BaseURL, "/")
+	if strings.HasSuffix(url, "/completions") && !strings.HasSuffix(url, "/chat/completions") {
+		url = strings.TrimSuffix(url, "/completions") + "/chat/completions"
+	} else if !strings.HasSuffix(url, "/chat/completions") {
+		if strings.HasSuffix(url, "/v1") {
+			url += "/chat/completions"
+		} else {
+			url += "/v1/chat/completions"
+		}
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
-	if err != nil {
-		return "", fmt.Errorf("failed to create request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "text/event-stream")
+	var resp *http.Response
+	var lastErr error
 
-	if c.APIKey != "" {
-		req.Header.Set("Authorization", "Bearer "+c.APIKey)
-		req.Header.Set("HTTP-Referer", "https://github.com/laurentalsina/gllam")
-		req.Header.Set("X-Title", "GLLAM Memory System")
+	for attempt := 1; attempt <= 3; attempt++ {
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+		if err != nil {
+			return "", fmt.Errorf("failed to create request: %w", err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "text/event-stream")
+
+		if c.APIKey != "" {
+			req.Header.Set("Authorization", "Bearer "+c.APIKey)
+			req.Header.Set("HTTP-Referer", "https://github.com/laurentalsina/gllam")
+			req.Header.Set("X-Title", "GLLAM Memory System")
+		}
+
+		resp, err = c.client.Do(req)
+		if err != nil {
+			lastErr = fmt.Errorf("LLM server unreachable at %s: %w", url, err)
+		} else if resp.StatusCode != http.StatusOK {
+			respBody, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			lastErr = fmt.Errorf("LLM server returned %d: %s", resp.StatusCode, string(respBody))
+		} else {
+			lastErr = nil
+			break
+		}
+
+		if attempt < 3 {
+			time.Sleep(time.Duration(attempt*2) * time.Second)
+		}
 	}
 
-	resp, err := c.client.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("LLM server unreachable at %s: %w", url, err)
+	if lastErr != nil {
+		return "", lastErr
 	}
 	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
-		return "", fmt.Errorf("LLM server returned %d: %s", resp.StatusCode, string(respBody))
-	}
 
 	// Read SSE stream with expanded buffer for long lines
 	scanner := bufio.NewScanner(resp.Body)

@@ -1,10 +1,12 @@
 package engine
 
 import (
-    "context"
-    "fmt"
-    "regexp"
-    "strings"
+	"context"
+	"fmt"
+	"os"
+	"regexp"
+	"strings"
+	"time"
 
     "github.com/laurentalsina/gllam/pkg/memory"
 )
@@ -67,7 +69,7 @@ func (e *GllamEngine) RouteAndAssemble(ctx context.Context, userPrompt string, e
 
     // Retrieve semantic links and nodes via Dual-Channel RRF Hybrid Retrieval
     if len(entities) > 0 || userPrompt != "" {
-        needleResults, err := e.RetrieveHybridNeedle(ctx, userPrompt, entities, "", 10)
+        needleResults, err := e.RetrieveHybridNeedle(ctx, userPrompt, entities, "", 50)
         if err == nil && len(needleResults) > 0 {
             nodeMap := make(map[string]memory.SemanticNode)
             linkMap := make(map[string]memory.SemanticLink)
@@ -132,31 +134,30 @@ func (e *GllamEngine) RouteAndAssemble(ctx context.Context, userPrompt string, e
     // Append relevant episodic summaries
     var episodes []memory.EpisodicSummary
     if e.embedder != nil {
-        eps, err := e.SearchSimilarEpisodes(ctx, userPrompt, 3)
+        eps, err := e.SearchSimilarEpisodes(ctx, userPrompt, 10)
         if err == nil {
             episodes = eps
         }
     } else {
-        eps, err := e.GetRecentEpisodes(ctx, 3)
+        eps, err := e.GetRecentEpisodes(ctx, 10)
         if err == nil {
             episodes = eps
         }
-    }
-
-    // FTS5 / Keyword Corpus Back-Search Fallback (PLAN_missing_entity_corpus_fallback_and_trap_detection)
-    if len(ctxResult.SemanticNodes) < 5 {
+    }    // FTS5 / Keyword Corpus Back-Search Fallback (PLAN_missing_entity_corpus_fallback_and_trap_detection)
+    if len(ctxResult.SemanticNodes) < 25 || len(episodes) < 5 {
         words := strings.Fields(userPrompt)
         stopWords := map[string]bool{
             "what": true, "does": true, "did": true, "before": true, "after": true, "is": true,
             "the": true, "a": true, "an": true, "where": true, "why": true, "who": true, "how": true,
             "mentioned": true, "say": true, "said": true, "about": true, "with": true, "to": true,
+            "mention": true, "type": true, "first": true, "second": true, "between": true, "from": true,
         }
         for _, rawW := range words {
             w := strings.Trim(strings.ToLower(rawW), "?!.,'\":;")
             if len(w) < 3 || stopWords[w] {
                 continue
             }
-            query := `SELECT id, session_id, summary_text, created_at FROM episodic_summaries WHERE summary_text LIKE ? ORDER BY created_at DESC LIMIT 3`
+            query := `SELECT id, session_id, summary_text, created_at FROM episodic_summaries WHERE summary_text LIKE ? ORDER BY created_at DESC LIMIT 5`
             rows, err := e.dbRO.QueryContext(ctx, query, "%"+w+"%")
             if err == nil {
                 for rows.Next() {
@@ -217,8 +218,15 @@ func (e *GllamEngine) RouteAndAssemble(ctx context.Context, userPrompt string, e
         // 2. Dynamic PDDL Goal & Aspect Extraction
         goalPredicate, aspect := ExtractPDDLGoalAndAspect(userPrompt, ctxResult.SemanticNodes, ctxResult.SemanticLinks)
 
-        // 3. Compile the retrieved graph into sub-domain PDDL strings using aspect projection
+        // 3. Compile & Persist PDDL files to disk for inspection and procedural memory reuse
         domainStr, problemStr := CompileGraphToPDDLAspect(ctxResult.SemanticNodes, ctxResult.SemanticLinks, goalPredicate, ctxResult.Procedural, aspect)
+
+        pddlDir := "./bench/pddl_domains"
+        _ = os.MkdirAll(pddlDir, 0755)
+        domainFile := fmt.Sprintf("%s/domain_%s.pddl", pddlDir, aspect)
+        problemFile := fmt.Sprintf("%s/problem_%d.pddl", pddlDir, time.Now().UnixNano())
+        _ = os.WriteFile(domainFile, []byte(domainStr), 0644)
+        _ = os.WriteFile(problemFile, []byte(problemStr), 0644)
 
         // 4. Validate PDDL schema before execution
         if valErr := ValidatePDDL(domainStr, problemStr); valErr != nil {
@@ -316,6 +324,10 @@ func FormatSystemPrompt(ctx *memory.CompiledContext) string {
     var sb strings.Builder
 
     sb.WriteString("# GLLAM System Context & Guidelines\n\n")
+    sb.WriteString("## Concise Response Format Guidelines\n")
+    sb.WriteString("- Provide ONLY the direct, 1-sentence answer matching the question. DO NOT add extra background history, unprompted timeline commentary, or secondary events beyond what was asked.\n")
+    sb.WriteString("- Rely ONLY on facts and quotes explicitly stated in the provided GLLAM Context.\n")
+    sb.WriteString("- If the context does not contain the answer, state 'Based on the provided context, this is not mentioned.' DO NOT invent or extrapolate facts.\n\n")
     sb.WriteString("## Temporal Reasoning Guidelines\n")
     sb.WriteString("- Speech Act vs Reported Event Order: When a question asks whether a speaker 'did / mentioned' X before or after Y, follow the sequential order of dialogue turns in the transcripts (uttered_before / turn order), unless the prompt explicitly asks about physical external event dates.\n")
     sb.WriteString("- Avoid self-contradictions: Do not claim an event happened in the past before a conversation while concluding it happened after.\n\n")

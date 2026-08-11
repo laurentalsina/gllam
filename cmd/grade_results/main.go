@@ -22,8 +22,18 @@ type Result struct {
 
 func main() {
 	resultsPath := flag.String("results", "./d7_qa_results.jsonl", "Path to results JSONL")
-	textEndpoint := flag.String("text-server", "http://100.96.179.19:8888", "LLM text server")
+	defaultTextServer := "http://100.96.179.19:8888"
+	if os.Getenv("OPENROUTER_API_KEY") != "" {
+		defaultTextServer = "https://openrouter.ai/api/v1"
+	}
+	textEndpoint := flag.String("text-server", defaultTextServer, "LLM text server")
+	verbose := flag.Bool("verbose", true, "Print detailed Query, Ground Truth, and Model Answer breakdown for failed items")
+	failReportPath := flag.String("fail-report", "", "Optional path to save failures markdown report")
 	flag.Parse()
+
+	if os.Getenv("OPENROUTER_API_KEY") != "" && (*textEndpoint == "http://100.96.179.19:8888" || *textEndpoint == defaultTextServer) {
+		*textEndpoint = "https://openrouter.ai/api/v1"
+	}
 
 	file, err := os.Open(*resultsPath)
 	if err != nil {
@@ -38,6 +48,7 @@ func main() {
 	scanner := bufio.NewScanner(file)
 	total := 0
 	correct := 0
+	var failedResults []Result
 
 	fmt.Println("Starting grading...")
 
@@ -51,9 +62,15 @@ func main() {
 
 		total++
 		
-		// If the model had an error or explicitly states it's missing, it's incorrect
+		// If the model had an error or explicitly states it's missing, it's a FAIL
 		if res.ModelAnswer == "ERROR" || strings.Contains(strings.ToLower(res.ModelAnswer), "there is no mention") {
-			fmt.Printf("[%s] INCORRECT (Missing/Error)\n", res.InstanceID)
+			failedResults = append(failedResults, res)
+			fmt.Printf("[%s] FAIL (Missing/Error)\n", res.InstanceID)
+			if *verbose {
+				fmt.Printf("   ├─ Query: %s\n", res.Query)
+				fmt.Printf("   ├─ Ground Truth: %s\n", res.GroundTruth)
+				fmt.Printf("   └─ Model Answer: %s\n\n", res.ModelAnswer)
+			}
 			continue
 		}
 
@@ -61,10 +78,10 @@ func main() {
 Your task is to determine if the Model Answer is strictly correct based on the Ground Truth.
 
 Evaluation Rules:
-1. Reply "INCORRECT" if the Model Answer contains internal self-contradictions (e.g. asserting an event happened in the past before a conversation, but concluding it happened after).
-2. Reply "INCORRECT" if the Model Answer reaches a different temporal ordering conclusion than the Ground Truth.
-3. Reply "CORRECT" ONLY if the Model Answer is factually equivalent to the Ground Truth without internal contradictions.
-Do not provide any explanations, just "CORRECT" or "INCORRECT".`
+1. Reply "FAIL" if the Model Answer contains internal self-contradictions (e.g. asserting an event happened in the past before a conversation, but concluding it happened after).
+2. Reply "FAIL" if the Model Answer reaches a different temporal ordering conclusion than the Ground Truth.
+3. Reply "PASS" ONLY if the Model Answer is factually equivalent to the Ground Truth without internal contradictions.
+Do not provide any explanations, just "PASS" or "FAIL".`
 
 		userPrompt := fmt.Sprintf("Question: %s\nGround Truth: %s\nModel Answer: %s\n\nVerdict:", res.Query, res.GroundTruth, res.ModelAnswer)
 
@@ -79,18 +96,42 @@ Do not provide any explanations, just "CORRECT" or "INCORRECT".`
 		}
 
 		verdict = strings.TrimSpace(verdict)
-		if strings.Contains(strings.ToUpper(verdict), "CORRECT") && !strings.Contains(strings.ToUpper(verdict), "INCORRECT") {
+		if strings.Contains(strings.ToUpper(verdict), "PASS") && !strings.Contains(strings.ToUpper(verdict), "FAIL") {
 			correct++
-			fmt.Printf("[%s] CORRECT\n", res.InstanceID)
+			fmt.Printf("[%s] PASS\n", res.InstanceID)
 		} else {
-			fmt.Printf("[%s] INCORRECT (Verdict: %s)\n", res.InstanceID, verdict)
+			failedResults = append(failedResults, res)
+			cleanVerdict := strings.TrimSpace(strings.ReplaceAll(verdict, "FAIL", ""))
+			cleanVerdict = strings.Trim(cleanVerdict, " :-.\n")
+			if cleanVerdict != "" {
+				fmt.Printf("[%s] FAIL (%s)\n", res.InstanceID, cleanVerdict)
+			} else {
+				fmt.Printf("[%s] FAIL\n", res.InstanceID)
+			}
+			if *verbose {
+				fmt.Printf("   ├─ Query: %s\n", res.Query)
+				fmt.Printf("   ├─ Ground Truth: %s\n", res.GroundTruth)
+				fmt.Printf("   └─ Model Answer: %s\n\n", res.ModelAnswer)
+			}
 		}
 	}
 
 	if total > 0 {
 		accuracy := float64(correct) / float64(total) * 100
-		fmt.Printf("\n--- Final Score ---\nTotal: %d\nCorrect: %d\nAccuracy: %.2f%%\n", total, correct, accuracy)
+		fmt.Printf("\n--- Final Evaluation Score ---\nTotal Evaluated: %d\nPassed: %d\nFailed: %d\nAccuracy Score: %.2f%%\n", total, correct, total-correct, accuracy)
 	} else {
 		fmt.Println("No results found to grade.")
+	}
+
+	if *failReportPath != "" && len(failedResults) > 0 {
+		var report strings.Builder
+		report.WriteString(fmt.Sprintf("# Benchmark Failure Diagnostic Report\n\nTotal Failed Items: %d\n\n", len(failedResults)))
+		for _, f := range failedResults {
+			report.WriteString(fmt.Sprintf("## [%s] %s\n", f.InstanceID, f.Query))
+			report.WriteString(fmt.Sprintf("- **Ground Truth**: %s\n", f.GroundTruth))
+			report.WriteString(fmt.Sprintf("- **Model Answer**: %s\n\n---\n\n", f.ModelAnswer))
+		}
+		_ = os.WriteFile(*failReportPath, []byte(report.String()), 0644)
+		fmt.Printf("📝 Saved failure diagnostic report to: %s\n", *failReportPath)
 	}
 }

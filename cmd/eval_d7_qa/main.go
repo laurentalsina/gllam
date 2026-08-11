@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/laurentalsina/gllam/pkg/engine"
@@ -32,7 +33,17 @@ func main() {
 	qaPath := flag.String("qa", "./d7_qa.jsonl", "Path to d7_qa.jsonl")
 	outPath := flag.String("out", "./d7_qa_results.jsonl", "Output path")
 	limit := flag.Int("limit", 0, "Limit number of queries (0 for all)")
+	
+	defaultTextServer := "http://100.96.179.19:8888"
+	if os.Getenv("OPENROUTER_API_KEY") != "" {
+		defaultTextServer = "https://openrouter.ai/api/v1"
+	}
+	textServer := flag.String("text-server", defaultTextServer, "LLM text server endpoint")
 	flag.Parse()
+
+	if os.Getenv("OPENROUTER_API_KEY") != "" && (*textServer == "http://100.96.179.19:8888" || *textServer == defaultTextServer) {
+		*textServer = "https://openrouter.ai/api/v1"
+	}
 
 	ctx := context.Background()
 	embedder := engine.NewLlamaEmbedder("http://127.0.0.1:8800")
@@ -47,6 +58,19 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Failed to initialize schema & migrations: %v\n", err)
 		os.Exit(1)
 	}
+
+	modelName := os.Getenv("LLM_MODEL")
+	if modelName == "" && strings.Contains(*textServer, "openrouter.ai") {
+		modelName = "meta-llama/llama-3.3-70b-instruct (default)"
+	} else if modelName == "" {
+		modelName = "local-server"
+	}
+
+	fmt.Printf("=======================================================\n")
+	fmt.Printf("🚀 Starting Evaluation Engine\n")
+	fmt.Printf("   ├─ Endpoint: %s\n", *textServer)
+	fmt.Printf("   └─ Target Model: %s\n", modelName)
+	fmt.Printf("=======================================================\n\n")
 
 	var nodeCount int
 	if err := gllam.DBRO().QueryRowContext(ctx, "SELECT count(*) FROM semantic_nodes").Scan(&nodeCount); err == nil {
@@ -86,7 +110,7 @@ func main() {
 
 		fmt.Printf("Evaluating [%s]: %s\n", qa.InstanceID, qa.Query)
 		
-		llmClient := engine.NewLLMClient("http://100.96.179.19:8888")
+		llmClient := engine.NewLLMClient(*textServer)
 		compiled, err := gllam.RouteAndAssemble(ctx, qa.Query, nil)
 		var answer string
 		if err != nil {
@@ -101,10 +125,13 @@ func main() {
 			var genErr error
 			for attempt := 1; attempt <= 3; attempt++ {
 				answer, genErr = llmClient.Generate(ctx, prompt, qa.Query)
-				if genErr == nil {
+				if genErr == nil && strings.TrimSpace(answer) != "" {
 					break
 				}
-				fmt.Fprintf(os.Stderr, "⚠️ Stream error for %s (attempt %d/3): %v. Retrying in %ds...\n", qa.InstanceID, attempt, genErr, attempt*2)
+				if genErr == nil {
+					genErr = fmt.Errorf("empty response received from LLM")
+				}
+				fmt.Fprintf(os.Stderr, "⚠️ Stream / empty error for %s (attempt %d/3): %v. Retrying in %ds...\n", qa.InstanceID, attempt, genErr, attempt*2)
 				time.Sleep(time.Duration(attempt*2) * time.Second)
 			}
 			if genErr != nil {
