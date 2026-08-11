@@ -387,13 +387,13 @@ func RepairTruncatedJSON(jsonStr string) string {
 		return jsonStr
 	}
 
-	var js map[string]interface{}
-	if json.Unmarshal([]byte(jsonStr), &js) == nil {
+	var ext ExtractionResponse
+	if json.Unmarshal([]byte(jsonStr), &ext) == nil {
 		return jsonStr
 	}
 
 	lastBracket := strings.LastIndex(jsonStr, "}")
-	if lastBracket > 0 {
+	for lastBracket > 0 {
 		trimmed := jsonStr[:lastBracket+1]
 		openBraces := strings.Count(trimmed, "{") - strings.Count(trimmed, "}")
 		openSquare := strings.Count(trimmed, "[") - strings.Count(trimmed, "]")
@@ -405,13 +405,14 @@ func RepairTruncatedJSON(jsonStr string) string {
 			trimmed += "}"
 			openBraces--
 		}
-		if json.Unmarshal([]byte(trimmed), &js) == nil {
+		if json.Unmarshal([]byte(trimmed), &ext) == nil {
 			return trimmed
 		}
+		lastBracket = strings.LastIndex(jsonStr[:lastBracket], "}")
 	}
 
 	lastSquare := strings.LastIndex(jsonStr, "]")
-	if lastSquare > 0 {
+	for lastSquare > 0 {
 		trimmed := jsonStr[:lastSquare+1]
 		openBraces := strings.Count(trimmed, "{") - strings.Count(trimmed, "}")
 		openSquare := strings.Count(trimmed, "[") - strings.Count(trimmed, "]")
@@ -423,13 +424,14 @@ func RepairTruncatedJSON(jsonStr string) string {
 			trimmed += "}"
 			openBraces--
 		}
-		if json.Unmarshal([]byte(trimmed), &js) == nil {
+		if json.Unmarshal([]byte(trimmed), &ext) == nil {
 			return trimmed
 		}
+		lastSquare = strings.LastIndex(jsonStr[:lastSquare], "]")
 	}
 
 	lastComma := strings.LastIndex(jsonStr, ",")
-	if lastComma > 0 {
+	for lastComma > 0 {
 		trimmed := jsonStr[:lastComma]
 		openBraces := strings.Count(trimmed, "{") - strings.Count(trimmed, "}")
 		openSquare := strings.Count(trimmed, "[") - strings.Count(trimmed, "]")
@@ -441,9 +443,10 @@ func RepairTruncatedJSON(jsonStr string) string {
 			trimmed += "}"
 			openBraces--
 		}
-		if json.Unmarshal([]byte(trimmed), &js) == nil {
+		if json.Unmarshal([]byte(trimmed), &ext) == nil {
 			return trimmed
 		}
+		lastComma = strings.LastIndex(jsonStr[:lastComma], ",")
 	}
 
 	return jsonStr
@@ -505,6 +508,10 @@ func SanitizeLLMJSON(s string) string {
 	// Clean up double-escaped structural newlines outside quotes (e.g. "},\\nn" -> "},\n")
 	escapedStructuralNewlineRegex := regexp.MustCompile(`(?m)\}\s*,\s*\\+[nN]+\s*`)
 	s = escapedStructuralNewlineRegex.ReplaceAllString(s, "},\n")
+
+	// Auto-close property string values missing closing quotes before structural braces/brackets (e.g. "\"context_prompt\": \"text\n  ]," -> "\"context_prompt\": \"text\"\n  ],")
+	unclosedStringRegex := regexp.MustCompile(`(?m)(:\s*"[^"]*?)(\s*[\r\n]+\s*[\}\]\,])`)
+	s = unclosedStringRegex.ReplaceAllString(s, `$1"$2`)
 
 	trailingCommaRegex := regexp.MustCompile(`,(\s*[\}\]])`)
 	s = trailingCommaRegex.ReplaceAllString(s, "$1")
