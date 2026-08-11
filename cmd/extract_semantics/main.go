@@ -498,10 +498,6 @@ func SanitizeLLMJSON(s string) string {
 	adjacentStringRegex := regexp.MustCompile(`(?m)"([^"\\]*(?:\\.[^"\\]*)*)"\s*"([a-zA-Z0-9_]+)"\s*([\r\n\s]*[\},\]])`)
 	s = adjacentStringRegex.ReplaceAllString(s, `"$1 $2"$3`)
 
-	// Escape illegal raw newlines that occur inside string values (not followed by JSON structural tokens)
-	rawNewlineRegex := regexp.MustCompile(`(?m)\r?\n(?!\s*(?:"[a-zA-Z0-9_]+"\s*:|[\}\]\{\[]|\z))`)
-	s = rawNewlineRegex.ReplaceAllString(s, `\\n`)
-
 	trailingCommaRegex := regexp.MustCompile(`,(\s*[\}\]])`)
 	s = trailingCommaRegex.ReplaceAllString(s, "$1")
 
