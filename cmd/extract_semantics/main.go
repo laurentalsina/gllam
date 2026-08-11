@@ -478,8 +478,8 @@ func SanitizeLLMJSON(s string) string {
 	asteriskRegex := regexp.MustCompile(`(?m)\*\*([a-zA-Z0-9_]+)\*\*\s*:`)
 	s = asteriskRegex.ReplaceAllString(s, `"$1":`)
 
-	// Clean up stray unquoted bare words output after comma/brace before newline (e.g. "}, unwilling\"},\n" -> "},\n")
-	bareWordRegex := regexp.MustCompile(`(?m)([,\}\]])\s*[a-zA-Z_][a-zA-Z0-9_]*"*\}*\s*([\r\n]+)`)
+	// Clean up stray unquoted bare words output after comma/brace before newline (e.g. "},eville\"},\n" -> "},\n")
+	bareWordRegex := regexp.MustCompile(`(?m)([,\}\]])\s*[a-zA-Z_][a-zA-Z0-9_]*[^,\{\}\[\]\n]*([,\}\]])?\s*([\r\n]+)`)
 	s = bareWordRegex.ReplaceAllString(s, "$1\n")
 
 	// Clean up unquoted stray key fragments after brace before colon (e.g. "},eville\":" -> "},\n\"context_prompt\":")
@@ -497,6 +497,14 @@ func SanitizeLLMJSON(s string) string {
 	// Clean up adjacent unseparated strings before brace or comma (e.g. "\"flair\"eville\"\n    }" -> "\"flair eville\"\n    }")
 	adjacentStringRegex := regexp.MustCompile(`(?m)"([^"\\]*(?:\\.[^"\\]*)*)"\s*"([a-zA-Z0-9_]+)"\s*([\r\n\s]*[\},\]])`)
 	s = adjacentStringRegex.ReplaceAllString(s, `"$1 $2"$3`)
+
+	// Fix keys followed by comma instead of colon (e.g. "\"context_patchy_data\", \"context_prompt\":" -> "\"context_prompt\": \"patchy_data\",")
+	keyWithoutColonRegex := regexp.MustCompile(`(?m)"(context_[a-zA-Z0-9_]+)"\s*,`)
+	s = keyWithoutColonRegex.ReplaceAllString(s, `"context_prompt": "$1",`)
+
+	// Clean up double-escaped structural newlines outside quotes (e.g. "},\\nn" -> "},\n")
+	escapedStructuralNewlineRegex := regexp.MustCompile(`(?m)\}\s*,\s*\\+[nN]+\s*`)
+	s = escapedStructuralNewlineRegex.ReplaceAllString(s, "},\n")
 
 	trailingCommaRegex := regexp.MustCompile(`,(\s*[\}\]])`)
 	s = trailingCommaRegex.ReplaceAllString(s, "$1")
