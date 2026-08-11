@@ -42,6 +42,19 @@ func main() {
 	}
 	defer gllam.Close()
 
+	if err := gllam.InitSchema(); err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to initialize schema & migrations: %v\n", err)
+		os.Exit(1)
+	}
+
+	var nodeCount int
+	if err := gllam.DBRO().QueryRowContext(ctx, "SELECT count(*) FROM semantic_nodes").Scan(&nodeCount); err == nil {
+		fmt.Printf("Loaded GllamEngine with %d semantic nodes in database.\n", nodeCount)
+		if nodeCount < 50 {
+			fmt.Printf("⚠️ WARNING: Only %d semantic nodes found. Run 'extract_semantics --prefix sess_' to populate semantic_nodes!\n", nodeCount)
+		}
+	}
+
 	file, err := os.Open(*qaPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to open qa file: %v\n", err)
@@ -80,9 +93,18 @@ func main() {
 			answer = "ERROR"
 		} else {
 			prompt := engine.FormatSystemPrompt(compiled)
+			fmt.Printf("   ├─ Context Assembled: %d semantic nodes, %d links, %d episodic summaries\n",
+				len(compiled.SemanticNodes), len(compiled.SemanticLinks), len(compiled.Episodic))
+			fmt.Printf("   └─ Prompt Size: %d chars (~%d tokens). Submitting to LLM...\n", len(prompt), len(prompt)/4)
+
 			answer, err = llmClient.Generate(ctx, prompt, qa.Query)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "Error generating answer for %s: %v\n", qa.InstanceID, err)
+				fmt.Fprintf(os.Stderr, "⚠️ Stream error for %s: %v. Retrying in 2s...\n", qa.InstanceID, err)
+				time.Sleep(2 * time.Second)
+				answer, err = llmClient.Generate(ctx, prompt, qa.Query)
+			}
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "❌ Error generating answer for %s after retry: %v\n", qa.InstanceID, err)
 				answer = "ERROR"
 			}
 		}

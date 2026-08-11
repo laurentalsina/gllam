@@ -93,8 +93,11 @@ func (c *LLMClient) Generate(ctx context.Context, systemPrompt, userPrompt strin
 		return "", fmt.Errorf("LLM server returned %d: %s", resp.StatusCode, string(respBody))
 	}
 
-	// Read SSE stream
+	// Read SSE stream with expanded buffer for long lines
 	scanner := bufio.NewScanner(resp.Body)
+	const maxCapacity = 10 * 1024 * 1024
+	buf := make([]byte, 64*1024)
+	scanner.Buffer(buf, maxCapacity)
 	var finalContent strings.Builder
 	
 	for scanner.Scan() {

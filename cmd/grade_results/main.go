@@ -56,10 +56,13 @@ func main() {
 			continue
 		}
 
-		systemPrompt := `You are an expert evaluator. You will be provided with a Question, a Ground Truth answer, and a Model Answer.
-Your task is to determine if the Model Answer is correct based on the Ground Truth. 
-Reply with exactly "CORRECT" if the model's answer is factually equivalent or contains the correct information.
-Reply with exactly "INCORRECT" if it contradicts the ground truth or fails to answer it.
+		systemPrompt := `You are a strict evaluation judge for AI memory systems. You will be provided with a Question, a Ground Truth answer, and a Model Answer.
+Your task is to determine if the Model Answer is strictly correct based on the Ground Truth.
+
+Evaluation Rules:
+1. Reply "INCORRECT" if the Model Answer contains internal self-contradictions (e.g. asserting an event happened in the past before a conversation, but concluding it happened after).
+2. Reply "INCORRECT" if the Model Answer reaches a different temporal ordering conclusion than the Ground Truth.
+3. Reply "CORRECT" ONLY if the Model Answer is factually equivalent to the Ground Truth without internal contradictions.
 Do not provide any explanations, just "CORRECT" or "INCORRECT".`
 
 		userPrompt := fmt.Sprintf("Question: %s\nGround Truth: %s\nModel Answer: %s\n\nVerdict:", res.Query, res.GroundTruth, res.ModelAnswer)

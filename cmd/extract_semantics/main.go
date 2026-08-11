@@ -1,16 +1,27 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
 	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/laurentalsina/gllam/pkg/engine"
 	"github.com/laurentalsina/gllam/pkg/memory"
 )
+
+type QAInstanceRef struct {
+	EvidenceSessionIDs []string `json:"evidence_session_ids"`
+	GroundTruth        struct {
+		SourceSession string `json:"source_session"`
+	} `json:"ground_truth"`
+}
 
 type ExtractionResponse struct {
 	Nodes []memory.SemanticNode `json:"nodes"`
@@ -20,17 +31,15 @@ type ExtractionResponse struct {
 func main() {
 	dbPath := flag.String("db", "./gllam_data.db", "Path to SQLite database")
 	textEndpoint := flag.String("text-server", "http://100.96.179.19:8888", "LLM text server")
-	prefix := flag.String("prefix", "beam-100k-1-", "Prefix of episodic sessions to process")
+	prefix := flag.String("prefix", "sess_", "Prefix of episodic sessions to process")
+	qaPath := flag.String("qa-file", "", "Optional path to QA jsonl (e.g. ./bench/d7_qa.jsonl) to extract only target benchmark sessions")
+	concurrency := flag.Int("concurrency", 4, "Number of concurrent LLM extraction workers")
+	cleanSemantics := flag.Bool("clean", false, "Purge existing semantic_nodes, semantic_links, and semantic_embeddings before extraction")
 	flag.Parse()
 
 	ctx := context.Background()
 	llmClient := engine.NewLLMClient(*textEndpoint)
-	
-	// Open engine without embedder for now, we just want to extract and insert
-	// Wait, UpsertNode might require embedder if we store embeddings immediately. 
-	// We should pass an embedder if StoreNodeEmbedding is called inside UpsertNode.
-	// In engine/semantic.go, UpsertNode does not call StoreNodeEmbedding directly, it's called separately.
-	// But let's provide one just in case.
+
 	embedder := engine.NewLlamaEmbedder("http://127.0.0.1:8800")
 	gllam, err := engine.NewGllamEngine(*dbPath, embedder)
 	if err != nil {
@@ -39,7 +48,45 @@ func main() {
 	}
 	defer gllam.Close()
 
-	// 1. Fetch episodic summaries matching prefix
+	if err := gllam.InitSchema(); err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to initialize schema & migrations: %v\n", err)
+		os.Exit(1)
+	}
+
+	if *cleanSemantics {
+		fmt.Println("Purging existing semantic nodes, links, and embeddings...")
+		_, _ = gllam.DB().ExecContext(ctx, "DELETE FROM semantic_links")
+		_, _ = gllam.DB().ExecContext(ctx, "DELETE FROM semantic_nodes")
+		_, _ = gllam.DB().ExecContext(ctx, "DELETE FROM semantic_embeddings")
+	}
+
+	// 1. Optional target session filtering via QA file
+	targetSessions := make(map[string]bool)
+	if *qaPath != "" {
+		qaFile, err := os.Open(*qaPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to open QA file %s: %v\n", *qaPath, err)
+			os.Exit(1)
+		}
+		scanner := bufio.NewScanner(qaFile)
+		for scanner.Scan() {
+			var ref QAInstanceRef
+			if err := json.Unmarshal(scanner.Bytes(), &ref); err == nil {
+				if ref.GroundTruth.SourceSession != "" {
+					targetSessions[ref.GroundTruth.SourceSession] = true
+				}
+				for _, sid := range ref.EvidenceSessionIDs {
+					if sid != "" {
+						targetSessions[sid] = true
+					}
+				}
+			}
+		}
+		_ = qaFile.Close()
+		fmt.Printf("Loaded QA target sessions: %d unique evidence sessions referenced in %s\n", len(targetSessions), *qaPath)
+	}
+
+	// 2. Fetch episodic summaries matching prefix
 	query := `SELECT id, session_id, summary_text, created_at FROM episodic_summaries WHERE id LIKE ? ORDER BY created_at ASC`
 	rows, err := gllam.DBRO().QueryContext(ctx, query, *prefix+"%")
 	if err != nil {
@@ -48,18 +95,29 @@ func main() {
 	}
 	defer rows.Close()
 
-	var episodes []memory.EpisodicSummary
+	var allEpisodes []memory.EpisodicSummary
 	for rows.Next() {
 		var ep memory.EpisodicSummary
 		if err := rows.Scan(&ep.ID, &ep.SessionID, &ep.SummaryText, &ep.CreatedAt); err != nil {
 			fmt.Fprintf(os.Stderr, "Failed to scan episode: %v\n", err)
 			os.Exit(1)
 		}
-		episodes = append(episodes, ep)
+		allEpisodes = append(allEpisodes, ep)
 	}
 	rows.Close()
 
-	fmt.Printf("Found %d episodes to process for prefix '%s'\n", len(episodes), *prefix)
+	var episodes []memory.EpisodicSummary
+	if len(targetSessions) > 0 {
+		for _, ep := range allEpisodes {
+			if targetSessions[ep.SessionID] || targetSessions[ep.ID] {
+				episodes = append(episodes, ep)
+			}
+		}
+		fmt.Printf("Targeted extraction: Filtered from %d total episodes down to %d benchmark evidence sessions!\n", len(allEpisodes), len(episodes))
+	} else {
+		episodes = allEpisodes
+		fmt.Printf("Found %d episodes to process for prefix '%s'\n", len(episodes), *prefix)
+	}
 
 	systemPrompt := `You are an expert knowledge extractor for an agentic memory graph.
 Extract the most critical entities, states, events, and relationships from the provided conversation transcript.
@@ -75,26 +133,12 @@ Node Types:
 - "agent": An LLM agent or autonomous worker origin (e.g. agent_planner)
 - "system": An external system or API origin (e.g. sys_github)
 - "contradiction": An active or past unresolved contradiction between two claims (e.g. contradiction_db_engine)
-- "fallacy": A logical fallacy or deceptive premise from the 6 major categories:
-   1. Formal Logic Error (fallacy_affirming_consequent, fallacy_denying_antecedent, fallacy_circularity)
-   2. Improper Premise (fallacy_begging_question, fallacy_false_dilemma, fallacy_false_equivalence)
-   3. Faulty Generalization (fallacy_hasty_generalization, fallacy_cherry_picking, fallacy_anecdotal)
-   4. Questionable Cause (fallacy_post_hoc, fallacy_cum_hoc, fallacy_single_cause)
-   5. Relevance & Poisoning (fallacy_ad_hominem, fallacy_straw_man, fallacy_red_herring, fallacy_appeal_to_authority)
-   6. Ambiguity (fallacy_equivocation, fallacy_amphiboly, fallacy_composition_division)
-
-Temporal, Rule, Contradiction, & Fallacy Guidelines for Links:
-- If precise timestamps or dates are mentioned (e.g. "May 2024"), extract them into valid_from / valid_until as strings or ISO dates.
-- If timing is relative to another event or entity (e.g. "3 days after the migration"), set valid_from or valid_until to "temporal_note", provide the descriptive phrase in "temporal_note", set "temporal_anchor_id" to the referenced node ID, "temporal_relation" using Allen's Interval Algebra ("before" | "after" | "equals" | "overlaps" | "during" | "contains" | "starts" | "finishes" | "meets"), AND "temporal_offset_seconds" (e.g. +259200 for 3 days after, -172800 for 2 days before).
-- If a link expresses a rule, constraint, or preference, set "rule_context" ("user_preference" | "session" | "source" | "global"), "constraint_type" ("positive" | "negative"), "rule_rationale" (justification / "because" clause), set "origin_source_id" to the node ID of the human/agent/system that issued it, AND if it is turn-bounded (e.g. "for the next 3 questions"), set "duration_turns" (e.g. 3) and "remaining_turns" (e.g. 3). Otherwise set -1.
-- Contradiction & Fallacy Detection:
-  * If two claims directly conflict (e.g. DB engine is Postgres vs DB engine is MySQL), extract a "contradiction" node and link both claims using relationship "has_unresolved_conflict". If one claim resolved the conflict, set "resolution_rationale" explaining why.
-  * If a premise exhibits any of the 6 logical fallacy categories, extract a "fallacy" node (e.g. fallacy_false_dilemma_1) and link the claim using relationship "exhibits_fallacy" or "subverts_claim".
+- "fallacy": A logical fallacy or deceptive premise from the 6 major categories.
 
 You must output ONLY valid JSON matching this exact structure, with no markdown formatting or extra text:
 {
   "nodes": [
-    {"id": "unique_string", "name": "Display Name", "type": "event|state|entity|service|rule|constraint|human|agent|system|contradiction|fallacy", "context_prompt": "Any specific contextual notes or fallacy explanations"}
+    {"id": "unique_string", "name": "Display Name", "type": "event|state|entity|service|rule|constraint|human|agent|system|contradiction|fallacy", "context_prompt": "Any specific contextual notes"}
   ],
   "links": [
     {
@@ -108,119 +152,122 @@ You must output ONLY valid JSON matching this exact structure, with no markdown 
       "temporal_relation": "before|after|equals|overlaps|during|contains|starts|finishes|meets",
       "temporal_offset_seconds": 0,
       "temporal_note": "relative or imprecise timing phrase if applicable",
-      "origin_source_id": "source_node_id_if_issued_by_human_agent_system",
-      "rule_context": "user_preference|session|source|global",
-      "constraint_type": "positive|negative",
-      "rule_rationale": "justification clause if applicable",
-      "resolution_rationale": "explanation when resolving a contradiction",
-      "duration_turns": -1,
-      "remaining_turns": -1
+      "origin_source_id": "source_node_id_if_issued_by_human_agent_system"
     }
   ]
-}
+}`
 
+	var dbMutex sync.Mutex
+	var grandTotalNodes int64
+	var grandTotalLinks int64
 
+	sem := make(chan struct{}, *concurrency)
+	var wg sync.WaitGroup
 
+	startTime := time.Now()
 
+	for i, ep := range episodes {
+		wg.Add(1)
+		sem <- struct{}{}
 
+		go func(index int, episode memory.EpisodicSummary) {
+			defer wg.Done()
+			defer func() { <-sem }()
 
-If the chat contains a contradiction (e.g. user changes their mind), extract the conflicting claims as distinct relationships.`
+			chunks := engine.ChunkTranscript(episode.SummaryText, 6000, 2000)
+			dbMutex.Lock()
+			fmt.Printf("[%d/%d] Processing episode %s (%d chars, %d chunks)...\n", index+1, len(episodes), episode.ID, len(episode.SummaryText), len(chunks))
+			dbMutex.Unlock()
 
-	for _, ep := range episodes {
-		fmt.Printf("Processing episode: %s (length: %d chars)\n", ep.ID, len(ep.SummaryText))
-		
-		// Split episode text into boundary-aware overlapping chunks (6,000 chars with 2,000 overlap)
-		chunks := engine.ChunkTranscript(ep.SummaryText, 6000, 2000)
-		fmt.Printf("Split episode %s into %d semantic chunks for extraction\n", ep.ID, len(chunks))
+			var epNodes int64
+			var epLinks int64
 
-		totalNodesExtracted := 0
-		totalLinksExtracted := 0
-
-		for _, chunk := range chunks {
-			// Trap 9 Guard: Pre-filter adversarial nonsense / DoS gibberish before LLM extraction
-			if !engine.ValidateTranscriptSemanticCoherence(chunk.Text) {
-				fmt.Printf("⚠️ BYZANTINE SEMANTIC POISONING GUARD: Chunk (%d/%d) of episode %s failed semantic coherence check (Adversarial Nonsense/DoS text). Skipping extraction.\n",
-					chunk.ChunkIndex+1, len(chunks), ep.ID)
-				continue
-			}
-
-			userPrompt := fmt.Sprintf("Transcript Chunk (%d/%d):\n%s\n\nExtract JSON:", chunk.ChunkIndex+1, len(chunks), chunk.Text)
-
-
-			response, err := llmClient.Generate(ctx, systemPrompt, userPrompt)
-			if err != nil {
-				fmt.Printf("LLM extraction failed for %s chunk %d: %v\n", ep.ID, chunk.ChunkIndex+1, err)
-				continue
-			}
-
-			// Clean JSON output (sometimes wrapped in ```json)
-			response = strings.TrimSpace(response)
-			response = strings.TrimPrefix(response, "```json")
-			response = strings.TrimPrefix(response, "```")
-			response = strings.TrimSuffix(response, "```")
-			response = strings.TrimSpace(response)
-
-			var extraction ExtractionResponse
-			if err := json.Unmarshal([]byte(response), &extraction); err != nil {
-				fmt.Printf("Failed to parse JSON for %s chunk %d: %v\n", ep.ID, chunk.ChunkIndex+1, err)
-				continue
-			}
-
-			// Insert nodes
-			for _, node := range extraction.Nodes {
-				if node.ID == "" {
+			for cIdx, chunk := range chunks {
+				if !engine.ValidateTranscriptSemanticCoherence(chunk.Text) {
 					continue
 				}
-				if err := gllam.UpsertNode(ctx, node); err != nil {
-					fmt.Printf("Failed to upsert node %s: %v\n", node.ID, err)
-				} else {
-					_ = gllam.StoreNodeEmbedding(ctx, node.ID)
-					totalNodesExtracted++
-				}
-			}
 
-			// Insert links
-			for _, link := range extraction.Links {
-				if link.SourceID == "" || link.TargetID == "" || link.Relationship == "" {
+				userPrompt := fmt.Sprintf("Transcript Chunk (%d/%d):\n%s\n\nExtract JSON:", cIdx+1, len(chunks), chunk.Text)
+				response, err := llmClient.Generate(ctx, systemPrompt, userPrompt)
+				if err != nil {
+					dbMutex.Lock()
+					fmt.Printf("❌ LLM extraction failed for %s chunk %d: %v\n", episode.ID, cIdx+1, err)
+					dbMutex.Unlock()
 					continue
 				}
-				// Default valid_from to episode timestamp if not specified by LLM
-				if link.ValidFrom == "" {
-					if link.TemporalNote != "" {
-						link.ValidFrom = "temporal_note"
+
+				response = strings.TrimSpace(response)
+				response = strings.TrimPrefix(response, "```json")
+				response = strings.TrimPrefix(response, "```")
+				response = strings.TrimSuffix(response, "```")
+				response = strings.TrimSpace(response)
+
+				var extraction ExtractionResponse
+				if err := json.Unmarshal([]byte(response), &extraction); err != nil {
+					dbMutex.Lock()
+					fmt.Printf("⚠️ JSON parse error for %s chunk %d: %v\n", episode.ID, cIdx+1, err)
+					dbMutex.Unlock()
+					continue
+				}
+
+				dbMutex.Lock()
+				// Insert nodes
+				for _, node := range extraction.Nodes {
+					if node.ID == "" {
+						continue
+					}
+					if err := gllam.UpsertNode(ctx, node); err == nil {
+						_ = gllam.StoreNodeEmbedding(ctx, node.ID)
+						epNodes++
+					}
+				}
+
+				// Insert links
+				for _, link := range extraction.Links {
+					if link.SourceID == "" || link.TargetID == "" || link.Relationship == "" {
+						continue
+					}
+					if link.ValidFrom == "" {
+						if link.TemporalNote != "" {
+							link.ValidFrom = "temporal_note"
+						} else {
+							link.ValidFrom = fmt.Sprintf("%d", episode.CreatedAt)
+						}
+					}
+
+					if err := gllam.AddEdge(ctx, link); err != nil {
+						if strings.Contains(err.Error(), "FOREIGN KEY constraint failed") {
+							var dummy int
+							if errSrc := gllam.DBRO().QueryRowContext(ctx, "SELECT 1 FROM semantic_nodes WHERE id = ?", link.SourceID).Scan(&dummy); errSrc != nil {
+								_ = gllam.UpsertNode(ctx, memory.SemanticNode{ID: link.SourceID, Name: link.SourceID, Type: "inferred"})
+								_ = gllam.StoreNodeEmbedding(ctx, link.SourceID)
+							}
+							if errTgt := gllam.DBRO().QueryRowContext(ctx, "SELECT 1 FROM semantic_nodes WHERE id = ?", link.TargetID).Scan(&dummy); errTgt != nil {
+								_ = gllam.UpsertNode(ctx, memory.SemanticNode{ID: link.TargetID, Name: link.TargetID, Type: "inferred"})
+								_ = gllam.StoreNodeEmbedding(ctx, link.TargetID)
+							}
+							if retryErr := gllam.AddEdge(ctx, link); retryErr == nil {
+								epLinks++
+							}
+						}
 					} else {
-						link.ValidFrom = fmt.Sprintf("%d", ep.CreatedAt)
+						epLinks++
 					}
 				}
-
-				if err := gllam.AddEdge(ctx, link); err != nil {
-					if strings.Contains(err.Error(), "FOREIGN KEY constraint failed") {
-						// Self-healing: Check and create missing Source node
-						var dummy int
-						if errSrc := gllam.DBRO().QueryRowContext(ctx, "SELECT 1 FROM semantic_nodes WHERE id = ?", link.SourceID).Scan(&dummy); errSrc != nil {
-							_ = gllam.UpsertNode(ctx, memory.SemanticNode{ID: link.SourceID, Name: link.SourceID, Type: "inferred"})
-							_ = gllam.StoreNodeEmbedding(ctx, link.SourceID)
-						}
-						// Check and create missing Target node
-						if errTgt := gllam.DBRO().QueryRowContext(ctx, "SELECT 1 FROM semantic_nodes WHERE id = ?", link.TargetID).Scan(&dummy); errTgt != nil {
-							_ = gllam.UpsertNode(ctx, memory.SemanticNode{ID: link.TargetID, Name: link.TargetID, Type: "inferred"})
-							_ = gllam.StoreNodeEmbedding(ctx, link.TargetID)
-						}
-						
-						// Retry
-						if retryErr := gllam.AddEdge(ctx, link); retryErr == nil {
-							totalLinksExtracted++
-						}
-					}
-				} else {
-					totalLinksExtracted++
-				}
+				dbMutex.Unlock()
 			}
-		}
 
-		fmt.Printf("Successfully ingested %d nodes and %d links from %s across %d chunks\n", totalNodesExtracted, totalLinksExtracted, ep.ID, len(chunks))
+			atomic.AddInt64(&grandTotalNodes, epNodes)
+			atomic.AddInt64(&grandTotalLinks, epLinks)
+
+			dbMutex.Lock()
+			fmt.Printf("✅ Finished episode %s: Extracted %d nodes and %d links\n", episode.ID, epNodes, epLinks)
+			dbMutex.Unlock()
+		}(i, ep)
 	}
 
-
-	fmt.Println("Semantic extraction complete!")
+	wg.Wait()
+	elapsed := time.Since(startTime)
+	fmt.Printf("\n🎉 Semantic extraction complete in %v! Ingested %d total nodes and %d total links across %d episodes.\n",
+		elapsed.Round(time.Second), grandTotalNodes, grandTotalLinks, len(episodes))
 }

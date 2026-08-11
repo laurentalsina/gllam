@@ -217,6 +217,16 @@ func (e *GllamEngine) RouteAndAssemble(ctx context.Context, userPrompt string, e
                 ctxResult.PlannerOutput = fmt.Sprintf("%sPlanning Engine triggered [%s aspect]. Sequence mathematically verified.", cycleNotice, aspect)
             }
         }
+
+        // Detailed PDDL Invocation Log Output
+        fmt.Printf("\n🧩 [PDDL INVOCATION TRACE]\n")
+        fmt.Printf("   ├── Question: %q\n", userPrompt)
+        fmt.Printf("   ├── Aspect Projection: %s\n", aspect)
+        fmt.Printf("   ├── Extracted Goal: %s\n", goalPredicate)
+        fmt.Printf("   ├── Sub-graph Input: %d nodes, %d links\n", len(ctxResult.SemanticNodes), len(ctxResult.SemanticLinks))
+        fmt.Printf("   ├── Domain Spec: %d bytes (%d lines)\n", len(domainStr), strings.Count(domainStr, "\n"))
+        fmt.Printf("   ├── Problem Spec: %d bytes (%d lines)\n", len(problemStr), strings.Count(problemStr, "\n"))
+        fmt.Printf("   └── Execution Result: %s\n\n", strings.ReplaceAll(ctxResult.PlannerOutput, "\n", " "))
     }
 
     // Check for rule rationale confrontations
