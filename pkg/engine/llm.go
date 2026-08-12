@@ -188,8 +188,29 @@ func (c *LLMClient) Generate(ctx context.Context, systemPrompt, userPrompt strin
 		}
 	}
 
-	if err := scanner.Err(); err != nil {
-		return "", fmt.Errorf("error reading stream: %w", err)
+	if strings.TrimSpace(finalContent.String()) == "" {
+		// Fallback to non-streaming request if SSE stream returned empty content (e.g. reasoning token chunks or SSE drops)
+		reqBody.Stream = false
+		bodyNoStream, errNS := json.Marshal(reqBody)
+		if errNS == nil {
+			reqNS, errReq := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(bodyNoStream))
+			if errReq == nil {
+				reqNS.Header.Set("Content-Type", "application/json")
+				if c.APIKey != "" {
+					reqNS.Header.Set("Authorization", "Bearer "+c.APIKey)
+					reqNS.Header.Set("HTTP-Referer", "https://github.com/laurentalsina/gllam")
+					reqNS.Header.Set("X-Title", "GLLAM Memory System")
+				}
+				respNS, errDo := c.client.Do(reqNS)
+				if errDo == nil && respNS.StatusCode == http.StatusOK {
+					defer respNS.Body.Close()
+					var fullResp chatResponse
+					if json.NewDecoder(respNS.Body).Decode(&fullResp) == nil && len(fullResp.Choices) > 0 {
+						return fullResp.Choices[0].Message.Content, nil
+					}
+				}
+			}
+		}
 	}
 
 	return finalContent.String(), nil

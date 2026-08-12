@@ -246,7 +246,7 @@ You must output ONLY valid JSON matching this exact structure, with no markdown 
 				var response string
 				var err error
 				llmStart := time.Now()
-				for attempt := 1; attempt <= 3; attempt++ {
+				for attempt := 1; attempt <= 5; attempt++ {
 					response, err = llmClient.Generate(ctx, systemPrompt, userPrompt)
 					if err == nil && strings.TrimSpace(response) != "" {
 						break
@@ -254,10 +254,14 @@ You must output ONLY valid JSON matching this exact structure, with no markdown 
 					if err == nil {
 						err = fmt.Errorf("empty response from LLM")
 					}
+					sleepSec := 1 << attempt
+					if sleepSec > 30 {
+						sleepSec = 30
+					}
 					dbMutex.Lock()
-					fmt.Printf("⚠️ OpenRouter error for %s chunk %d (attempt %d/3): %v. Retrying in %ds...\n", episode.ID, cIdx+1, attempt, err, attempt*2)
+					fmt.Printf("⚠️ OpenRouter error for %s chunk %d (attempt %d/5): %v. Retrying in %ds...\n", episode.ID, cIdx+1, attempt, err, sleepSec)
 					dbMutex.Unlock()
-					time.Sleep(time.Duration(attempt*2) * time.Second)
+					time.Sleep(time.Duration(sleepSec) * time.Second)
 				}
 				epLLMTime += time.Since(llmStart)
 

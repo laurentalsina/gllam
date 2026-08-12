@@ -91,14 +91,22 @@ func (e *GllamEngine) RouteAndAssemble(ctx context.Context, userPrompt string, e
                 hybridLinks = append(hybridLinks, l)
             }
 
-            // Perform 2-hop temporal graph expansion to capture full transitive chains
-            expandedNodes, expandedLinks, expErr := e.ExpandTemporalNeighbors(ctx, hybridNodes, hybridLinks, 2)
+            // Perform 1-hop temporal graph expansion to capture transitive chains within token budget
+            expandedNodes, expandedLinks, expErr := e.ExpandTemporalNeighbors(ctx, hybridNodes, hybridLinks, 1)
             if expErr == nil {
                 ctxResult.SemanticNodes = expandedNodes
                 ctxResult.SemanticLinks = expandedLinks
             } else {
                 ctxResult.SemanticNodes = hybridNodes
                 ctxResult.SemanticLinks = hybridLinks
+            }
+
+            // Cap expanded graph to top 150 nodes and 300 links to prevent prompt payload explosion
+            if len(ctxResult.SemanticNodes) > 150 {
+                ctxResult.SemanticNodes = ctxResult.SemanticNodes[:150]
+            }
+            if len(ctxResult.SemanticLinks) > 300 {
+                ctxResult.SemanticLinks = ctxResult.SemanticLinks[:300]
             }
 
             // Evaluate Quantitative Constraints (Trap 2)
