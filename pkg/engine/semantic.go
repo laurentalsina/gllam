@@ -250,7 +250,7 @@ func (e *GllamEngine) AddEdge(ctx context.Context, link memory.SemanticLink) err
             updated_at = excluded.updated_at`
 
     var anchorID, tempRel, tempNote, origSource, rationaleVal, resRationaleVal sql.NullString
-    if link.TemporalAnchorID != "" {
+    if link.TemporalAnchorID != "" && !strings.EqualFold(link.TemporalAnchorID, "null") && !strings.EqualFold(link.TemporalAnchorID, "none") && !strings.EqualFold(link.TemporalAnchorID, "nil") {
         anchorID = sql.NullString{String: link.TemporalAnchorID, Valid: true}
     }
     if link.TemporalRelation != "" {
@@ -259,7 +259,7 @@ func (e *GllamEngine) AddEdge(ctx context.Context, link memory.SemanticLink) err
     if link.TemporalNote != "" {
         tempNote = sql.NullString{String: link.TemporalNote, Valid: true}
     }
-    if link.OriginSourceID != "" {
+    if link.OriginSourceID != "" && !strings.EqualFold(link.OriginSourceID, "null") && !strings.EqualFold(link.OriginSourceID, "none") && !strings.EqualFold(link.OriginSourceID, "nil") {
         origSource = sql.NullString{String: link.OriginSourceID, Valid: true}
     }
     if link.RuleRationale != "" {

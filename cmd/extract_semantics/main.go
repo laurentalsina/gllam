@@ -333,6 +333,12 @@ You must output ONLY valid JSON matching this exact structure, with no markdown 
 					if link.SourceID == "" || link.TargetID == "" || link.Relationship == "" {
 						continue
 					}
+					if strings.EqualFold(link.TemporalAnchorID, "null") || strings.EqualFold(link.TemporalAnchorID, "none") || strings.EqualFold(link.TemporalAnchorID, "nil") {
+						link.TemporalAnchorID = ""
+					}
+					if strings.EqualFold(link.OriginSourceID, "null") || strings.EqualFold(link.OriginSourceID, "none") || strings.EqualFold(link.OriginSourceID, "nil") {
+						link.OriginSourceID = ""
+					}
 					if link.ValidFrom == "" {
 						if link.TemporalNote != "" {
 							link.ValidFrom = "temporal_note"
