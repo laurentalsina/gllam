@@ -81,6 +81,8 @@ type chatStreamResponse struct {
 		Delta struct {
 			Content          string `json:"content"`
 			ReasoningContent string `json:"reasoning_content"`
+			Reasoning        string `json:"reasoning"`
+			Thoughts         string `json:"thoughts"`
 		} `json:"delta"`
 	} `json:"choices"`
 }
@@ -101,7 +103,7 @@ func (c *LLMClient) Generate(ctx context.Context, systemPrompt, userPrompt strin
 		},
 		Temperature: 0.1,
 		Stream:      true,
-		MaxTokens:   4096,
+		MaxTokens:   16384,
 	}
 
 	body, err := json.Marshal(reqBody)
@@ -165,53 +167,77 @@ func (c *LLMClient) Generate(ctx context.Context, systemPrompt, userPrompt strin
 	buf := make([]byte, 64*1024)
 	scanner.Buffer(buf, maxCapacity)
 	var finalContent strings.Builder
-	
+	var finalReasoning strings.Builder
+
 	for scanner.Scan() {
 		line := scanner.Text()
 		if !strings.HasPrefix(line, "data: ") {
 			continue
 		}
-		
+
 		data := strings.TrimPrefix(line, "data: ")
 		if data == "[DONE]" {
 			break
 		}
-		
+
 		var chunk chatStreamResponse
 		if err := json.Unmarshal([]byte(data), &chunk); err == nil {
 			if len(chunk.Choices) > 0 {
-				content := chunk.Choices[0].Delta.Content
-				if content != "" {
-					finalContent.WriteString(content)
+				d := chunk.Choices[0].Delta
+				if d.Content != "" {
+					finalContent.WriteString(d.Content)
+				}
+				if d.ReasoningContent != "" {
+					finalReasoning.WriteString(d.ReasoningContent)
+				} else if d.Reasoning != "" {
+					finalReasoning.WriteString(d.Reasoning)
+				} else if d.Thoughts != "" {
+					finalReasoning.WriteString(d.Thoughts)
 				}
 			}
 		}
 	}
 
-	if strings.TrimSpace(finalContent.String()) == "" {
+	resStr := finalContent.String()
+	if strings.TrimSpace(resStr) == "" && strings.TrimSpace(finalReasoning.String()) != "" {
+		resStr = finalReasoning.String()
+	}
+
+	if strings.TrimSpace(resStr) == "" {
 		// Fallback to non-streaming request if SSE stream returned empty content (e.g. reasoning token chunks or SSE drops)
 		reqBody.Stream = false
 		bodyNoStream, errNS := json.Marshal(reqBody)
-		if errNS == nil {
-			reqNS, errReq := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(bodyNoStream))
-			if errReq == nil {
-				reqNS.Header.Set("Content-Type", "application/json")
-				if c.APIKey != "" {
-					reqNS.Header.Set("Authorization", "Bearer "+c.APIKey)
-					reqNS.Header.Set("HTTP-Referer", "https://github.com/laurentalsina/gllam")
-					reqNS.Header.Set("X-Title", "GLLAM Memory System")
-				}
-				respNS, errDo := c.client.Do(reqNS)
-				if errDo == nil && respNS.StatusCode == http.StatusOK {
-					defer respNS.Body.Close()
-					var fullResp chatResponse
-					if json.NewDecoder(respNS.Body).Decode(&fullResp) == nil && len(fullResp.Choices) > 0 {
-						return fullResp.Choices[0].Message.Content, nil
-					}
-				}
+		if errNS != nil {
+			return "", fmt.Errorf("empty streaming response and failed to marshal non-streaming fallback: %w", errNS)
+		}
+		reqNS, errReq := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(bodyNoStream))
+		if errReq != nil {
+			return "", fmt.Errorf("empty streaming response and failed to create non-streaming request: %w", errReq)
+		}
+		reqNS.Header.Set("Content-Type", "application/json")
+		if c.APIKey != "" {
+			reqNS.Header.Set("Authorization", "Bearer "+c.APIKey)
+			reqNS.Header.Set("HTTP-Referer", "https://github.com/laurentalsina/gllam")
+			reqNS.Header.Set("X-Title", "GLLAM Memory System")
+		}
+		respNS, errDo := c.client.Do(reqNS)
+		if errDo != nil {
+			return "", fmt.Errorf("empty streaming response and non-streaming fallback failed: %w", errDo)
+		}
+		defer respNS.Body.Close()
+		respBytes, _ := io.ReadAll(respNS.Body)
+		if respNS.StatusCode != http.StatusOK {
+			return "", fmt.Errorf("empty streaming response; non-streaming fallback returned %d: %s", respNS.StatusCode, string(respBytes))
+		}
+		var fullResp chatResponse
+		if json.Unmarshal(respBytes, &fullResp) == nil && len(fullResp.Choices) > 0 {
+			ans := fullResp.Choices[0].Message.Content
+			if strings.TrimSpace(ans) != "" {
+				return ans, nil
 			}
 		}
+		return "", fmt.Errorf("LLM returned empty content (raw: %s)", string(respBytes))
 	}
 
-	return finalContent.String(), nil
+	return resStr, nil
 }

@@ -182,6 +182,11 @@ Node Types:
 - "contradiction": An active or past unresolved contradiction between two claims (e.g. contradiction_db_engine)
 - "fallacy": A logical fallacy or deceptive premise from the 6 major categories.
 
+COMPACT FIELD FORMAT RULES:
+- Keep all string property values (context_prompt, caveats, temporal_note, rule_rationale) short and concise (1 short sentence maximum).
+- Keep display "name" short (1-4 words maximum).
+- DO NOT output long paragraphs or explanations inside JSON fields or outside JSON blocks. Output ONLY raw compact JSON.
+
 CRITICAL JSON RULE: Never put unescaped double quotes inside string property values (such as context_prompt, caveats, name, temporal_note). Use single quotes or plain text for quotes inside values.
 
 CRITICAL GRAPH CONSTRAINT: You MUST extract semantic relationships (links) connecting every extracted node! Do not output floating disconnected nodes; every extracted entity, event, state, human, or preference must be connected by at least one link.
@@ -225,7 +230,7 @@ You must output ONLY valid JSON matching this exact structure, with no markdown 
 			defer wg.Done()
 			defer func() { <-sem }()
 
-			chunks := engine.ChunkTranscript(episode.SummaryText, 3500, 1000)
+			chunks := engine.ChunkTranscript(episode.SummaryText, 2500, 500)
 			dbMutex.Lock()
 			fmt.Printf("[%d/%d] Processing episode %s (%d chars, %d chunks)...\n", index+1, len(episodes), episode.ID, len(episode.SummaryText), len(chunks))
 			dbMutex.Unlock()
