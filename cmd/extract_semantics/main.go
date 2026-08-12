@@ -370,10 +370,21 @@ You must output ONLY valid JSON matching this exact structure, with no markdown 
 				dbMutex.Unlock()
 				epDBTime += time.Since(dbStart)
 
-				// Store embeddings outside of dbMutex to prevent worker serialization
+				// Store embeddings outside of dbMutex to prevent worker serialization (parallelized across 5 workers)
 				embedStart := time.Now()
-				for _, nid := range insertedNodeIDs {
-					_ = gllam.StoreNodeEmbedding(ctx, nid)
+				if len(insertedNodeIDs) > 0 {
+					var embWg sync.WaitGroup
+					embSem := make(chan struct{}, 5)
+					for _, nid := range insertedNodeIDs {
+						embWg.Add(1)
+						embSem <- struct{}{}
+						go func(id string) {
+							defer embWg.Done()
+							defer func() { <-embSem }()
+							_ = gllam.StoreNodeEmbedding(ctx, id)
+						}(nid)
+					}
+					embWg.Wait()
 				}
 				epEmbedTime += time.Since(embedStart)
 			}
