@@ -90,14 +90,14 @@ func (e *GllamEngine) AddEdge(ctx context.Context, link memory.SemanticLink) err
 
 		if link.OriginSourceID != "" {
 			var tw sql.NullInt64
-			if err := e.dbRO.QueryRowContext(ctx, "SELECT trust_weight FROM semantic_nodes WHERE id = ?", link.OriginSourceID).Scan(&tw); err == nil && tw.Valid {
+			if err := e.db.QueryRowContext(ctx, "SELECT trust_weight FROM semantic_nodes WHERE id = ?", link.OriginSourceID).Scan(&tw); err == nil && tw.Valid {
 				newTrustWeight = int(tw.Int64)
 			}
 		}
 
 		if existingOriginSource.Valid && existingOriginSource.String != "" {
 			var tw sql.NullInt64
-			if err := e.dbRO.QueryRowContext(ctx, "SELECT trust_weight FROM semantic_nodes WHERE id = ?", existingOriginSource.String).Scan(&tw); err == nil && tw.Valid {
+			if err := e.db.QueryRowContext(ctx, "SELECT trust_weight FROM semantic_nodes WHERE id = ?", existingOriginSource.String).Scan(&tw); err == nil && tw.Valid {
 				existingTrustWeight = int(tw.Int64)
 			}
 		}

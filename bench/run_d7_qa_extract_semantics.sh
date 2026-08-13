@@ -29,6 +29,6 @@ echo "======================================================="
 go run ./cmd/extract_semantics/main.go \
   --db ./bench/gllam_data.db \
   --prefix sess_ \
-  --concurrency 9 \
+  --concurrency 16 \
   "${EXTRA_FLAGS[@]}" \
   --text-server "$TEXT_SERVER"

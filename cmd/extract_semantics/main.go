@@ -63,6 +63,9 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Launch background WAL manager to non-blockingly flush WAL pages every 10s
+	gllam.StartWALCheckpointManager(ctx, 10*time.Second)
+
 	// Create checkpoint table for resumable extraction
 	_, _ = gllam.DB().ExecContext(ctx, `CREATE TABLE IF NOT EXISTS extracted_sessions (
 		session_id TEXT PRIMARY KEY,
@@ -70,6 +73,13 @@ func main() {
 		node_count INTEGER,
 		link_count INTEGER
 	)`)
+
+	// Auto-purge stale 0-link session checkpoints at startup so they are re-extracted with connected links
+	if res, err := gllam.DB().ExecContext(ctx, "DELETE FROM extracted_sessions WHERE link_count IS NULL OR link_count = 0"); err == nil {
+		if rows, rErr := res.RowsAffected(); rErr == nil && rows > 0 {
+			fmt.Printf("🔄 Startup Checkpoint Audit: Purged %d zero-link session checkpoints for reprocessing.\n", rows)
+		}
+	}
 
 	if *cleanSemantics {
 		fmt.Println("Purging existing semantic nodes, links, embeddings, and extraction checkpoints...")
@@ -230,16 +240,16 @@ You must output ONLY valid JSON matching this exact structure, with no markdown 
 			defer wg.Done()
 			defer func() { <-sem }()
 
-			chunks := engine.ChunkTranscript(episode.SummaryText, 2500, 500)
+			chunks := engine.ChunkTranscript(episode.SummaryText, 5000, 600)
 			dbMutex.Lock()
 			fmt.Printf("[%s] [%d/%d] Processing episode %s (%d chars, %d chunks)...\n", time.Now().Format("2006.01.02 15:04:05"), index+1, len(episodes), episode.ID, len(episode.SummaryText), len(chunks))
 			dbMutex.Unlock()
 
 			var epNodes int64
 			var epLinks int64
-
 			var epLLMTime time.Duration
-			var epDBTime time.Duration
+			var epDBWaitTime time.Duration
+			var epDBWriteTime time.Duration
 			var epEmbedTime time.Duration
 
 			for cIdx, chunk := range chunks {
@@ -272,7 +282,7 @@ You must output ONLY valid JSON matching this exact structure, with no markdown 
 
 				if err != nil {
 					dbMutex.Lock()
-					fmt.Printf("❌ LLM extraction failed for %s chunk %d after 3 attempts: %v\n", episode.ID, cIdx+1, err)
+					fmt.Printf("[%s] ❌ LLM extraction failed for %s chunk %d after 5 attempts: %v\n", time.Now().Format("2006.01.02 15:04:05"), episode.ID, cIdx+1, err)
 					dbMutex.Unlock()
 					continue
 				}
@@ -281,42 +291,110 @@ You must output ONLY valid JSON matching this exact structure, with no markdown 
 
 				var extraction ExtractionResponse
 				if err := json.Unmarshal([]byte(response), &extraction); err != nil {
-					repaired := RepairTruncatedJSON(response)
-					if err2 := json.Unmarshal([]byte(repaired), &extraction); err2 == nil {
-						response = repaired
+					repairedJSON := RepairTruncatedJSON(response)
+					if err2 := json.Unmarshal([]byte(repairedJSON), &extraction); err2 == nil {
+						response = repairedJSON
 					} else {
-						dbMutex.Lock()
+						offset := int64(0)
 						errToReport := err
-						if err2 != nil {
-							errToReport = err2
-						}
-						offset := 0
-						if syntaxErr, ok := errToReport.(*json.SyntaxError); ok {
-							offset = int(syntaxErr.Offset)
+						if syntaxErr, ok := err.(*json.SyntaxError); ok {
+							offset = syntaxErr.Offset
+							errToReport = fmt.Errorf("invalid character at offset %d", syntaxErr.Offset)
 						}
 						sample := response
-						if offset > 0 && offset < len(response) {
-							subStart := offset - 40
-							if subStart < 0 {
-								subStart = 0
+						if offset > 0 && offset < int64(len(response)) {
+							start := offset - 20
+							if start < 0 {
+								start = 0
 							}
-							subEnd := offset + 40
-							if subEnd > len(response) {
-								subEnd = len(response)
+							end := offset + 20
+							if end > int64(len(response)) {
+								end = int64(len(response))
 							}
-							sample = fmt.Sprintf("...%s...", response[subStart:subEnd])
-						} else if len(sample) > 200 {
-							sample = sample[:200] + "..."
+							sample = response[start:end]
 						}
-						fmt.Printf("⚠️ JSON parse error for %s chunk %d at offset %d: %v | Context: %q\n", episode.ID, cIdx+1, offset, errToReport, sample)
+						dbMutex.Lock()
+						fmt.Printf("[%s] ⚠️ JSON parse error for %s chunk %d at offset %d: %v | Context: %q\n", time.Now().Format("2006.01.02 15:04:05"), episode.ID, cIdx+1, offset, errToReport, sample)
 						dbMutex.Unlock()
 						continue
 					}
 				}
 
+				// Active Link Recovery: If nodes were extracted but 0 links, perform an immediate targeted LLM retry prompt
+				if len(extraction.Nodes) > 0 && len(extraction.Links) == 0 {
+					var nodeNames []string
+					for _, n := range extraction.Nodes {
+						if n.Name != "" {
+							nodeNames = append(nodeNames, n.Name)
+						}
+					}
+					retryPrompt := fmt.Sprintf("Transcript Chunk (%d/%d):\n%s\n\nYour previous response extracted nodes %v but 0 links. You MUST output relationship links connecting these nodes (e.g. participated_in, has_state, occurred_during, relates_to). Extract JSON with links:", cIdx+1, len(chunks), chunk.Text, nodeNames)
+					if retryResp, rErr := llmClient.Generate(ctx, systemPrompt, retryPrompt); rErr == nil {
+						retryResp = SanitizeLLMJSON(retryResp)
+						var retryExt ExtractionResponse
+						if err := json.Unmarshal([]byte(retryResp), &retryExt); err == nil && len(retryExt.Links) > 0 {
+							extraction = retryExt
+						} else if repaired := RepairTruncatedJSON(retryResp); json.Unmarshal([]byte(repaired), &retryExt) == nil && len(retryExt.Links) > 0 {
+							extraction = retryExt
+						}
+					}
+				}
+
+				// Diagnostic Surfacing: If links remain 0 despite retry prompt, log complete incident metadata for analysis
+				if len(extraction.Nodes) > 0 && len(extraction.Links) == 0 {
+					var nodeSummary []string
+					for _, n := range extraction.Nodes {
+						nodeSummary = append(nodeSummary, fmt.Sprintf("%s (%s)", n.ID, n.Type))
+					}
+					snippet := chunk.Text
+					if len(snippet) > 150 {
+						snippet = snippet[:150] + "..."
+					}
+					dbMutex.Lock()
+					fmt.Printf("[%s] ⚠️ 0-Link Yield Incident for %s (chunk %d/%d):\n", time.Now().Format("2006.01.02 15:04:05"), episode.ID, cIdx+1, len(chunks))
+					fmt.Printf("   ├─ Extracted Nodes: %v\n", nodeSummary)
+					fmt.Printf("   └─ Transcript Snippet: %q\n", snippet)
+					dbMutex.Unlock()
+				}
+
+				// Parallel Vector Generation: Generate vector embeddings over network in parallel BEFORE acquiring DB lock
+				type nodeVector struct {
+					id  string
+					vec []float32
+				}
+				var nodeVecs []nodeVector
+				var vecMutex sync.Mutex
+				embedStart := time.Now()
+
+				if len(extraction.Nodes) > 0 {
+					var embWg sync.WaitGroup
+					embSem := make(chan struct{}, 5)
+					for _, node := range extraction.Nodes {
+						if node.ID == "" || node.Name == "" {
+							continue
+						}
+						embWg.Add(1)
+						embSem <- struct{}{}
+						go func(n memory.SemanticNode) {
+							defer embWg.Done()
+							defer func() { <-embSem }()
+							if vec, err := embedder.Embed(ctx, n.Name); err == nil && len(vec) > 0 {
+								vecMutex.Lock()
+								nodeVecs = append(nodeVecs, nodeVector{id: n.ID, vec: vec})
+								vecMutex.Unlock()
+							}
+						}(node)
+					}
+					embWg.Wait()
+				}
+				epEmbedTime += time.Since(embedStart)
+
 				var insertedNodeIDs []string
-				dbStart := time.Now()
+				dbWaitStart := time.Now()
 				dbMutex.Lock()
+				epDBWaitTime += time.Since(dbWaitStart)
+
+				dbWriteStart := time.Now()
 				_, _ = gllam.DB().ExecContext(ctx, "BEGIN IMMEDIATE")
 
 				// Insert nodes
@@ -384,27 +462,15 @@ You must output ONLY valid JSON matching this exact structure, with no markdown 
 						epLinks++
 					}
 				}
-				_, _ = gllam.DB().ExecContext(ctx, "COMMIT")
-				dbMutex.Unlock()
-				epDBTime += time.Since(dbStart)
 
-				// Store embeddings outside of dbMutex to prevent worker serialization (parallelized across 5 workers)
-				embedStart := time.Now()
-				if len(insertedNodeIDs) > 0 {
-					var embWg sync.WaitGroup
-					embSem := make(chan struct{}, 5)
-					for _, nid := range insertedNodeIDs {
-						embWg.Add(1)
-						embSem <- struct{}{}
-						go func(id string) {
-							defer embWg.Done()
-							defer func() { <-embSem }()
-							_ = gllam.StoreNodeEmbedding(ctx, id)
-						}(nid)
-					}
-					embWg.Wait()
+				// Batch insert pre-generated node vectors inside the single atomic transaction
+				for _, nv := range nodeVecs {
+					_ = gllam.IndexNodeVector(ctx, nv.id, nv.vec)
 				}
-				epEmbedTime += time.Since(embedStart)
+
+				_, _ = gllam.DB().ExecContext(ctx, "COMMIT")
+				epDBWriteTime += time.Since(dbWriteStart)
+				dbMutex.Unlock()
 			}
 
 			atomic.AddInt64(&grandTotalNodes, epNodes)
@@ -412,11 +478,11 @@ You must output ONLY valid JSON matching this exact structure, with no markdown 
 
 			dbMutex.Lock()
 			tsStr := time.Now().Format("2006.01.02 15:04:05")
-			if epNodes > 0 || epLinks > 0 {
+			if epNodes > 0 && epLinks > 0 {
 				_, _ = gllam.DB().ExecContext(ctx, "INSERT OR REPLACE INTO extracted_sessions (session_id, extracted_at, node_count, link_count) VALUES (?, ?, ?, ?)", episode.SessionID, time.Now(), epNodes, epLinks)
-				fmt.Printf("[%s] ✅ Finished %s (%d nodes, %d links) | LLM: %v, DB: %v, Embed: %v\n", tsStr, episode.ID, epNodes, epLinks, epLLMTime.Round(time.Millisecond), epDBTime.Round(time.Millisecond), epEmbedTime.Round(time.Millisecond))
+				fmt.Printf("[%s] ✅ Finished %s (%d nodes, %d links) | LLM: %v, DB-wait: %v, DB-write: %v, Embed: %v\n", tsStr, episode.ID, epNodes, epLinks, epLLMTime.Round(time.Millisecond), epDBWaitTime.Round(time.Millisecond), epDBWriteTime.Round(time.Millisecond), epEmbedTime.Round(time.Millisecond))
 			} else {
-				fmt.Printf("[%s] ⚠️ Finished %s with 0 nodes and 0 links (will be retried on next resume run)\n", tsStr, episode.ID)
+				fmt.Printf("[%s] ⚠️ Finished %s (%d nodes, 0 links - will be retried on next resume run)\n", tsStr, episode.ID, epNodes)
 			}
 			dbMutex.Unlock()
 		}(i, ep)

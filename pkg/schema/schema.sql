@@ -78,6 +78,7 @@ CREATE TABLE IF NOT EXISTS semantic_links (
 
 CREATE INDEX IF NOT EXISTS idx_semantic_links_target ON semantic_links(target_id);
 CREATE INDEX IF NOT EXISTS idx_semantic_links_origin ON semantic_links(origin_source_id);
+CREATE INDEX IF NOT EXISTS idx_semantic_links_source_rel ON semantic_links(source_id, relationship);
 
 
 

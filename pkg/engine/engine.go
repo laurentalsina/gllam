@@ -164,9 +164,8 @@ func (e *GllamEngine) StartWALCheckpointManager(ctx context.Context, interval ti
 			case <-e.stopWALManager:
 				return
 			case <-ticker.C:
-				if _, _, err := e.CheckpointWAL(ctx, "RESTART"); err != nil {
-					log.Printf("Background WAL checkpoint RESTART failed: %v", err)
-				}
+				// Use PASSIVE mode to non-blockingly merge WAL pages into gllam_data.db without pausing writers
+				_, _, _ = e.CheckpointWAL(ctx, "PASSIVE")
 			}
 		}
 	}()
