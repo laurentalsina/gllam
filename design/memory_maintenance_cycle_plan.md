@@ -2,7 +2,7 @@
 
 ## Overview
 
-High-scale memory systems require a periodic offline **Memory Maintenance Cycle** to prevent memory degradation, compact historical revision caveats, consolidate taxonomy branches, and exercise graph clarity and consistency through **Synthetic Random Trace Tests**.
+High-scale memory systems require a periodic offline **Memory Maintenance Cycle** to prevent memory degradation, compact historical revision caveats, consolidate taxonomy branches, consolidate nodes that are synonims, and exercise graph clarity and consistency through **Synthetic Random Trace Tests**.
 
 ---
 
@@ -11,7 +11,8 @@ High-scale memory systems require a periodic offline **Memory Maintenance Cycle*
 ```mermaid
 flowchart TD
     SleepTrigger[EnterMemorySleepCycle] --> Phase1[Phase 1: Compaction & Cleaning]
-    Phase1 --> CaveatCompaction[Batch Node Caveat Compaction BatchCompactHubCaveats]
+    Phase1 --> NodesCompaction[Batch Node Compaction, Links updates on compacted Nodes]
+    Phase1 --> CaveatCompaction[Batch Node Caveat Compaction]
     Phase1 --> TaxonomyConsolidation[Run Taxonomy Branch Consolidation]
     Phase1 --> ProcessOrphans[Process Uncategorized Node Queue]
 
@@ -25,7 +26,8 @@ flowchart TD
 ```
 
 ### 1. Phase 1: Maintenance Compaction & Self-Healing
-* **Node Caveat Compaction:** Synthesizes historical edge caveats on hub entities while **preserving all expired temporal links (`valid_until <= now`) forever in SQLite for bi-temporal lineage and historical RAG**.
+* **Node Compaction:** Merges synonim nodes (eg. "gabriela_fuentes" & "Gabriela Funtes" ) while **preserving all node links**.
+* **Caveat Compaction:** Synthesizes historical edge caveats on hub entities while **preserving all expired temporal links (`valid_until <= now`) forever in SQLite for bi-temporal lineage and historical RAG**.
 * **Self-Healing Taxonomy Discovery & Branch Consolidation:**
   - Runs **`DiscoverTaxonomyMergeCandidates`** during sleep cycles to discover redundant, fragmented, or synonym category paths via vector centroid similarity ($\text{Sim} \ge 0.88$) and path token Jaccard distance ($\text{Jaccard} \ge 0.75$).
   - Merges discovered duplicate taxonomy categories via **`ConsolidateTaxonomyBranch`** in chunked 500-row transactions with cycle prevention (`WouldCreateTaxonomyCycle`) and yield pauses.
