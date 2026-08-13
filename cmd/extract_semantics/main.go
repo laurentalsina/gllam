@@ -232,7 +232,7 @@ You must output ONLY valid JSON matching this exact structure, with no markdown 
 
 			chunks := engine.ChunkTranscript(episode.SummaryText, 2500, 500)
 			dbMutex.Lock()
-			fmt.Printf("[%d/%d] Processing episode %s (%d chars, %d chunks)...\n", index+1, len(episodes), episode.ID, len(episode.SummaryText), len(chunks))
+			fmt.Printf("[%s] [%d/%d] Processing episode %s (%d chars, %d chunks)...\n", time.Now().Format("2006.01.02 15:04:05"), index+1, len(episodes), episode.ID, len(episode.SummaryText), len(chunks))
 			dbMutex.Unlock()
 
 			var epNodes int64
@@ -264,7 +264,7 @@ You must output ONLY valid JSON matching this exact structure, with no markdown 
 						sleepSec = 30
 					}
 					dbMutex.Lock()
-					fmt.Printf("⚠️ OpenRouter error for %s chunk %d (attempt %d/5): %v. Retrying in %ds...\n", episode.ID, cIdx+1, attempt, err, sleepSec)
+					fmt.Printf("[%s] ⚠️ OpenRouter error for %s chunk %d (attempt %d/5): %v. Retrying in %ds...\n", time.Now().Format("2006.01.02 15:04:05"), episode.ID, cIdx+1, attempt, err, sleepSec)
 					dbMutex.Unlock()
 					time.Sleep(time.Duration(sleepSec) * time.Second)
 				}
@@ -317,6 +317,8 @@ You must output ONLY valid JSON matching this exact structure, with no markdown 
 				var insertedNodeIDs []string
 				dbStart := time.Now()
 				dbMutex.Lock()
+				_, _ = gllam.DB().ExecContext(ctx, "BEGIN IMMEDIATE")
+
 				// Insert nodes
 				for _, node := range extraction.Nodes {
 					if node.ID == "" {
@@ -354,7 +356,7 @@ You must output ONLY valid JSON matching this exact structure, with no markdown 
 									return
 								}
 								var existingID string
-								if errNode := gllam.DBRO().QueryRowContext(ctx, "SELECT id FROM semantic_nodes WHERE id = ? OR name = ?", *nodeID, *nodeID).Scan(&existingID); errNode == nil {
+								if errNode := gllam.DB().QueryRowContext(ctx, "SELECT id FROM semantic_nodes WHERE id = ? OR name = ?", *nodeID, *nodeID).Scan(&existingID); errNode == nil {
 									*nodeID = existingID
 									return
 								}
@@ -373,15 +375,16 @@ You must output ONLY valid JSON matching this exact structure, with no markdown 
 							if retryErr := gllam.AddEdge(ctx, link); retryErr == nil {
 								epLinks++
 							} else {
-								fmt.Printf("⚠️ AddEdge retry failed for %s link %s->%s: %v\n", episode.ID, link.SourceID, link.TargetID, retryErr)
+								fmt.Printf("[%s] ⚠️ AddEdge retry failed for %s link %s->%s: %v\n", time.Now().Format("2006.01.02 15:04:05"), episode.ID, link.SourceID, link.TargetID, retryErr)
 							}
 						} else {
-							fmt.Printf("⚠️ AddEdge failed for %s link %s->%s: %v\n", episode.ID, link.SourceID, link.TargetID, err)
+							fmt.Printf("[%s] ⚠️ AddEdge failed for %s link %s->%s: %v\n", time.Now().Format("2006.01.02 15:04:05"), episode.ID, link.SourceID, link.TargetID, err)
 						}
 					} else {
 						epLinks++
 					}
 				}
+				_, _ = gllam.DB().ExecContext(ctx, "COMMIT")
 				dbMutex.Unlock()
 				epDBTime += time.Since(dbStart)
 
@@ -408,11 +411,12 @@ You must output ONLY valid JSON matching this exact structure, with no markdown 
 			atomic.AddInt64(&grandTotalLinks, epLinks)
 
 			dbMutex.Lock()
+			tsStr := time.Now().Format("2006.01.02 15:04:05")
 			if epNodes > 0 || epLinks > 0 {
 				_, _ = gllam.DB().ExecContext(ctx, "INSERT OR REPLACE INTO extracted_sessions (session_id, extracted_at, node_count, link_count) VALUES (?, ?, ?, ?)", episode.SessionID, time.Now(), epNodes, epLinks)
-				fmt.Printf("✅ Finished %s (%d nodes, %d links) | LLM: %v, DB: %v, Embed: %v\n", episode.ID, epNodes, epLinks, epLLMTime.Round(time.Millisecond), epDBTime.Round(time.Millisecond), epEmbedTime.Round(time.Millisecond))
+				fmt.Printf("[%s] ✅ Finished %s (%d nodes, %d links) | LLM: %v, DB: %v, Embed: %v\n", tsStr, episode.ID, epNodes, epLinks, epLLMTime.Round(time.Millisecond), epDBTime.Round(time.Millisecond), epEmbedTime.Round(time.Millisecond))
 			} else {
-				fmt.Printf("⚠️ Finished %s with 0 nodes and 0 links (will be retried on next resume run)\n", episode.ID)
+				fmt.Printf("[%s] ⚠️ Finished %s with 0 nodes and 0 links (will be retried on next resume run)\n", tsStr, episode.ID)
 			}
 			dbMutex.Unlock()
 		}(i, ep)

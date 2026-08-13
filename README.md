@@ -501,10 +501,13 @@ Fallacies are classified across **6 major categories** (referencing the [Wikiped
 | **`red_herring`** | Introducing an irrelevant topic to distract from an active contradiction. | Suppresses multi-hop graph expansion for that sub-graph during retrieval. |
 
 
-## Benchmarking & Evaluation Tools
+## Benchmarking & Evaluation 
 
 GLLAM includes modular benchmark scripts located in **[`./bench/`](file:///home/laurent/Projects/gllam/bench)**:
 
+For MemoryArena 
+- https://digitaleconomy.stanford.edu/publication/memoryarena-benchmarking-agent-memory-in-interdependent-multi-session-agentic-tasks/
+- https://arxiv.org/html/2602.16313v1/ 
 - **`./bench/run_d7_qa_extract_semantics.sh`**: Extracts semantic nodes & links into SQLite (supports `--resume` for automatic checkpointing across interruptions).
 - **`./bench/run_d7_qa_audit.sh`**: Generates model-tagged extraction snapshots (`extraction_snapshot_<model_slug>.json`) and compares node/link distributions against previous runs.
 - **`./bench/run_d7_qa_eval.sh`**: Evaluates `d7_qa` questions against `gllam_data.db`, persisting PDDL domain files to `./bench/pddl_domains/` and results to `d7_qa_results_<model_slug>.jsonl`.

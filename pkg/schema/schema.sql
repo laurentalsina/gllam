@@ -76,6 +76,9 @@ CREATE TABLE IF NOT EXISTS semantic_links (
     FOREIGN KEY (origin_source_id) REFERENCES semantic_nodes(id)
 );
 
+CREATE INDEX IF NOT EXISTS idx_semantic_links_target ON semantic_links(target_id);
+CREATE INDEX IF NOT EXISTS idx_semantic_links_origin ON semantic_links(origin_source_id);
+
 
 
 

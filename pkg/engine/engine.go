@@ -89,8 +89,8 @@ func NewGllamEngine(dbPath string, embedder Embedder) (*GllamEngine, error) {
         PRAGMA journal_mode = WAL;
         PRAGMA synchronous = NORMAL;
         PRAGMA foreign_keys = ON;
-        PRAGMA busy_timeout = 5000;
-        PRAGMA wal_autocheckpoint = 1000;
+        PRAGMA busy_timeout = 30000;
+        PRAGMA wal_autocheckpoint = 10000;
     `
 	if _, err := db.Exec(writePragmas); err != nil {
 		db.Close()
@@ -102,7 +102,7 @@ func NewGllamEngine(dbPath string, embedder Embedder) (*GllamEngine, error) {
 	readPragmas := `
         PRAGMA query_only = ON;
         PRAGMA foreign_keys = ON;
-        PRAGMA busy_timeout = 5000;
+        PRAGMA busy_timeout = 30000;
     `
 	if _, err := dbRO.Exec(readPragmas); err != nil {
 		db.Close()
