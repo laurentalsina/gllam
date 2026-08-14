@@ -13,3 +13,6 @@ sbom_compliance_en.json
 
 # Logs
 eval_output.log
+
+# bench output
+bench/pddl_domains/
