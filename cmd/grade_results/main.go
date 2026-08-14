@@ -46,6 +46,8 @@ func main() {
 	ctx := context.Background()
 
 	scanner := bufio.NewScanner(file)
+	buf := make([]byte, 64*1024)
+	scanner.Buffer(buf, 10*1024*1024) // 10MB max token size buffer
 	total := 0
 	correct := 0
 	var failedResults []Result
@@ -114,6 +116,10 @@ Do not provide any explanations, just "PASS" or "FAIL".`
 				fmt.Printf("   └─ Model Answer: %s\n\n", res.ModelAnswer)
 			}
 		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		fmt.Fprintf(os.Stderr, "Error scanning results file: %v\n", err)
 	}
 
 	if total > 0 {

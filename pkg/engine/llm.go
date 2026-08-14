@@ -26,8 +26,12 @@ type LLMClient struct {
 func NewLLMClient(baseURL string) *LLMClient {
 	apiKey := os.Getenv("OPENROUTER_API_KEY")
 	model := os.Getenv("LLM_MODEL")
-	if model == "" && strings.Contains(baseURL, "openrouter.ai") {
-		model = "meta-llama/llama-3.3-70b-instruct"
+	if strings.Contains(baseURL, "openrouter.ai") {
+		if model == "" || model == "local-server" || model == "local_server" {
+			model = "meta-llama/llama-3.3-70b-instruct"
+		}
+	} else if model == "" {
+		model = "local-server"
 	}
 
 	transport := &http.Transport{

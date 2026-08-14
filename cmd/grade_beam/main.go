@@ -37,6 +37,8 @@ func main() {
 	ctx := context.Background()
 
 	scanner := bufio.NewScanner(file)
+	buf := make([]byte, 64*1024)
+	scanner.Buffer(buf, 10*1024*1024)
 	
 	categoryStats := make(map[string]struct{ total, correct int })
 	total := 0

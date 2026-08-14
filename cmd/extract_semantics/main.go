@@ -29,28 +29,32 @@ type ExtractionResponse struct {
 	Links []memory.SemanticLink `json:"links"`
 }
 
+func getEnv(key, fallback string) string {
+        if value, exists := os.LookupEnv(key); exists {
+                return value
+        }
+        return fallback
+}
+
 func main() {
-	dbPath := flag.String("db", "./gllam_data.db", "Path to SQLite database")
-	defaultTextServer := "http://100.96.179.19:8888"
-	if os.Getenv("OPENROUTER_API_KEY") != "" {
-		defaultTextServer = "https://openrouter.ai/api/v1"
-	}
-	textEndpoint := flag.String("text-server", defaultTextServer, "LLM text server")
+        // Command Line Flag (has prio over)  Environment Variable (has prio over)  Hardcoded Default
+        dbPath := flag.String("dbpath", getEnv("DATABASE_PATH", "./bench/ gllam_data.db"), "Path to SQLite database (env: DATABASE_PATH_PATH)")
+        textServer := flag.String("text-server", getEnv("TEXT_SERVER", "https://openrouter.ai/api/v1"), "LLM text server endpoint (env: TEXT_SERVER)")
+        embeddingServer := flag.String("embeddings-server", getEnv("EMBEDDINGS_SERVER", "http://127.0.0.1:8800"), "Embeddings server endpoint (env: EMBEDDINGS_SERVER)")
+
 	prefix := flag.String("prefix", "sess_", "Prefix of episodic sessions to process")
 	qaPath := flag.String("qa-file", "", "Optional path to QA jsonl (e.g. ./bench/d7_qa.jsonl) to extract only target benchmark sessions")
 	concurrency := flag.Int("concurrency", 4, "Number of concurrent LLM extraction workers")
 	cleanSemantics := flag.Bool("clean", false, "Purge existing semantic_nodes, semantic_links, and semantic_embeddings before extraction")
 	resumeExtraction := flag.Bool("resume", true, "Skip sessions that have already been extracted in previous runs")
+	trialMode := flag.Bool("trial", false, "Trial run on 1 chunk without database modifications, printing full raw text and full semantic data")
+	trialChunk := flag.Int("trial-chunk", 1, "Chunk index (1-based) to use in trial mode")
 	flag.Parse()
 
-	if os.Getenv("OPENROUTER_API_KEY") != "" && (*textEndpoint == "http://100.96.179.19:8888" || *textEndpoint == defaultTextServer) {
-		*textEndpoint = "https://openrouter.ai/api/v1"
-	}
-
 	ctx := context.Background()
-	llmClient := engine.NewLLMClient(*textEndpoint)
+	llmClient := engine.NewLLMClient(*textServer)
 
-	embedder := engine.NewLlamaEmbedder("http://127.0.0.1:8800")
+	embedder := engine.NewLlamaEmbedder(*embeddingServer)
 	gllam, err := engine.NewGllamEngine(*dbPath, embedder)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to initialize engine: %v\n", err)
@@ -81,7 +85,7 @@ func main() {
 		}
 	}
 
-	if *cleanSemantics {
+	if *cleanSemantics && !*trialMode {
 		fmt.Println("Purging existing semantic nodes, links, embeddings, and extraction checkpoints...")
 		_, _ = gllam.DB().ExecContext(ctx, "DELETE FROM semantic_links")
 		_, _ = gllam.DB().ExecContext(ctx, "DELETE FROM semantic_nodes")
@@ -116,24 +120,32 @@ func main() {
 	}
 
 	// 2. Fetch episodic summaries matching prefix
+	var allEpisodes []memory.EpisodicSummary
 	query := `SELECT id, session_id, summary_text, created_at FROM episodic_summaries WHERE id LIKE ? ORDER BY created_at ASC`
 	rows, err := gllam.DBRO().QueryContext(ctx, query, *prefix+"%")
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to fetch episodes: %v\n", err)
-		os.Exit(1)
-	}
-	defer rows.Close()
-
-	var allEpisodes []memory.EpisodicSummary
-	for rows.Next() {
-		var ep memory.EpisodicSummary
-		if err := rows.Scan(&ep.ID, &ep.SessionID, &ep.SummaryText, &ep.CreatedAt); err != nil {
-			fmt.Fprintf(os.Stderr, "Failed to scan episode: %v\n", err)
-			os.Exit(1)
+	if err == nil {
+		for rows.Next() {
+			var ep memory.EpisodicSummary
+			if err := rows.Scan(&ep.ID, &ep.SessionID, &ep.SummaryText, &ep.CreatedAt); err == nil {
+				allEpisodes = append(allEpisodes, ep)
+			}
 		}
-		allEpisodes = append(allEpisodes, ep)
+		rows.Close()
 	}
-	rows.Close()
+
+	// Fallback to fetch all episodes if prefix filter yielded 0 results (e.g. session IDs start with d7_ instead of sess_)
+	if len(allEpisodes) == 0 {
+		fallbackRows, fErr := gllam.DBRO().QueryContext(ctx, `SELECT id, session_id, summary_text, created_at FROM episodic_summaries ORDER BY created_at ASC`)
+		if fErr == nil {
+			for fallbackRows.Next() {
+				var ep memory.EpisodicSummary
+				if err := fallbackRows.Scan(&ep.ID, &ep.SessionID, &ep.SummaryText, &ep.CreatedAt); err == nil {
+					allEpisodes = append(allEpisodes, ep)
+				}
+			}
+			fallbackRows.Close()
+		}
+	}
 
 	var episodes []memory.EpisodicSummary
 	if len(targetSessions) > 0 {
@@ -148,7 +160,7 @@ func main() {
 		fmt.Printf("Found %d episodes to process for prefix '%s'\n", len(episodes), *prefix)
 	}
 
-	if *resumeExtraction && !*cleanSemantics {
+	if *resumeExtraction && !*cleanSemantics && !*trialMode {
 		// Clean up any 0-node/0-link failure checkpoints from previous aborted runs
 		_, _ = gllam.DB().ExecContext(ctx, "DELETE FROM extracted_sessions WHERE node_count = 0 AND link_count = 0")
 
@@ -236,6 +248,90 @@ You must output ONLY valid JSON matching this exact structure, with no markdown 
 	var dbMutex sync.Mutex
 	var grandTotalNodes int64
 	var grandTotalLinks int64
+
+	if *trialMode {
+		if len(episodes) == 0 {
+			fmt.Fprintf(os.Stderr, "❌ No episodes found to run trial extraction!\n")
+			os.Exit(1)
+		}
+		ep := episodes[0]
+		chunks := engine.ChunkTranscript(ep.SummaryText, 5000, 600)
+		if len(chunks) == 0 {
+			fmt.Fprintf(os.Stderr, "❌ Episode %s has an empty transcript!\n", ep.ID)
+			os.Exit(1)
+		}
+		cIdx := *trialChunk - 1
+		if cIdx < 0 || cIdx >= len(chunks) {
+			cIdx = 0
+		}
+		chunk := chunks[cIdx]
+
+		userPrompt := fmt.Sprintf("Conversation Episode [1 / %d] (Session ID: %s | Created At: %d):\nTranscript Chunk (%d/%d):\n%s\n\nExtract JSON:", len(episodes), ep.ID, ep.CreatedAt, cIdx+1, len(chunks), chunk.Text)
+
+		fmt.Println("================================================================================")
+		fmt.Printf("🔬 TRIAL EXTRACTION MODE (Model: %s)\n", llmClient.Model)
+		fmt.Printf("   ├─ Endpoint: %s\n", llmClient.BaseURL)
+		fmt.Printf("   ├─ Target Episode ID: %s\n", ep.ID)
+		fmt.Printf("   └─ Chunk %d of %d (%d characters)\n", cIdx+1, len(chunks), len(chunk.Text))
+		fmt.Println("================================================================================")
+
+		startTime := time.Now()
+		response, err := llmClient.Generate(ctx, systemPrompt, userPrompt)
+		duration := time.Since(startTime)
+
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "❌ LLM Extraction Failed: %v\n", err)
+			os.Exit(1)
+		}
+
+		cleanJSON := SanitizeLLMJSON(response)
+		var extData ExtractionResponse
+		parseErr := json.Unmarshal([]byte(cleanJSON), &extData)
+		prettyParsedJSON, _ := json.MarshalIndent(extData, "", "  ")
+
+		// Graph Connectivity Audit
+		nodeMap := make(map[string]bool)
+		for _, n := range extData.Nodes {
+			nodeMap[n.ID] = true
+		}
+		linkedNodes := make(map[string]bool)
+		for _, l := range extData.Links {
+			linkedNodes[l.SourceID] = true
+			linkedNodes[l.TargetID] = true
+		}
+		var unlinkedNodes []string
+		for nID := range nodeMap {
+			if !linkedNodes[nID] {
+				unlinkedNodes = append(unlinkedNodes, nID)
+			}
+		}
+
+		fmt.Println("\n--- 1. FULL RAW TRANSCRIPT CHUNK ---")
+		fmt.Println(chunk.Text)
+
+		fmt.Println("\n--- 2. RAW LLM MODEL RESPONSE ---")
+		fmt.Println(response)
+
+		fmt.Println("\n--- 3. PARSED SEMANTIC DATA (FULL JSON) ---")
+		fmt.Println(string(prettyParsedJSON))
+
+		fmt.Println("\n--- 4. EXTRACTION QUALITY METRICS ---")
+		fmt.Printf("├─ Total Extracted Nodes: %d\n", len(extData.Nodes))
+		fmt.Printf("├─ Total Extracted Links: %d\n", len(extData.Links))
+		fmt.Printf("├─ LLM Inference Duration: %.2f seconds\n", duration.Seconds())
+		if parseErr != nil {
+			fmt.Printf("├─ ⚠️ JSON Parsing Status: FAILED (%v)\n", parseErr)
+		} else {
+			fmt.Printf("├─ ✅ JSON Parsing Status: SUCCESS (Valid JSON)\n")
+		}
+		if len(unlinkedNodes) > 0 {
+			fmt.Printf("└─ ⚠️ Disconnected Floating Nodes (%d): %s\n", len(unlinkedNodes), strings.Join(unlinkedNodes, ", "))
+		} else {
+			fmt.Printf("└─ ✅ Graph Connectivity: All nodes are fully connected by at least one link!\n")
+		}
+		fmt.Println("================================================================================")
+		return
+	}
 
 	sem := make(chan struct{}, *concurrency)
 	var wg sync.WaitGroup

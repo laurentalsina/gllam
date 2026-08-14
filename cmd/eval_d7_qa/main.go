@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 	"time"
+	"strconv"
 
 	"github.com/laurentalsina/gllam/pkg/engine"
 )
@@ -28,25 +29,38 @@ type Result struct {
 	GroundTruth  string `json:"ground_truth"`
 }
 
-func main() {
-	dbPath := flag.String("db", "./gllam_data.db", "Path to SQLite database")
-	qaPath := flag.String("qa", "./d7_qa.jsonl", "Path to d7_qa.jsonl")
-	outPath := flag.String("out", "./d7_qa_results.jsonl", "Output path")
-	limit := flag.Int("limit", 0, "Limit number of queries (0 for all)")
-	
-	defaultTextServer := "http://100.96.179.19:8888"
-	if os.Getenv("OPENROUTER_API_KEY") != "" {
-		defaultTextServer = "https://openrouter.ai/api/v1"
+func getEnv(key, fallback string) string {
+	if value, exists := os.LookupEnv(key); exists {
+		return value
 	}
-	textServer := flag.String("text-server", defaultTextServer, "LLM text server endpoint")
+	return fallback
+}
+
+func getEnvInt(key string, fallback int) int {
+	if valueStr, exists := os.LookupEnv(key); exists {
+		if value, err := strconv.Atoi(valueStr); err == nil {
+			return value
+		}
+	}
+	return fallback
+}
+
+func main() {
+        // Command Line Flag (has prio over)  Environment Variable (has prio over)  Hardcoded Default
+	dbPath := flag.String("dbpath", getEnv("DATABASE_PATH", "./bench/ gllam_data.db"), "Path to SQLite database (env: DATABASE_PATH_PATH)")
+	textServer := flag.String("text-server", getEnv("TEXT_SERVER", "https://openrouter.ai/api/v1"), "LLM text server endpoint (env: TEXT_SERVER)")
+	embeddingsServer := flag.String("embeddings-server", getEnv("EMBEDDINGS_SERVER", "http://127.0.0.1:8800"), "Embeddings server endpoint (env: EMBEDDINGS_SERVER)")
+
+	qaPath := flag.String("qa", getEnv("QA_PATH", "./d7_qa.jsonl"), "Path to d7_qa.jsonl (env: QA_PATH)")
+	outPath := flag.String("out", getEnv("OUT_PATH", "./d7_qa_results.jsonl"), "Output path (env: OUT_PATH)")
+	limit := flag.Int("limit", getEnvInt("LIMIT", 0), "Limit number of queries (0 for all) (env: LIMIT)")
+
+	
 	flag.Parse()
 
-	if os.Getenv("OPENROUTER_API_KEY") != "" && (*textServer == "http://100.96.179.19:8888" || *textServer == defaultTextServer) {
-		*textServer = "https://openrouter.ai/api/v1"
-	}
-
 	ctx := context.Background()
-	embedder := engine.NewLlamaEmbedder("http://127.0.0.1:8800")
+	embedder := engine.NewLlamaEmbedder(*embeddingsServer)
+	
 	gllam, err := engine.NewGllamEngine(*dbPath, embedder)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to initialize engine: %v\n", err)
@@ -60,9 +74,7 @@ func main() {
 	}
 
 	modelName := os.Getenv("LLM_MODEL")
-	if modelName == "" && strings.Contains(*textServer, "openrouter.ai") {
-		modelName = "meta-llama/llama-3.3-70b-instruct (default)"
-	} else if modelName == "" {
+	if modelName == "" {
 		modelName = "local-server"
 	}
 
@@ -95,6 +107,8 @@ func main() {
 	defer outFile.Close()
 
 	scanner := bufio.NewScanner(file)
+	buf := make([]byte, 64*1024)
+	scanner.Buffer(buf, 10*1024*1024)
 	count := 0
 	for scanner.Scan() {
 		if *limit > 0 && count >= *limit {

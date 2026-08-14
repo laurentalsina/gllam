@@ -196,12 +196,44 @@ ALTER TABLE semantic_links ADD COLUMN deontic_modality TEXT DEFAULT NULL;
 
 ## 4. Pipeline Instrumentation & Solver Gating
 
-### 4.1 Semantic Extraction Prompting (`cmd/extract_semantics/main.go`)
+### 4.1 Semantic Extraction & Modality Tagging Strategy (`cmd/extract_semantics/main.go`)
 
-Update extraction rules to map extracted text into the three ontological modalities:
-- **Epistemic**: Tag analogies & conjectures as `possibility` + `reported_hearsay`. Tag verified facts as `certainty`.
-- **Alethic**: Tag physical dependencies and temporal ordering as `alethic_modality: "necessary"`.
-- **Deontic**: Tag rules, policies, and constraints as `obligation`, `permission`, or `prohibition`.
+We adopt **Explicit LLM-Tagged Extraction** with an **Engine Fallback Heuristic**:
+
+1. **Extraction Schema**:
+   Add `epistemic_modality`, `evidentiality`, `alethic_modality`, and `deontic_modality` directly to the JSON schema in `cmd/extract_semantics/main.go`:
+   ```json
+   {
+     "nodes": [
+       {
+         "id": "node_1",
+         "name": "phishing_management",
+         "type": "state",
+         "epistemic_modality": "certainty",
+         "evidentiality": "reported_hearsay",
+         "alethic_modality": "contingent"
+       }
+     ],
+     "links": [
+       {
+         "source_id": "user_grace",
+         "target_id": "flat_tire_metaphor",
+         "relationship": "analogizes_to",
+         "caveats": "Handling phishing is like fixing a flat tire at 80mph",
+         "epistemic_modality": "possibility",
+         "evidentiality": "reported_hearsay",
+         "alethic_modality": "structural_isomorphism",
+         "deontic_modality": null
+       }
+     ]
+   }
+   ```
+
+2. **Engine Fallback Heuristics (Robustness Guard)**:
+   If an extraction LLM (such as a smaller or quantized model) omits or returns invalid modal values, `GllamEngine` applies deterministic post-hoc fallback rules upon node/link insertion:
+   - If `relationship` is `analogizes_to`, `evokes_analogy`, or `caveats` matches metaphor patterns $\rightarrow$ set `EpistemicModality = ModalityPossibility` and `AlethicModality = AlethicIsomorphism`.
+   - If `type` is `rule` or `constraint` $\rightarrow$ set `DeonticModality = DeonticObligation` or `DeonticProhibition`.
+   - If `origin_source_id` is a human speaker $\rightarrow$ set `Evidentiality = EvidenceReported`.
 
 ### 4.2 PDDL Solver Gating (`pkg/engine/pddl_compiler.go`)
 

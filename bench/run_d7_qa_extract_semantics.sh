@@ -5,14 +5,7 @@
 export CGO_ENABLED=1
 export CGO_CFLAGS="-I/home/laurent/vllm/.venv/lib/python3.13/site-packages/_rocm_sdk_devel/lib/rocm_sysdeps/include"
 
-TEXT_SERVER="${1}"
-if [ -z "$TEXT_SERVER" ]; then
-    if [ -n "$OPENROUTER_API_KEY" ]; then
-        TEXT_SERVER="https://openrouter.ai/api/v1"
-    else
-        TEXT_SERVER="http://100.96.179.19:8888"
-    fi
-fi
+TEXT_SERVER="${1:-${TEXT_SERVER:-${LLM_SERVER:-http://100.96.179.19:8888}}}"
 
 EXTRA_FLAGS=()
 if [ "$CLEAN" = "true" ]; then

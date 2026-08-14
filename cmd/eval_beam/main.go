@@ -61,6 +61,8 @@ func main() {
 	defer outFile.Close()
 
 	scanner := bufio.NewScanner(file)
+	buf := make([]byte, 64*1024)
+	scanner.Buffer(buf, 10*1024*1024)
 	count := 0
 	for scanner.Scan() {
 		if *limit > 0 && count >= *limit {

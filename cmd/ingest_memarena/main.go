@@ -24,10 +24,19 @@ type Session struct {
 	Turns     []Turn `json:"turns"`
 }
 
+func getEnv(key, fallback string) string {
+        if value, exists := os.LookupEnv(key); exists {
+                return value
+        }
+        return fallback
+}
+
 func main() {
-	dbPath := flag.String("db", "./gllam_data.db", "Path to SQLite database")
+        // Command Line Flag (has prio over)  Environment Variable (has prio over)  Hardcoded Default
+        dbPath := flag.String("dbpath", getEnv("DATABASE_PATH", "./bench/ gllam_data.db"), "Path to SQLite database (env: DATABASE_PATH_PATH)")
+        embeddingsServer := flag.String("embeddings-server", getEnv("EMBEDDINGS_SERVER", "http://127.0.0.1:8800"), "Embeddings server endpoint (env: EMBEDDINGS_SERVER)")
+
 	corpusPath := flag.String("corpus", "./corpus_sessions.jsonl", "Path to corpus_sessions.jsonl")
-	embeddingsServer := flag.String("embeddings-server", "http://127.0.0.1:8800", "Embeddings server URL")
 	flag.Parse()
 
 	ctx := context.Background()
