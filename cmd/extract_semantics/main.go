@@ -266,7 +266,7 @@ You must output ONLY valid JSON matching this exact structure, with no markdown 
 		}
 		chunk := chunks[cIdx]
 
-		userPrompt := fmt.Sprintf("Conversation Episode [1 / %d] (Session ID: %s | Created At: %d):\nTranscript Chunk (%d/%d):\n%s\n\nExtract JSON:", len(episodes), ep.ID, ep.CreatedAt, cIdx+1, len(chunks), chunk.Text)
+		userPrompt := fmt.Sprintf("Conversation Episode [1 / %d] (Session ID: %s | Created At: %d):\nTranscript Chunk (%d/%d):\n%s\n\nPlease extract the semantic nodes and links from this transcript chunk in raw JSON format:", len(episodes), ep.ID, ep.CreatedAt, cIdx+1, len(chunks), chunk.Text)
 
 		fmt.Println("================================================================================")
 		fmt.Printf("🔬 TRIAL EXTRACTION MODE (Model: %s)\n", llmClient.Model)
@@ -275,14 +275,25 @@ You must output ONLY valid JSON matching this exact structure, with no markdown 
 		fmt.Printf("   └─ Chunk %d of %d (%d characters)\n", cIdx+1, len(chunks), len(chunk.Text))
 		fmt.Println("================================================================================")
 
+		fmt.Println("\n--- 1. FULL SYSTEM PROMPT SENT TO LLM ---")
+		fmt.Println(systemPrompt)
+
+		fmt.Println("\n--- 2. FULL USER PROMPT SENT TO LLM ---")
+		fmt.Println(userPrompt)
+
+		fmt.Println("\n--- 3. RAW LLM MODEL RESPONSE ---")
+
 		startTime := time.Now()
 		response, err := llmClient.Generate(ctx, systemPrompt, userPrompt)
 		duration := time.Since(startTime)
 
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "❌ LLM Extraction Failed: %v\n", err)
+			fmt.Printf("❌ LLM Extraction Failed: %v\n", err)
+			fmt.Println("================================================================================")
 			os.Exit(1)
 		}
+
+		fmt.Println(response)
 
 		cleanJSON := SanitizeLLMJSON(response)
 		var extData ExtractionResponse
@@ -306,16 +317,10 @@ You must output ONLY valid JSON matching this exact structure, with no markdown 
 			}
 		}
 
-		fmt.Println("\n--- 1. FULL RAW TRANSCRIPT CHUNK ---")
-		fmt.Println(chunk.Text)
-
-		fmt.Println("\n--- 2. RAW LLM MODEL RESPONSE ---")
-		fmt.Println(response)
-
-		fmt.Println("\n--- 3. PARSED SEMANTIC DATA (FULL JSON) ---")
+		fmt.Println("\n--- 4. PARSED SEMANTIC DATA (FULL JSON) ---")
 		fmt.Println(string(prettyParsedJSON))
 
-		fmt.Println("\n--- 4. EXTRACTION QUALITY METRICS ---")
+		fmt.Println("\n--- 5. EXTRACTION QUALITY METRICS ---")
 		fmt.Printf("├─ Total Extracted Nodes: %d\n", len(extData.Nodes))
 		fmt.Printf("├─ Total Extracted Links: %d\n", len(extData.Links))
 		fmt.Printf("├─ LLM Inference Duration: %.2f seconds\n", duration.Seconds())
