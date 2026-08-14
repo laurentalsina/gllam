@@ -276,8 +276,8 @@ func (e *GllamEngine) RouteAndAssemble(ctx context.Context, userPrompt string, e
         fmt.Printf("   ├── Aspect Projection: %s\n", aspect)
         fmt.Printf("   ├── Extracted Goal: %s\n", goalPredicate)
         fmt.Printf("   ├── Sub-graph Input: %d nodes, %d links\n", len(ctxResult.SemanticNodes), len(ctxResult.SemanticLinks))
-        fmt.Printf("   ├── Domain Spec: %d bytes (%d lines)\n", len(domainStr), strings.Count(domainStr, "\n"))
-        fmt.Printf("   ├── Problem Spec: %d bytes (%d lines)\n", len(problemStr), strings.Count(problemStr, "\n"))
+        fmt.Printf("   ├── Domain File: %s (%d bytes, %d lines)\n", domainFile, len(domainStr), strings.Count(domainStr, "\n"))
+        fmt.Printf("   ├── Problem File: %s (%d bytes, %d lines)\n", problemFile, len(problemStr), strings.Count(problemStr, "\n"))
         fmt.Printf("   └── Execution Result: %s\n\n", strings.ReplaceAll(ctxResult.PlannerOutput, "\n", " "))
     }
 

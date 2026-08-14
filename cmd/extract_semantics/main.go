@@ -201,6 +201,16 @@ CRITICAL JSON RULE: Never put unescaped double quotes inside string property val
 
 CRITICAL GRAPH CONSTRAINT: You MUST extract semantic relationships (links) connecting every extracted node! Do not output floating disconnected nodes; every extracted entity, event, state, human, or preference must be connected by at least one link.
 
+SPEECH ACT & STATEMENT RELATIONSHIP RULES:
+- When speakers converse, connect human/speaker nodes to the states, events, or entities they discuss using speech act relationships:
+  * "asked_about": Speaker asking a question (e.g. user_alice -> asked_about -> topic_weather)
+  * "reported_state": Speaker asserting a fact or state (e.g. user_bob -> reported_state -> state_wind_picking_up)
+  * "observed_event": Speaker sharing an observation (e.g. user_bob -> observed_event -> event_radar_glitching)
+  * "expressed_concern": Speaker noting a risk or hesitation (e.g. user_bob -> expressed_concern -> state_hand_tingling)
+  * "replied_to": Speaker responding to another speaker (e.g. user_bob -> replied_to -> user_alice)
+- Set "caveats" to the exact short statement phrase or quote (e.g. "Wind's picking up from the SW, as usual").
+- Set "temporal_note" to the conversation sequence context (e.g. "Episode [N/13343] conversation").
+
 You must output ONLY valid JSON matching this exact structure, with no markdown formatting or extra text:
 {
   "nodes": [
@@ -210,8 +220,8 @@ You must output ONLY valid JSON matching this exact structure, with no markdown 
     {
       "source_id": "id1",
       "target_id": "id2",
-      "relationship": "happened_before|has_state|depends_on|has_constraint|is_preference|has_unresolved_conflict|exhibits_fallacy|subverts_claim|resolves_conflict|etc",
-      "caveats": "optional conditions",
+      "relationship": "happened_before|has_state|depends_on|has_constraint|is_preference|asked_about|reported_state|observed_event|expressed_concern|replied_to|has_unresolved_conflict|exhibits_fallacy|subverts_claim|resolves_conflict|etc",
+      "caveats": "optional conditions or statement quote",
       "valid_from": "timestamp_or_temporal_note",
       "valid_until": "timestamp_or_temporal_note_or_null",
       "temporal_anchor_id": "node_id_of_referenced_event_or_entity_if_relative",
@@ -257,7 +267,7 @@ You must output ONLY valid JSON matching this exact structure, with no markdown 
 					continue
 				}
 
-				userPrompt := fmt.Sprintf("Transcript Chunk (%d/%d):\n%s\n\nExtract JSON:", cIdx+1, len(chunks), chunk.Text)
+				userPrompt := fmt.Sprintf("Conversation Episode [%d / %d] (Session ID: %s | Created At: %d):\nTranscript Chunk (%d/%d):\n%s\n\nExtract JSON:", index+1, len(episodes), episode.ID, episode.CreatedAt, cIdx+1, len(chunks), chunk.Text)
 				var response string
 				var err error
 				llmStart := time.Now()
