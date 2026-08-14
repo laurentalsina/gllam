@@ -16,3 +16,4 @@ eval_output.log
 
 # bench output
 bench/pddl_domains/
+bench/extraction_snapshot_*
