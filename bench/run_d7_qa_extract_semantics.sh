@@ -20,7 +20,7 @@ echo "Mode: Resumable (checkpointing active; set CLEAN=true to purge)"
 echo "======================================================="
 
 go run ./cmd/extract_semantics/main.go \
-  --db ./bench/gllam_data.db \
+  --dbpath ./bench/gllam_data.db \
   --prefix sess_ \
   --concurrency 16 \
   "${EXTRA_FLAGS[@]}" \
