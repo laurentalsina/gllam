@@ -1,0 +1,45 @@
+{
+  "type": "json_object",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "nodes": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "id": { "type": "string" },
+            "name": { "type": "string" },
+            "type": {
+              "type": "string",
+              "enum": ["human", "entity", "event", "state", "rule", "constraint", "contradiction", "fallacy"]
+            },
+            "context_prompt": { "type": "string" }
+          },
+          "required": ["id", "name", "type"],
+          "additionalProperties": false
+        }
+      },
+      "links": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "modality": {
+              "type": "string",
+	      "enum": ["epistemic", "alethic", "deontic"]
+	    },
+            "source_id": { "type": "string" },
+            "target_id": { "type": "string" },
+            "relationship": { "type": "string" },
+            "caveats": { "type": "string" }
+          },
+          "required": ["source_id", "target_id", "relationship"],
+          "additionalProperties": false
+        }
+      }
+    },
+    "required": ["nodes", "links"],
+    "additionalProperties": false
+  }
+}

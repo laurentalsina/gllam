@@ -27,6 +27,8 @@ type GllamEngine struct {
 	stopWALManager        chan struct{}                      // Control channel for background WAL checkpoint manager
 	stopEmbeddingWorkers  chan struct{}                      // Control channel for background embedding worker pool
 	stopTaxonomyWorker    chan struct{}                      // Control channel for background taxonomy worker
+	chunckSize            int
+	chunkOverlap          int
 }
 
 

@@ -14,7 +14,38 @@ import (
 	"time"
 )
 
-// LLMClient interacts with a text-to-text generation API (OpenAI / OpenRouter compatible)
+type ChatMessage struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}
+
+type ChatCompletionRequest struct {
+	Model          string                 `json:"model,omitempty"`
+	Messages       []ChatMessage          `json:"messages"`
+	ResponseFormat map[string]interface{} `json:"response_format,omitempty"`
+	Temperature    float32                `json:"temperature"`
+	Stream         bool                   `json:"stream"`
+	MaxTokens      int                    `json:"max_tokens,omitempty"`
+}
+
+type ChatStreamResponse struct {
+	Choices []struct {
+		Delta struct {
+			Content          string `json:"content"`
+			ReasoningContent string `json:"reasoning_content"`
+			Reasoning        string `json:"reasoning"`
+			Thoughts         string `json:"thoughts"`
+		} `json:"delta"`
+	} `json:"choices"`
+}
+
+type ChatCompletionResponse struct {
+	Choices []struct {
+		Message ChatMessage `json:"message"`
+	} `json:"choices"`
+}
+
+// LLMClient interacts with a text-to-text generation API (OpenAI / OpenRouter / llama.cpp compatible)
 type LLMClient struct {
 	BaseURL string
 	APIKey  string
@@ -25,6 +56,10 @@ type LLMClient struct {
 // NewLLMClient creates a new client with TCP Keep-Alive and infinite streaming timeout
 func NewLLMClient(baseURL string) *LLMClient {
 	apiKey := os.Getenv("OPENROUTER_API_KEY")
+	if apiKey == "" {
+		apiKey = os.Getenv("LLM_API_KEY")
+	}
+
 	model := os.Getenv("LLM_MODEL")
 	if strings.Contains(baseURL, "openrouter.ai") {
 		if model == "" || model == "local-server" || model == "local_server" {
@@ -67,41 +102,86 @@ func NewLLMClientWithKey(baseURL, apiKey, model string) *LLMClient {
 	return c
 }
 
-type chatMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
-}
-
-type chatRequest struct {
-	Model       string        `json:"model,omitempty"`
-	Messages    []chatMessage `json:"messages"`
-	Temperature float32       `json:"temperature"`
-	Stream      bool          `json:"stream"`
-	MaxTokens   int           `json:"max_tokens,omitempty"`
-}
-
-type chatStreamResponse struct {
-	Choices []struct {
-		Delta struct {
-			Content          string `json:"content"`
-			ReasoningContent string `json:"reasoning_content"`
-			Reasoning        string `json:"reasoning"`
-			Thoughts         string `json:"thoughts"`
-		} `json:"delta"`
-	} `json:"choices"`
-}
-
-type chatResponse struct {
-	Choices []struct {
-		Message chatMessage `json:"message"`
-	} `json:"choices"`
+// resolveChatURL standardizes the base URL into a chat completions endpoint
+func (c *LLMClient) resolveChatURL() string {
+	url := strings.TrimRight(c.BaseURL, "/")
+	if strings.HasSuffix(url, "/completions") && !strings.HasSuffix(url, "/chat/completions") {
+		return strings.TrimSuffix(url, "/completions") + "/chat/completions"
+	} else if !strings.HasSuffix(url, "/chat/completions") {
+		if strings.HasSuffix(url, "/v1") {
+			return url + "/chat/completions"
+		}
+		return url + "/v1/chat/completions"
+	}
+	return url
 }
 
 // Generate responds to a user prompt given a system prompt context
 func (c *LLMClient) Generate(ctx context.Context, systemPrompt, userPrompt string) (string, error) {
-	reqBody := chatRequest{
+	return c.GenerateWithFormat(ctx, systemPrompt, userPrompt, nil)
+}
+
+// GenerateWithFormat sends a completion request with an optional constrained response_format schema
+func (c *LLMClient) GenerateWithFormat(ctx context.Context, systemPrompt, userPrompt string, responseFormat map[string]interface{}) (string, error) {
+	url := c.resolveChatURL()
+
+	// If response format is provided, perform a non-streaming constrained request
+	if responseFormat != nil {
+		reqBody := ChatCompletionRequest{
+			Model: c.Model,
+			Messages: []ChatMessage{
+				{Role: "system", Content: systemPrompt},
+				{Role: "user", Content: userPrompt},
+			},
+			ResponseFormat: responseFormat,
+			Temperature:    0.1,
+			Stream:         false,
+			MaxTokens:      16384,
+		}
+
+		payload, err := json.Marshal(reqBody)
+		if err != nil {
+			return "", fmt.Errorf("failed to marshal request: %w", err)
+		}
+
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(payload))
+		if err != nil {
+			return "", fmt.Errorf("failed to create request: %w", err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		if c.APIKey != "" {
+			req.Header.Set("Authorization", "Bearer "+c.APIKey)
+			req.Header.Set("HTTP-Referer", "https://github.com/laurentalsina/gllam")
+			req.Header.Set("X-Title", "GLLAM Memory System")
+		}
+
+		resp, err := c.client.Do(req)
+		if err != nil {
+			return "", fmt.Errorf("request failed: %w", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			bodyBytes, _ := io.ReadAll(resp.Body)
+			return "", fmt.Errorf("llm server returned status %d: %s", resp.StatusCode, string(bodyBytes))
+		}
+
+		var chatResp ChatCompletionResponse
+		if err := json.NewDecoder(resp.Body).Decode(&chatResp); err != nil {
+			return "", fmt.Errorf("failed to decode response: %w", err)
+		}
+
+		if len(chatResp.Choices) == 0 {
+			return "", fmt.Errorf("no completion choices returned")
+		}
+
+		return chatResp.Choices[0].Message.Content, nil
+	}
+
+	// Default: Streaming generation with automatic non-streaming fallback
+	reqBody := ChatCompletionRequest{
 		Model: c.Model,
-		Messages: []chatMessage{
+		Messages: []ChatMessage{
 			{Role: "system", Content: systemPrompt},
 			{Role: "user", Content: userPrompt},
 		},
@@ -113,17 +193,6 @@ func (c *LLMClient) Generate(ctx context.Context, systemPrompt, userPrompt strin
 	body, err := json.Marshal(reqBody)
 	if err != nil {
 		return "", fmt.Errorf("failed to marshal request: %w", err)
-	}
-
-	url := strings.TrimRight(c.BaseURL, "/")
-	if strings.HasSuffix(url, "/completions") && !strings.HasSuffix(url, "/chat/completions") {
-		url = strings.TrimSuffix(url, "/completions") + "/chat/completions"
-	} else if !strings.HasSuffix(url, "/chat/completions") {
-		if strings.HasSuffix(url, "/v1") {
-			url += "/chat/completions"
-		} else {
-			url += "/v1/chat/completions"
-		}
 	}
 
 	var resp *http.Response
@@ -165,7 +234,6 @@ func (c *LLMClient) Generate(ctx context.Context, systemPrompt, userPrompt strin
 	}
 	defer resp.Body.Close()
 
-	// Read SSE stream with expanded buffer for long lines
 	scanner := bufio.NewScanner(resp.Body)
 	const maxCapacity = 10 * 1024 * 1024
 	buf := make([]byte, 64*1024)
@@ -184,7 +252,7 @@ func (c *LLMClient) Generate(ctx context.Context, systemPrompt, userPrompt strin
 			break
 		}
 
-		var chunk chatStreamResponse
+		var chunk ChatStreamResponse
 		if err := json.Unmarshal([]byte(data), &chunk); err == nil {
 			if len(chunk.Choices) > 0 {
 				d := chunk.Choices[0].Delta
@@ -208,7 +276,6 @@ func (c *LLMClient) Generate(ctx context.Context, systemPrompt, userPrompt strin
 	}
 
 	if strings.TrimSpace(resStr) == "" {
-		// Fallback to non-streaming request if SSE stream returned empty content (e.g. reasoning token chunks or SSE drops)
 		reqBody.Stream = false
 		bodyNoStream, errNS := json.Marshal(reqBody)
 		if errNS != nil {
@@ -233,7 +300,7 @@ func (c *LLMClient) Generate(ctx context.Context, systemPrompt, userPrompt strin
 		if respNS.StatusCode != http.StatusOK {
 			return "", fmt.Errorf("empty streaming response; non-streaming fallback returned %d: %s", respNS.StatusCode, string(respBytes))
 		}
-		var fullResp chatResponse
+		var fullResp ChatCompletionResponse
 		if json.Unmarshal(respBytes, &fullResp) == nil && len(fullResp.Choices) > 0 {
 			ans := fullResp.Choices[0].Message.Content
 			if strings.TrimSpace(ans) != "" {

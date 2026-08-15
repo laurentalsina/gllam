@@ -7,7 +7,6 @@ import (
 	"strings"
 )
 
-// AgenticMemorySystemPrompts defines configurable system prompts and heuristics
 type IngestionStrategy struct {
 	TrackRevisionHistory   bool `json:"track_revision_history"`
 	TrackCommentHistory    bool `json:"track_comment_history"`
@@ -33,6 +32,9 @@ type RepositoryContextDirective struct {
 }
 
 type AgenticMemorySystemPrompts struct {
+	ChunkSize                      int                                    `json:"chunk_size"`
+	ChunkOverlap                   int                                    `json:"chunk_overlap"` 
+	SemanticExtraction             string                                 `json:"semantic_extraction"` // Stored as array of strings, but loaded as a concatenated String
 	AllowUserGrilling              bool                                   `json:"allow_user_grilling"` // Set false in non-interactive benchmark evaluation (e.g. BEAM)
 	TrustWeightPrompt              string                                 `json:"trust_weight_prompt"`
 	SourceReliabilityPrompt        string                                 `json:"source_reliability_prompt"`
@@ -47,6 +49,40 @@ type AgenticMemorySystemPrompts struct {
 	ProceduralGeneralizationPrompt string                                 `json:"procedural_generalization_prompt"`
 	SalienceQueryPrompt            string                                 `json:"salience_query_prompt"`
 	CustomCategoryPrompts          map[string]string                      `json:"custom_category_prompts,omitempty"`
+}
+
+func (p *AgenticMemorySystemPrompts) UnmarshalJSON(data []byte) error {
+	// Alias prevents recursive UnmarshalJSON calls when parsing raw fields
+	type Alias AgenticMemorySystemPrompts
+	var aux struct {
+		SemanticExtraction json.RawMessage `json:"semantic_extraction"`
+		*Alias
+	}
+	aux.Alias = (*Alias)(p)
+
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+
+	if len(aux.SemanticExtraction) > 0 {
+		// 1. Attempt to parse as an array of string lines
+		var lines []string
+		if err := json.Unmarshal(aux.SemanticExtraction, &lines); err == nil {
+			p.SemanticExtraction = strings.TrimSpace(strings.Join(lines, "\n"))
+			return nil
+		}
+
+		// 2. Fall back to parsing as a single string
+		var single string
+		if err := json.Unmarshal(aux.SemanticExtraction, &single); err == nil {
+			p.SemanticExtraction = strings.TrimSpace(single)
+			return nil
+		}
+
+		return fmt.Errorf("semantic_extraction must be a string or array of strings")
+	}
+
+	return nil
 }
 
 // GetIngestionSteeringPrompt returns the content-type-specific steering prompt for a document type (e.g., "jira", "confluence"),

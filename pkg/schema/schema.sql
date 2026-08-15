@@ -51,6 +51,7 @@ CREATE TABLE IF NOT EXISTS semantic_links (
     target_id TEXT NOT NULL,
     relationship TEXT NOT NULL,
     caveats TEXT NOT NULL,                -- Conditions, constraints, or exceptions
+    modality TEXT NOT NULL,               -- Epistemic: default, Alethic: physically/logically necessary, Deontic: obligatory/permitted/prohibited etc...
     valid_from TEXT NOT NULL,             -- Unix timestamp string OR 'temporal_note'
     valid_until TEXT,                     -- Unix timestamp string OR 'temporal_note' (NULL = currently active)
     temporal_anchor_id TEXT,              -- Grounded node ID reference for relative timing (e.g. 'event-db-migration')
