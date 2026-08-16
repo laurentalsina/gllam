@@ -12,7 +12,7 @@ sbom_compliance_en.json
 /gllam
 
 # Logs
-eval_output.log
+*.log
 
 # bench output
 bench/pddl_domains/
