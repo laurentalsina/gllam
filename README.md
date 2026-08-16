@@ -76,6 +76,16 @@ CGO_ENABLED=1 go build ./...
 
 ## Startup
 
+source an env file that contains something like:
+
+```
+export EMBEDDINGS_SERVER="http://127.0.0.1:8080"
+export DATABASE_PATH="/home/laurent/Projects/gllam/bench/gllam_data.db"
+export OPENROUTER_API_KEY=sk-or-v1-4222222222222222222222222222222222222222222
+export TEXT_SERVER="https://openrouter.ai/api/v1"
+export LLM_MODEL="inclusionai/ling-3.0-flash"
+```
+
 # Start embeddings server (separate process)
 llama-server -m your-embedding-model.gguf --port 8080
 
@@ -90,6 +100,9 @@ go run ./cmd/gllam --embeddings-server http://localhost:8080 --recall "web serve
 
 # Interactive REPL
 go run ./cmd/gllam --embeddings-server http://localhost:8080
+
+# Benchmarks
+./bench/*.sh
 ```
 
 ## Usage as a Library
