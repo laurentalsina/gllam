@@ -13,9 +13,15 @@ import (
 
 // UpsertProceduralKnowledge inserts or updates a procedural knowledge entry
 func (e *GllamEngine) UpsertProceduralKnowledge(ctx context.Context, pk memory.ProceduralKnowledge) error {
+    now := time.Now().UTC().Format(time.RFC3339)
+    createdTime := now
+    if !pk.CreatedAt.IsZero() {
+        createdTime = pk.CreatedAt.UTC().Format(time.RFC3339)
+    }
+
     query := `
-        INSERT INTO procedural_knowledge (id, task_type, scope, trigger_context, instructions, user_feedback_rules, times_applied, is_highly_helpful, version, superseded_by, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO procedural_knowledge (id, task_type, scope, trigger_context, instructions, user_feedback_rules, times_applied, is_highly_helpful, version, superseded_by, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(task_type) DO UPDATE SET
             scope = excluded.scope,
             trigger_context = excluded.trigger_context,
@@ -24,7 +30,7 @@ func (e *GllamEngine) UpsertProceduralKnowledge(ctx context.Context, pk memory.P
             version = version + 1,
             updated_at = excluded.updated_at`
 
-    _, err := e.db.ExecContext(ctx, query, pk.ID, pk.TaskType, pk.Scope, pk.TriggerContext, pk.Instructions, pk.UserFeedbackRules, pk.TimesApplied, pk.IsHighlyHelpful, pk.Version, pk.SupersededBy, pk.UpdatedAt)
+    _, err := e.db.ExecContext(ctx, query, pk.ID, pk.TaskType, pk.Scope, pk.TriggerContext, pk.Instructions, pk.UserFeedbackRules, pk.TimesApplied, pk.IsHighlyHelpful, pk.Version, pk.SupersededBy, createdTime, now)
     if err != nil {
         return fmt.Errorf("failed to upsert procedural knowledge: %w", err)
     }

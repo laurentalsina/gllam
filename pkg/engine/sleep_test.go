@@ -2,10 +2,8 @@ package engine
 
 import (
 	"context"
-	"fmt"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/laurentalsina/gllam/pkg/memory"
 )
@@ -26,9 +24,8 @@ func TestMemoryMaintenanceCycleAndRandomTraceTests(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	now := time.Now().Unix()
 
-	// 1. Insert active & stale nodes and links
+	// 1. Insert active nodes and links
 	node1 := memory.SemanticNode{ID: "node-1", Name: "PostgreSQL 15", Type: memory.NodeTypeEntity, TaxonomyPath: "/Engineering/Infrastructure/Databases/Relational"}
 	node2 := memory.SemanticNode{ID: "node-2", Name: "Redis Cache", Type: memory.NodeTypeEntity, TaxonomyPath: "/Engineering/Infrastructure/Databases/NoSQL"}
 	node3 := memory.SemanticNode{ID: "node-3", Name: "Caddy Server", Type: memory.NodeTypeService, TaxonomyPath: "/Engineering/Infrastructure/Deployment"}
@@ -40,10 +37,9 @@ func TestMemoryMaintenanceCycleAndRandomTraceTests(t *testing.T) {
 	activeLink := memory.SemanticLink{SourceID: "node-1", TargetID: "node-2", Relationship: "depends_on", Caveats: "Production replication"}
 	_ = gllam.AddEdge(ctx, activeLink)
 
-	// Stale link (expired 1000s ago)
-	staleUntil := fmt.Sprintf("%d", now-1000)
-	staleLink := memory.SemanticLink{SourceID: "node-1", TargetID: "node-3", Relationship: "temporary_test", Caveats: "Deprecated test", ValidUntil: &staleUntil}
-	_ = gllam.AddEdge(ctx, staleLink)
+	// Previously-stale link (temporal fields removed; stored as a regular link)
+	testLink := memory.SemanticLink{SourceID: "node-1", TargetID: "node-3", Relationship: "temporary_test", Caveats: "Deprecated test"}
+	_ = gllam.AddEdge(ctx, testLink)
 
 	// 2. Trigger Memory Sleep Cycle
 	sleepReport, err := gllam.EnterMemorySleepCycle(ctx, 5)
@@ -63,11 +59,11 @@ func TestMemoryMaintenanceCycleAndRandomTraceTests(t *testing.T) {
 		t.Errorf("Expected positive clarity and consistency scores, got clarity=%f, consistency=%f", sleepReport.MemoryClarityScore, sleepReport.MemoryConsistencyScore)
 	}
 
-	// 3. Verify historical expired link is PRESERVED in database (never deleted!)
+	// 3. Verify link is present in database
 	var count int
-	_ = gllam.dbRO.QueryRowContext(ctx, "SELECT COUNT(*) FROM semantic_links WHERE relationship = 'temporary_test' AND valid_until IS NOT NULL").Scan(&count)
+	_ = gllam.dbRO.QueryRowContext(ctx, "SELECT COUNT(*) FROM semantic_links WHERE relationship = 'temporary_test'").Scan(&count)
 	if count != 1 {
-		t.Errorf("Expected 1 historical temporal link preserved in database, got %d", count)
+		t.Errorf("Expected 1 link with relationship 'temporary_test', got %d", count)
 	}
 }
 

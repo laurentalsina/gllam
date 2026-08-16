@@ -31,9 +31,9 @@ func TestResolveContradiction(t *testing.T) {
 	_ = gllam.UpsertNode(ctx, memory.SemanticNode{ID: "claim-postgres", Name: "DB is Postgres", Type: memory.NodeTypeState})
 	_ = gllam.UpsertNode(ctx, memory.SemanticNode{ID: "contr-db", Name: "DB Engine Contradiction", Type: memory.NodeTypeContradiction})
 
-	_ = gllam.AddEdge(ctx, memory.SemanticLink{SourceID: "db-main", TargetID: "claim-mysql", Relationship: "has_state", ValidFrom: "1000"})
-	_ = gllam.AddEdge(ctx, memory.SemanticLink{SourceID: "db-main", TargetID: "claim-postgres", Relationship: "has_state", ValidFrom: "2000"})
-	_ = gllam.AddEdge(ctx, memory.SemanticLink{SourceID: "db-main", TargetID: "contr-db", Relationship: "has_unresolved_conflict", ValidFrom: "2000"})
+	_ = gllam.AddEdge(ctx, memory.SemanticLink{SourceID: "db-main", TargetID: "claim-mysql", Relationship: "has_state"})
+	_ = gllam.AddEdge(ctx, memory.SemanticLink{SourceID: "db-main", TargetID: "claim-postgres", Relationship: "has_state"})
+	_ = gllam.AddEdge(ctx, memory.SemanticLink{SourceID: "db-main", TargetID: "contr-db", Relationship: "has_unresolved_conflict"})
 
 	// Resolve contradiction: Postgres wins over MySQL
 	rationale := "User confirmed Postgres is active DB engine; MySQL was legacy"
@@ -132,7 +132,7 @@ func TestEpistemicHierarchySourceTrustWeighting(t *testing.T) {
 		SourceID:       "service-auth",
 		TargetID:       "port-8080",
 		Relationship:   "located_in",
-		OriginSourceID: "source-email-draft",
+		OriginID:       "source-email-draft",
 	})
 
 	// High-trust claim second: Auth Service located_in port-9090 (from Jira PROD-101)
@@ -140,21 +140,20 @@ func TestEpistemicHierarchySourceTrustWeighting(t *testing.T) {
 		SourceID:       "service-auth",
 		TargetID:       "port-9090",
 		Relationship:   "located_in",
-		OriginSourceID: "source-jira-101",
+		OriginID:       "source-jira-101",
 	})
 
-	// Verify low-trust claim (port-8080) was automatically expired without user grilling!
-	var expiredUntil string
-	err = gllam.dbRO.QueryRowContext(ctx, "SELECT valid_until FROM semantic_links WHERE source_id = 'service-auth' AND target_id = 'port-8080' AND relationship = 'located_in'").Scan(&expiredUntil)
-	if err != nil || expiredUntil == "" {
-		t.Errorf("Low-trust claim should be automatically expired by Epistemic Hierarchy, got err=%v, valid_until=%s", err, expiredUntil)
+	// Verify low-trust claim (port-8080) was automatically deleted!
+	var count int
+	err = gllam.dbRO.QueryRowContext(ctx, "SELECT COUNT(*) FROM semantic_links WHERE source_id = 'service-auth' AND target_id = 'port-8080' AND relationship = 'located_in'").Scan(&count)
+	if err != nil || count != 0 {
+		t.Errorf("Low-trust claim should be automatically deleted by Epistemic Hierarchy, got err=%v, count=%d", err, count)
 	}
 
 	// Verify high-trust claim (port-9090) is active
-	var activeTarget string
-	err = gllam.dbRO.QueryRowContext(ctx, "SELECT target_id FROM semantic_links WHERE source_id = 'service-auth' AND relationship = 'located_in' AND valid_until IS NULL").Scan(&activeTarget)
-	if err != nil || activeTarget != "port-9090" {
-		t.Errorf("High-trust claim port-9090 should be active, got target=%s", activeTarget)
+	err = gllam.dbRO.QueryRowContext(ctx, "SELECT COUNT(*) FROM semantic_links WHERE source_id = 'service-auth' AND target_id = 'port-9090' AND relationship = 'located_in'").Scan(&count)
+	if err != nil || count != 1 {
+		t.Errorf("High-trust claim port-9090 should be active, got count=%d", count)
 	}
 
 	// Verify resolves_conflict rationale
@@ -245,8 +244,7 @@ func TestAllowUserGrillingDisabledBenchmarkMode(t *testing.T) {
 		SourceID:       "server-1",
 		TargetID:       "state-stopped",
 		Relationship:   "has_state",
-		OriginSourceID: "source-a",
-		ValidFrom:      "1000",
+		OriginID:       "source-a",
 	})
 
 	// Claim 2: Server 1 has_state running (Source B)
@@ -254,26 +252,23 @@ func TestAllowUserGrillingDisabledBenchmarkMode(t *testing.T) {
 		SourceID:       "server-1",
 		TargetID:       "state-running",
 		Relationship:   "has_state",
-		OriginSourceID: "source-b",
-		ValidFrom:      "2000",
+		OriginID:       "source-b",
 	})
 
-	// Since AllowUserGrilling = false, Claim 1 (stopped) must be automatically expired by recency preference,
+	// Since AllowUserGrilling = false, Claim 1 (stopped) must be automatically deleted by recency preference,
 	// and Claim 2 (running) must be active WITHOUT creating a contradiction node!
-	var expiredUntil string
-	err = gllam.dbRO.QueryRowContext(ctx, "SELECT valid_until FROM semantic_links WHERE source_id = 'server-1' AND target_id = 'state-stopped' AND relationship = 'has_state'").Scan(&expiredUntil)
-	if err != nil || expiredUntil == "" {
-		t.Errorf("Older equal-trust claim should be automatically expired when AllowUserGrilling=false, got err=%v, valid_until=%s", err, expiredUntil)
+	var count int
+	err = gllam.dbRO.QueryRowContext(ctx, "SELECT COUNT(*) FROM semantic_links WHERE source_id = 'server-1' AND target_id = 'state-stopped' AND relationship = 'has_state'").Scan(&count)
+	if err != nil || count != 0 {
+		t.Errorf("Older equal-trust claim should be automatically deleted when AllowUserGrilling=false, got err=%v, count=%d", err, count)
 	}
 
-	var activeTarget string
-	err = gllam.dbRO.QueryRowContext(ctx, "SELECT target_id FROM semantic_links WHERE source_id = 'server-1' AND relationship = 'has_state' AND valid_until IS NULL").Scan(&activeTarget)
-	if err != nil || activeTarget != "state-running" {
-		t.Errorf("Newer equal-trust claim state-running should be active, got target=%s", activeTarget)
+	err = gllam.dbRO.QueryRowContext(ctx, "SELECT COUNT(*) FROM semantic_links WHERE source_id = 'server-1' AND target_id = 'state-running' AND relationship = 'has_state'").Scan(&count)
+	if err != nil || count != 1 {
+		t.Errorf("Newer equal-trust claim state-running should be active, got count=%d", count)
 	}
 
 	// Verify no contradiction node was created
-	var count int
 	_ = gllam.dbRO.QueryRowContext(ctx, "SELECT COUNT(*) FROM semantic_nodes WHERE type = 'contradiction'").Scan(&count)
 	if count != 0 {
 		t.Errorf("No contradiction nodes should be created when AllowUserGrilling=false, got count=%d", count)

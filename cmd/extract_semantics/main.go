@@ -55,6 +55,7 @@ func main() {
 
 	prefix := flag.String("prefix", "sess_", "Prefix of episodic sessions to process")
 	qaPath := flag.String("qa-file", "", "Optional path to QA jsonl to extract target benchmark sessions")
+	sourceURI := flag.String("source-uri", "file://corpus_sessions.jsonl", "Base URI of the raw source data (e.g. file://corpus_sessions.jsonl or dataset://memarena)")
 	concurrency := flag.Int("concurrency", 4, "Number of concurrent LLM extraction workers")
 	cleanSemantics := flag.Bool("clean", false, "Purge existing semantic data before extraction")
 	resumeExtraction := flag.Bool("resume", true, "Skip sessions that have already been extracted")
@@ -149,12 +150,16 @@ func main() {
 	}
 
 	var allEpisodes []memory.EpisodicSummary
-	query := `SELECT id, session_id, summary_text, created_at FROM episodic_summaries WHERE id LIKE ? ORDER BY created_at ASC`
+	query := `SELECT id, session_id, summary_text, source_uri, created_at FROM episodic_summaries WHERE id LIKE ? ORDER BY created_at ASC`
 	rows, err := gllam.DBRO().QueryContext(ctx, query, *prefix+"%")
 	if err == nil {
 		for rows.Next() {
 			var ep memory.EpisodicSummary
-			if err := rows.Scan(&ep.ID, &ep.SessionID, &ep.SummaryText, engine.ScanTime(&ep.CreatedAt)); err == nil {
+			var srcURI sql.NullString
+			if err := rows.Scan(&ep.ID, &ep.SessionID, &ep.SummaryText, &srcURI, engine.ScanTime(&ep.CreatedAt)); err == nil {
+				if srcURI.Valid {
+					ep.SourceURI = srcURI.String
+				}
 				allEpisodes = append(allEpisodes, ep)
 			}
 		}
@@ -162,11 +167,15 @@ func main() {
 	}
 
 	if len(allEpisodes) == 0 {
-		fallbackRows, fErr := gllam.DBRO().QueryContext(ctx, `SELECT id, session_id, summary_text, created_at FROM episodic_summaries ORDER BY created_at ASC`)
+		fallbackRows, fErr := gllam.DBRO().QueryContext(ctx, `SELECT id, session_id, summary_text, source_uri, created_at FROM episodic_summaries ORDER BY created_at ASC`)
 		if fErr == nil {
 			for fallbackRows.Next() {
 				var ep memory.EpisodicSummary
-				if err := fallbackRows.Scan(&ep.ID, &ep.SessionID, &ep.SummaryText, engine.ScanTime(&ep.CreatedAt)); err == nil {
+				var srcURI sql.NullString
+				if err := fallbackRows.Scan(&ep.ID, &ep.SessionID, &ep.SummaryText, &srcURI, engine.ScanTime(&ep.CreatedAt)); err == nil {
+					if srcURI.Valid {
+						ep.SourceURI = srcURI.String
+					}
 					allEpisodes = append(allEpisodes, ep)
 				}
 			}
@@ -272,6 +281,24 @@ func main() {
 		cleanJSON := SanitizeLLMJSON(response)
 		var extData ExtractionResponse
 		parseErr := json.Unmarshal([]byte(cleanJSON), &extData)
+
+		// Populate CreatedAt and UpdatedAt timestamps for trial mode stdout printout
+		now := time.Now()
+		baseURI := *sourceURI
+		if ep.SourceURI != "" {
+			baseURI = ep.SourceURI
+		}
+		createdFromRef := fmt.Sprintf("%s/%s#chunk-%d", strings.TrimRight(baseURI, "/"), ep.ID, cIdx+1)
+		for i := range extData.Nodes {
+			extData.Nodes[i].CreatedAt = now
+			extData.Nodes[i].UpdatedAt = now
+		}
+		for i := range extData.Links {
+			extData.Links[i].CreatedAt = now
+			extData.Links[i].UpdatedAt = now
+			extData.Links[i].CreatedFrom = createdFromRef
+		}
+
 		prettyParsedJSON, _ := json.MarshalIndent(extData, "", "  ")
 
 		nodeMap := make(map[string]bool)
@@ -428,6 +455,11 @@ func main() {
 					if link.SourceID == "" || link.TargetID == "" || link.Relationship == "" {
 						continue
 					}
+					baseURI := *sourceURI
+					if episode.SourceURI != "" {
+						baseURI = episode.SourceURI
+					}
+					link.CreatedFrom = fmt.Sprintf("%s/%s#chunk-%d", strings.TrimRight(baseURI, "/"), episode.ID, cIdx+1)
 
 					if err := gllam.AddEdge(ctx, link); err != nil {
 						if strings.Contains(err.Error(), "FOREIGN KEY constraint failed") {

@@ -22,6 +22,7 @@ type EpisodicSummary struct {
     ID          string `json:"id"`
     SessionID   string `json:"session_id"`
     SummaryText string `json:"summary_text"`
+    SourceURI   string `json:"source_uri"`
     CreatedAt   time.Time `json:"created_at"`
 }
 
@@ -80,6 +81,7 @@ type SemanticLink struct {
     RuleRationale         string  `json:"rule_rationale"`          // Justification / "because" clause
     ResolutionRationale   string  `json:"resolution_rationale"`    // Explanation when resolving a contradiction
     Modality              string  `json:"modality"`                // Epistemic, Alethic, Deontic 
+    CreatedFrom           string  `json:"created_from"`           // Reference to raw data that led to creation (e.g. filename + chunk number)
     CreatedAt             time.Time `json:"created_at"`
     UpdatedAt             time.Time `json:"updated_at"`
 }

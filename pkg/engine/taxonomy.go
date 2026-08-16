@@ -17,7 +17,7 @@ func (e *GllamEngine) DetectTaxonomyCycles(ctx context.Context) (bool, []string,
 	query := `
 		SELECT source_id, target_id 
 		FROM semantic_links 
-		WHERE relationship IN ('is_a', 'subclass_of', 'instance_of', 'part_of') AND valid_until IS NULL`
+		WHERE relationship IN ('is_a', 'subclass_of', 'instance_of', 'part_of')`
 
 	rows, err := e.dbRO.QueryContext(ctx, query)
 	if err != nil {
@@ -101,7 +101,7 @@ func (e *GllamEngine) WouldCreateTaxonomyCycle(ctx context.Context, childID stri
 		query := `
 			SELECT target_id 
 			FROM semantic_links 
-			WHERE source_id = ? AND relationship IN ('is_a', 'subclass_of', 'instance_of', 'part_of') AND valid_until IS NULL`
+			WHERE source_id = ? AND relationship IN ('is_a', 'subclass_of', 'instance_of', 'part_of')`
 
 		rows, err := e.dbRO.QueryContext(ctx, query, curr)
 		if err != nil {

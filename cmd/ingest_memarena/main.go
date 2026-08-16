@@ -87,6 +87,7 @@ func main() {
 			ID:          s.SessionID,
 			SessionID:   s.SessionID,
 			SummaryText: transcriptBuilder.String(),
+			SourceURI:   fmt.Sprintf("file://%s", strings.TrimPrefix(*corpusPath, "./")),
 			CreatedAt:   time.Now(),
 		}
 

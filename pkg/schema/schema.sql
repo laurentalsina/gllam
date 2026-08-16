@@ -7,6 +7,7 @@ CREATE TABLE IF NOT EXISTS episodic_summaries (
     id TEXT PRIMARY KEY,
     session_id TEXT NOT NULL,
     summary_text TEXT NOT NULL,
+    source_uri TEXT,
     created_at TEXT NOT NULL    -- RFC3339 timestamp
 );
 
@@ -58,6 +59,7 @@ CREATE TABLE IF NOT EXISTS semantic_links (
     rule_rationale TEXT,                  -- Justification / 'because' clause (e.g. 'Security Compliance', 'Accessibility')
     resolution_rationale TEXT,            -- Explanation when resolving a contradiction
     modality TEXT NOT NULL,               -- Epistemic: default, Alethic: physically/logically necessary, Deontic: obligatory/permitted/prohibited etc...
+    created_from TEXT,                    -- Reference to raw data that led to the creation of the link
     created_at TEXT NOT NULL,             -- RFC3339 timestamp
     updated_at TEXT NOT NULL,             -- RFC3339 timestamp
     PRIMARY KEY (source_id, target_id, relationship),

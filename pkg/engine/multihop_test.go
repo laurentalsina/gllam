@@ -34,8 +34,8 @@ func TestMultiHopPathFinder(t *testing.T) {
 	_ = gllam.UpsertNode(ctx, memory.SemanticNode{ID: "thai-class", Name: "Thai Cooking Class", Type: memory.NodeTypeEvent})
 
 
-	_ = gllam.AddEdge(ctx, memory.SemanticLink{SourceID: "user-alice", TargetID: "peanuts", Relationship: "has_allergy", OriginSourceID: "session-1"})
-	_ = gllam.AddEdge(ctx, memory.SemanticLink{SourceID: "thai-class", TargetID: "peanuts", Relationship: "serves_ingredient", OriginSourceID: "session-4"})
+	_ = gllam.AddEdge(ctx, memory.SemanticLink{SourceID: "user-alice", TargetID: "peanuts", Relationship: "has_allergy", OriginID: "session-1"})
+	_ = gllam.AddEdge(ctx, memory.SemanticLink{SourceID: "thai-class", TargetID: "peanuts", Relationship: "serves_ingredient", OriginID: "session-4"})
 
 	// 1. Multi-hop path from user-alice
 	paths, err := gllam.FindMultiHopPath(ctx, []string{"user-alice"}, 2)

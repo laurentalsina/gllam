@@ -11,10 +11,15 @@ import (
 // SaveEpisodicSummary inserts a new episodic summary
 func (e *GllamEngine) SaveEpisodicSummary(ctx context.Context, summary memory.EpisodicSummary) error {
     query := `
-        INSERT INTO episodic_summaries (id, session_id, summary_text, created_at)
-        VALUES (?, ?, ?, ?)`
+        INSERT INTO episodic_summaries (id, session_id, summary_text, source_uri, created_at)
+        VALUES (?, ?, ?, ?, ?)`
 
-    _, err := e.db.ExecContext(ctx, query, summary.ID, summary.SessionID, summary.SummaryText, summary.CreatedAt)
+    var srcURI sql.NullString
+    if summary.SourceURI != "" {
+        srcURI = sql.NullString{String: summary.SourceURI, Valid: true}
+    }
+
+    _, err := e.db.ExecContext(ctx, query, summary.ID, summary.SessionID, summary.SummaryText, srcURI, summary.CreatedAt)
     if err != nil {
         return fmt.Errorf("failed to save episodic summary: %w", err)
     }
@@ -37,7 +42,7 @@ func (e *GllamEngine) SaveEpisodicSummary(ctx context.Context, summary memory.Ep
 // GetRecentEpisodes retrieves the most recent episodic summaries (read-only → dbRO)
 func (e *GllamEngine) GetRecentEpisodes(ctx context.Context, limit int) ([]memory.EpisodicSummary, error) {
     query := `
-        SELECT id, session_id, summary_text, created_at
+        SELECT id, session_id, summary_text, source_uri, created_at
         FROM episodic_summaries
         ORDER BY created_at DESC
         LIMIT ?`
@@ -51,8 +56,12 @@ func (e *GllamEngine) GetRecentEpisodes(ctx context.Context, limit int) ([]memor
     var episodes []memory.EpisodicSummary
     for rows.Next() {
         var es memory.EpisodicSummary
-        if err := rows.Scan(&es.ID, &es.SessionID, &es.SummaryText, scanTime(&es.CreatedAt)); err != nil {
+        var srcURI sql.NullString
+        if err := rows.Scan(&es.ID, &es.SessionID, &es.SummaryText, &srcURI, scanTime(&es.CreatedAt)); err != nil {
             return nil, fmt.Errorf("failed to scan episode: %w", err)
+        }
+        if srcURI.Valid {
+            es.SourceURI = srcURI.String
         }
         episodes = append(episodes, es)
     }
@@ -63,7 +72,7 @@ func (e *GllamEngine) GetRecentEpisodes(ctx context.Context, limit int) ([]memor
 // GetEpisodesInWindow retrieves episodic summaries within a temporal window (read-only → dbRO)
 func (e *GllamEngine) GetEpisodesInWindow(ctx context.Context, startTime, endTime time.Time) ([]memory.EpisodicSummary, error) {
     query := `
-        SELECT id, session_id, summary_text, created_at
+        SELECT id, session_id, summary_text, source_uri, created_at
         FROM episodic_summaries
         WHERE created_at >= ? AND created_at <= ?
         ORDER BY created_at DESC`
@@ -77,8 +86,12 @@ func (e *GllamEngine) GetEpisodesInWindow(ctx context.Context, startTime, endTim
     var episodes []memory.EpisodicSummary
     for rows.Next() {
         var es memory.EpisodicSummary
-        if err := rows.Scan(&es.ID, &es.SessionID, &es.SummaryText, scanTime(&es.CreatedAt)); err != nil {
+        var srcURI sql.NullString
+        if err := rows.Scan(&es.ID, &es.SessionID, &es.SummaryText, &srcURI, scanTime(&es.CreatedAt)); err != nil {
             return nil, fmt.Errorf("failed to scan episode: %w", err)
+        }
+        if srcURI.Valid {
+            es.SourceURI = srcURI.String
         }
         episodes = append(episodes, es)
     }
@@ -98,7 +111,7 @@ func (e *GllamEngine) SearchSimilarEpisodes(ctx context.Context, queryText strin
     }
 
     query := `
-        SELECT es.id, es.session_id, es.summary_text, es.created_at
+        SELECT es.id, es.session_id, es.summary_text, es.source_uri, es.created_at
         FROM (
             SELECT session_id, distance
             FROM episodic_embeddings
@@ -121,8 +134,12 @@ func (e *GllamEngine) SearchSimilarEpisodes(ctx context.Context, queryText strin
     var episodes []memory.EpisodicSummary
     for rows.Next() {
         var es memory.EpisodicSummary
-        if err := rows.Scan(&es.ID, &es.SessionID, &es.SummaryText, scanTime(&es.CreatedAt)); err != nil {
+        var srcURI sql.NullString
+        if err := rows.Scan(&es.ID, &es.SessionID, &es.SummaryText, &srcURI, scanTime(&es.CreatedAt)); err != nil {
             return nil, fmt.Errorf("failed to scan episode: %w", err)
+        }
+        if srcURI.Valid {
+            es.SourceURI = srcURI.String
         }
         episodes = append(episodes, es)
     }

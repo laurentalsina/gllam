@@ -30,18 +30,14 @@ func TestSalienceAnchoredSummaryAndProceduralExtraction(t *testing.T) {
 	_ = gllam.UpsertNode(ctx, memory.SemanticNode{ID: "rule-format", Name: "Table Formatting Rule", Type: memory.NodeTypeRule})
 	_ = gllam.UpsertNode(ctx, memory.SemanticNode{ID: "user-alice", Name: "Alice", Type: memory.NodeTypeHuman})
 
-	obsoleteUntil := "1500"
 	nodes := []memory.SemanticNode{
 		{ID: "caddy-service", Name: "Caddy Web Server", Type: memory.NodeTypeService},
 		{ID: "port-8080", Name: "Port 8080", Type: memory.NodeTypeEntity},
 		{ID: "rule-format", Name: "Table Formatting Rule", Type: memory.NodeTypeRule},
 	}
-	// Active link with ValidFrom 14 days ago
-	twoWeeksAgoStr := "1770000000" // 14 days ago
 	links := []memory.SemanticLink{
-		{SourceID: "caddy-service", TargetID: "port-8080", Relationship: "binds_to", Caveats: "Must use TLS certificate", ValidFrom: twoWeeksAgoStr},
+		{SourceID: "caddy-service", TargetID: "port-8080", Relationship: "binds_to", Caveats: "Must use TLS certificate"},
 		{SourceID: "user-alice", TargetID: "rule-format", Relationship: "is_preference", RuleContext: "user_preference", ConstraintType: "positive", Caveats: "Always output response tables in Markdown"},
-		{SourceID: "caddy-service", TargetID: "port-8079", Relationship: "binds_to", ValidUntil: &obsoleteUntil},
 	}
 	episodes := []memory.EpisodicSummary{
 		{ID: "ep-1", SummaryText: "Configured Caddy web server on port 8080 with TLS cert."},

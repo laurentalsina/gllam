@@ -37,9 +37,15 @@ func (e *GllamEngine) UpsertNode(ctx context.Context, node memory.SemanticNode) 
 		caveatSummaryVal = sql.NullString{String: node.CaveatSummary, Valid: true}
 	}
 
+	now := time.Now().UTC().Format(time.RFC3339)
+	createdTime := now
+	if !node.CreatedAt.IsZero() {
+		createdTime = node.CreatedAt.UTC().Format(time.RFC3339)
+	}
+
 	query := `
-        INSERT INTO semantic_nodes (id, name, type, context_prompt, trust_weight, taxonomy_path, is_category, caveat_summary)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO semantic_nodes (id, name, type, context_prompt, trust_weight, taxonomy_path, is_category, caveat_summary, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET 
             name = excluded.name, 
             type = excluded.type, 
@@ -47,9 +53,10 @@ func (e *GllamEngine) UpsertNode(ctx context.Context, node memory.SemanticNode) 
             trust_weight = excluded.trust_weight,
             taxonomy_path = CASE WHEN excluded.taxonomy_path != '/' AND excluded.taxonomy_path != '' THEN excluded.taxonomy_path ELSE semantic_nodes.taxonomy_path END,
             is_category = CASE WHEN excluded.is_category != 0 THEN excluded.is_category ELSE semantic_nodes.is_category END,
-            caveat_summary = CASE WHEN excluded.caveat_summary IS NOT NULL AND excluded.caveat_summary != '' THEN excluded.caveat_summary ELSE semantic_nodes.caveat_summary END`
+            caveat_summary = CASE WHEN excluded.caveat_summary IS NOT NULL AND excluded.caveat_summary != '' THEN excluded.caveat_summary ELSE semantic_nodes.caveat_summary END,
+            updated_at = excluded.updated_at`
 
-	_, err := e.db.ExecContext(ctx, query, node.ID, node.Name, node.Type, node.ContextPrompt, node.TrustWeight, node.TaxonomyPath, isCatInt, caveatSummaryVal)
+	_, err := e.db.ExecContext(ctx, query, node.ID, node.Name, node.Type, node.ContextPrompt, node.TrustWeight, node.TaxonomyPath, isCatInt, caveatSummaryVal, createdTime, now)
 	if err != nil {
 		return fmt.Errorf("failed to upsert node: %w", err)
 	}
@@ -180,11 +187,15 @@ func (e *GllamEngine) AddEdge(ctx context.Context, link memory.SemanticLink) err
         cType = "positive"
     }
 
-	nowTime := time.Now().Format(time.RFC3339)
+	nowTime := time.Now().UTC().Format(time.RFC3339)
+	createdTime := nowTime
+	if !link.CreatedAt.IsZero() {
+		createdTime = link.CreatedAt.UTC().Format(time.RFC3339)
+	}
 
     insertQuery := `
-        INSERT INTO semantic_links (source_id, target_id, relationship, caveats, origin_id, rule_context, constraint_type, rule_rationale, resolution_rationale, modality, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO semantic_links (source_id, target_id, relationship, caveats, origin_id, rule_context, constraint_type, rule_rationale, resolution_rationale, modality, created_from, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(source_id, target_id, relationship) DO UPDATE SET 
             caveats = excluded.caveats,
             origin_id = excluded.origin_id,
@@ -193,6 +204,7 @@ func (e *GllamEngine) AddEdge(ctx context.Context, link memory.SemanticLink) err
             rule_rationale = excluded.rule_rationale,
             resolution_rationale = excluded.resolution_rationale,
             modality = excluded.modality,
+            created_from = excluded.created_from,
             updated_at = excluded.updated_at`
 
     var origSource, rationaleVal, resRationaleVal sql.NullString
@@ -206,9 +218,14 @@ func (e *GllamEngine) AddEdge(ctx context.Context, link memory.SemanticLink) err
         resRationaleVal = sql.NullString{String: link.ResolutionRationale, Valid: true}
     }
 
+    var createdFromVal sql.NullString
+    if link.CreatedFrom != "" {
+        createdFromVal = sql.NullString{String: link.CreatedFrom, Valid: true}
+    }
+
     _, err = e.db.ExecContext(ctx, insertQuery,
         link.SourceID, link.TargetID, link.Relationship, link.Caveats,
-        origSource, ruleCtx, cType, rationaleVal, resRationaleVal, link.Modality, nowTime, nowTime)
+        origSource, ruleCtx, cType, rationaleVal, resRationaleVal, link.Modality, createdFromVal, createdTime, nowTime)
 
     if err != nil {
         return fmt.Errorf("failed to add edge: %w", err)
@@ -351,7 +368,7 @@ func (e *GllamEngine) SearchSimilarNodes(ctx context.Context, queryText string, 
 // It dynamically resolves temporal_anchor_id timestamps when valid_from or valid_until is "temporal_note".
 func (e *GllamEngine) GetActiveLinksAtTime(ctx context.Context, timestamp int64) ([]memory.SemanticLink, error) {
     query := `
-        SELECT source_id, target_id, relationship, caveats, origin_id, rule_context, constraint_type, rule_rationale, resolution_rationale, modality, created_at, updated_at
+        SELECT source_id, target_id, relationship, caveats, origin_id, rule_context, constraint_type, rule_rationale, resolution_rationale, modality, created_from, created_at, updated_at
         FROM semantic_links`
 
     rows, err := e.dbRO.QueryContext(ctx, query)
@@ -363,8 +380,8 @@ func (e *GllamEngine) GetActiveLinksAtTime(ctx context.Context, timestamp int64)
     var activeLinks []memory.SemanticLink
     for rows.Next() {
         var l memory.SemanticLink
-        var origSource, rCtx, cType, ratVal, resRatVal, mod sql.NullString
-        if err := rows.Scan(&l.SourceID, &l.TargetID, &l.Relationship, &l.Caveats, &origSource, &rCtx, &cType, &ratVal, &resRatVal, &mod, scanTime(&l.CreatedAt), scanTime(&l.UpdatedAt)); err != nil {
+        var origSource, rCtx, cType, ratVal, resRatVal, mod, createdFrom sql.NullString
+        if err := rows.Scan(&l.SourceID, &l.TargetID, &l.Relationship, &l.Caveats, &origSource, &rCtx, &cType, &ratVal, &resRatVal, &mod, &createdFrom, scanTime(&l.CreatedAt), scanTime(&l.UpdatedAt)); err != nil {
             return nil, fmt.Errorf("failed to scan link: %w", err)
         }
         if origSource.Valid {
@@ -384,6 +401,9 @@ func (e *GllamEngine) GetActiveLinksAtTime(ctx context.Context, timestamp int64)
         }
         if mod.Valid {
             l.Modality = mod.String
+        }
+        if createdFrom.Valid {
+            l.CreatedFrom = createdFrom.String
         }
         activeLinks = append(activeLinks, l)
     }
@@ -431,49 +451,43 @@ func (e *GllamEngine) ExpandTemporalNeighborsWithTime(ctx context.Context, seedN
 			var rows *sql.Rows
 			var err error
 
-			if evalTimestamp == nil {
-				query = `
-					SELECT source_id, target_id, relationship, caveats, origin_id, rule_context, constraint_type, rule_rationale, resolution_rationale, modality, created_at, updated_at
-					FROM semantic_links
-					WHERE source_id = ? OR target_id = ? OR temporal_anchor_id = ?`
-				rows, err = e.dbRO.QueryContext(ctx, query, currentID, currentID, currentID)
-			} else {
-				query = `
-					SELECT source_id, target_id, relationship, caveats, origin_id, rule_context, constraint_type, rule_rationale, resolution_rationale, modality, created_at, updated_at
-					FROM semantic_links
-					WHERE (source_id = ? OR target_id = ? OR temporal_anchor_id = ?)
-					  AND (valid_from = 'temporal_note' OR CAST(valid_from AS INTEGER) <= ?)
-					  AND (valid_until IS NULL OR valid_until = 'temporal_note' OR CAST(valid_until AS INTEGER) > ?)`
-				rows, err = e.dbRO.QueryContext(ctx, query, currentID, currentID, currentID, *evalTimestamp, *evalTimestamp)
-			}
+			query = `
+				SELECT source_id, target_id, relationship, caveats, origin_id, rule_context, constraint_type, rule_rationale, resolution_rationale, modality, created_from, created_at, updated_at
+				FROM semantic_links
+				WHERE source_id = ? OR target_id = ?`
+			rows, err = e.dbRO.QueryContext(ctx, query, currentID, currentID)
+
 			if err != nil {
 				continue
 			}
 
 			for rows.Next() {
 				var l memory.SemanticLink
-				var origSource, rCtx, cType, ratVal, resRatVal, mod sql.NullString
-		if err := rows.Scan(&l.SourceID, &l.TargetID, &l.Relationship, &l.Caveats, &origSource, &rCtx, &cType, &ratVal, &resRatVal, &mod, scanTime(&l.CreatedAt), scanTime(&l.UpdatedAt)); err != nil {
+				var origSource, rCtx, cType, ratVal, resRatVal, mod, createdFrom sql.NullString
+				if err := rows.Scan(&l.SourceID, &l.TargetID, &l.Relationship, &l.Caveats, &origSource, &rCtx, &cType, &ratVal, &resRatVal, &mod, &createdFrom, scanTime(&l.CreatedAt), scanTime(&l.UpdatedAt)); err != nil {
 					continue
 				}
 				if origSource.Valid {
-			l.OriginID = origSource.String
-		}
-		if rCtx.Valid {
-			l.RuleContext = rCtx.String
-		}
-		if cType.Valid {
-			l.ConstraintType = cType.String
-		}
-		if ratVal.Valid {
-			l.RuleRationale = ratVal.String
-		}
-        if resRatVal.Valid {
-            l.ResolutionRationale = resRatVal.String
-        }
-        if mod.Valid {
-            l.Modality = mod.String
-        }
+					l.OriginID = origSource.String
+				}
+				if rCtx.Valid {
+					l.RuleContext = rCtx.String
+				}
+				if cType.Valid {
+					l.ConstraintType = cType.String
+				}
+				if ratVal.Valid {
+					l.RuleRationale = ratVal.String
+				}
+				if resRatVal.Valid {
+					l.ResolutionRationale = resRatVal.String
+				}
+				if mod.Valid {
+					l.Modality = mod.String
+				}
+				if createdFrom.Valid {
+					l.CreatedFrom = createdFrom.String
+				}
 
 				key := fmt.Sprintf("%s-%s-%s", l.SourceID, l.TargetID, l.Relationship)
 				linkMap[key] = l
@@ -522,7 +536,7 @@ func (e *GllamEngine) ExpandTemporalNeighborsWithTime(ctx context.Context, seedN
 // GetActiveConstraintsForSource retrieves active rules, preferences, and constraints for a given source_id or rule_context
 func (e *GllamEngine) GetActiveConstraintsForSource(ctx context.Context, sourceID string, targetContext string) ([]memory.SemanticLink, error) {
 	query := `
-		SELECT source_id, target_id, relationship, caveats, origin_id, rule_context, constraint_type, rule_rationale, resolution_rationale, modality, created_at, updated_at
+		SELECT source_id, target_id, relationship, caveats, origin_id, rule_context, constraint_type, rule_rationale, resolution_rationale, modality, created_from, created_at, updated_at
 		FROM semantic_links
 		WHERE 1=1 
 		  
@@ -540,8 +554,8 @@ func (e *GllamEngine) GetActiveConstraintsForSource(ctx context.Context, sourceI
 	var links []memory.SemanticLink
 	for rows.Next() {
 		var l memory.SemanticLink
-		var origSource, rCtx, cType, ratVal, resRatVal, mod sql.NullString
-		if err := rows.Scan(&l.SourceID, &l.TargetID, &l.Relationship, &l.Caveats, &origSource, &rCtx, &cType, &ratVal, &resRatVal, &mod, scanTime(&l.CreatedAt), scanTime(&l.UpdatedAt)); err != nil {
+		var origSource, rCtx, cType, ratVal, resRatVal, mod, createdFrom sql.NullString
+		if err := rows.Scan(&l.SourceID, &l.TargetID, &l.Relationship, &l.Caveats, &origSource, &rCtx, &cType, &ratVal, &resRatVal, &mod, &createdFrom, scanTime(&l.CreatedAt), scanTime(&l.UpdatedAt)); err != nil {
 			return nil, fmt.Errorf("failed to scan constraint link: %w", err)
 		}
 		if origSource.Valid {
@@ -561,6 +575,9 @@ func (e *GllamEngine) GetActiveConstraintsForSource(ctx context.Context, sourceI
         }
         if mod.Valid {
             l.Modality = mod.String
+        }
+        if createdFrom.Valid {
+            l.CreatedFrom = createdFrom.String
         }
 		links = append(links, l)
 	}
@@ -734,28 +751,21 @@ func (e *GllamEngine) DisambiguateEntityForSource(ctx context.Context, term stri
 }
 
 // ResolveContradiction resolves an active contradiction between two claims (Trap 5),
-// marking losingClaimID as expired (valid_until = now) and inserting a resolves_conflict edge.
+// deleting the losing claim's links and inserting a resolves_conflict edge.
 func (e *GllamEngine) ResolveContradiction(ctx context.Context, contradictionID string, winningClaimID string, losingClaimID string, rationale string) error {
-	nowStr := fmt.Sprintf("%d", time.Now().Unix())
-	now := time.Now()
-
-	// 1. Expire losing claim links
-	expireQuery := `
-		UPDATE semantic_links
-		SET valid_until = ?, updated_at = ?
-		WHERE (source_id = ? OR target_id = ?) `
-	if _, err := e.db.ExecContext(ctx, expireQuery, nowStr, now, losingClaimID, losingClaimID); err != nil {
-		return fmt.Errorf("failed to expire losing claim %s: %w", losingClaimID, err)
+	// 1. Delete losing claim links
+	if _, err := e.db.ExecContext(ctx,
+		`DELETE FROM semantic_links WHERE source_id = ? OR target_id = ?`,
+		losingClaimID, losingClaimID); err != nil {
+		return fmt.Errorf("failed to delete losing claim %s: %w", losingClaimID, err)
 	}
 
-	// 2. Expire active contradiction node links
+	// 2. Delete active contradiction node links
 	if contradictionID != "" {
-		expireContrQuery := `
-			UPDATE semantic_links
-			SET valid_until = ?, updated_at = ?
-			WHERE (source_id = ? OR target_id = ?) `
-		if _, err := e.db.ExecContext(ctx, expireContrQuery, nowStr, now, contradictionID, contradictionID); err != nil {
-			return fmt.Errorf("failed to expire contradiction node links for %s: %w", contradictionID, err)
+		if _, err := e.db.ExecContext(ctx,
+			`DELETE FROM semantic_links WHERE source_id = ? OR target_id = ?`,
+			contradictionID, contradictionID); err != nil {
+			return fmt.Errorf("failed to delete contradiction node links for %s: %w", contradictionID, err)
 		}
 	}
 
@@ -765,7 +775,6 @@ func (e *GllamEngine) ResolveContradiction(ctx context.Context, contradictionID 
 		TargetID:            losingClaimID,
 		Relationship:        "resolves_conflict",
 		ResolutionRationale: rationale,
-		
 	}
 
 	return e.AddEdge(ctx, resLink)

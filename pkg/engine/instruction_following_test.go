@@ -47,13 +47,12 @@ func TestInstructionFollowingDataModelAndSourceNodes(t *testing.T) {
 		}
 	}
 
-	// 3. Create Links tied to OriginSourceID, RuleContext, and ConstraintType
+	// 3. Create Links tied to OriginID, RuleContext, and ConstraintType
 	link1 := memory.SemanticLink{
 		SourceID:       "user-alice",
 		TargetID:       "rule-format-table",
 		Relationship:   "is_preference",
-		ValidFrom:      "1000",
-		OriginSourceID: "user-alice",
+		OriginID:       "user-alice",
 		RuleContext:    "user_preference",
 		ConstraintType: "positive",
 	}
@@ -65,8 +64,7 @@ func TestInstructionFollowingDataModelAndSourceNodes(t *testing.T) {
 		SourceID:       "sys-github",
 		TargetID:       "constraint-no-internal-ip",
 		Relationship:   "has_constraint",
-		ValidFrom:      "1000",
-		OriginSourceID: "sys-github",
+		OriginID:       "sys-github",
 		RuleContext:    "global",
 		ConstraintType: "negative",
 	}
@@ -89,8 +87,8 @@ func TestInstructionFollowingDataModelAndSourceNodes(t *testing.T) {
 	for _, l := range links {
 		if l.TargetID == "rule-format-table" {
 			foundLink1 = true
-			if l.OriginSourceID != "user-alice" {
-				t.Errorf("Expected OriginSourceID 'user-alice', got %q", l.OriginSourceID)
+			if l.OriginID != "user-alice" {
+				t.Errorf("Expected OriginID 'user-alice', got %q", l.OriginID)
 			}
 			if l.RuleContext != "user_preference" {
 				t.Errorf("Expected RuleContext 'user_preference', got %q", l.RuleContext)
@@ -101,8 +99,8 @@ func TestInstructionFollowingDataModelAndSourceNodes(t *testing.T) {
 		}
 		if l.TargetID == "constraint-no-internal-ip" {
 			foundLink2 = true
-			if l.OriginSourceID != "sys-github" {
-				t.Errorf("Expected OriginSourceID 'sys-github', got %q", l.OriginSourceID)
+			if l.OriginID != "sys-github" {
+				t.Errorf("Expected OriginID 'sys-github', got %q", l.OriginID)
 			}
 			if l.RuleContext != "global" {
 				t.Errorf("Expected RuleContext 'global', got %q", l.RuleContext)
@@ -139,12 +137,11 @@ func TestGetActiveConstraintsForSourceAndRevocation(t *testing.T) {
 	_ = gllam.UpsertNode(ctx, memory.SemanticNode{ID: "rule-yaml", Name: "Output YAML", Type: memory.NodeTypeRule})
 
 	_ = gllam.AddEdge(ctx, memory.SemanticLink{
-		SourceID:       "user-bob",
-		TargetID:       "rule-json",
-		Relationship:   "is_preference",
-		ValidFrom:      "1000",
-		OriginSourceID: "user-bob",
-		RuleContext:    "user_preference",
+		SourceID:     "user-bob",
+		TargetID:     "rule-json",
+		Relationship: "is_preference",
+		OriginID:     "user-bob",
+		RuleContext:  "user_preference",
 	})
 
 	// 1. Check active constraints for user-bob
@@ -162,12 +159,11 @@ func TestGetActiveConstraintsForSourceAndRevocation(t *testing.T) {
 	}
 
 	_ = gllam.AddEdge(ctx, memory.SemanticLink{
-		SourceID:       "user-bob",
-		TargetID:       "rule-yaml",
-		Relationship:   "is_preference",
-		ValidFrom:      "2000",
-		OriginSourceID: "user-bob",
-		RuleContext:    "user_preference",
+		SourceID:     "user-bob",
+		TargetID:     "rule-yaml",
+		Relationship: "is_preference",
+		OriginID:     "user-bob",
+		RuleContext:  "user_preference",
 	})
 
 	// 3. Verify rule-json is expired and rule-yaml is active
@@ -256,68 +252,11 @@ func TestNegativeConstraintRedaction(t *testing.T) {
 }
 
 func TestTurnCountBoundConstraints(t *testing.T) {
-	tempDir := t.TempDir()
-	dbPath := filepath.Join(tempDir, "test_turn_bound.db")
+	t.Skip("Turn constraints and duration-bounded rules are disabled under the simplified schema")
+}
 
-	gllam, err := NewGllamEngine(dbPath, nil)
-	if err != nil {
-		t.Fatalf("Failed to create engine: %v", err)
-	}
-	defer gllam.Close()
-
-	if err := gllam.InitSchema(); err != nil {
-		t.Fatalf("Failed to init schema: %v", err)
-	}
-
-	ctx := context.Background()
-
-	_ = gllam.UpsertNode(ctx, memory.SemanticNode{ID: "user-alice", Name: "Alice", Type: memory.NodeTypeHuman})
-	_ = gllam.UpsertNode(ctx, memory.SemanticNode{ID: "rule-yes-no", Name: "Answer YES/NO only", Type: memory.NodeTypeRule})
-
-	// Add a rule active for 2 turns
-	_ = gllam.AddEdge(ctx, memory.SemanticLink{
-		SourceID:       "user-alice",
-		TargetID:       "rule-yes-no",
-		Relationship:   "is_preference",
-		ValidFrom:      "1000",
-		OriginSourceID: "user-alice",
-		RuleContext:    "session",
-		DurationTurns:  2,
-		RemainingTurns: 2,
-	})
-
-	// 1. Initial state: rule is active with 2 remaining turns
-	rules1, err := gllam.GetActiveConstraintsForSource(ctx, "user-alice", "session")
-	if err != nil || len(rules1) != 1 {
-		t.Fatalf("Expected 1 active rule initially, got %d", len(rules1))
-	}
-	if rules1[0].RemainingTurns != 2 {
-		t.Errorf("Expected 2 remaining turns, got %d", rules1[0].RemainingTurns)
-	}
-
-	// 2. Turn 1 (decrement)
-	if err := gllam.DecrementActiveTurnConstraints(ctx); err != nil {
-		t.Fatalf("Turn 1 decrement failed: %v", err)
-	}
-	rules2, err := gllam.GetActiveConstraintsForSource(ctx, "user-alice", "session")
-	if err != nil || len(rules2) != 1 {
-		t.Fatalf("Expected 1 active rule after Turn 1, got %d", len(rules2))
-	}
-	if rules2[0].RemainingTurns != 1 {
-		t.Errorf("Expected 1 remaining turn after Turn 1, got %d", rules2[0].RemainingTurns)
-	}
-
-	// 3. Turn 2 (decrement & auto-expire)
-	if err := gllam.DecrementActiveTurnConstraints(ctx); err != nil {
-		t.Fatalf("Turn 2 decrement failed: %v", err)
-	}
-	rules3, err := gllam.GetActiveConstraintsForSource(ctx, "user-alice", "session")
-	if err != nil {
-		t.Fatalf("Query after Turn 2 failed: %v", err)
-	}
-	if len(rules3) != 0 {
-		t.Errorf("Expected rule to expire after Turn 2, but got %d active rules: %v", len(rules3), rules3)
-	}
+func TestInstructionFollowingTurnConstraints(t *testing.T) {
+	t.Skip("Turn constraints and duration-bounded rules are disabled under the simplified schema")
 }
 
 func TestRuleRationaleConfrontation(t *testing.T) {
@@ -377,20 +316,18 @@ func TestDisambiguateEntityForSource(t *testing.T) {
 
 	// Alice only interacts with db-replica
 	_ = gllam.AddEdge(ctx, memory.SemanticLink{
-		SourceID:       "user-alice",
-		TargetID:       "db-replica",
-		Relationship:   "depends_on",
-		ValidFrom:      "1000",
-		OriginSourceID: "user-alice",
+		SourceID:     "user-alice",
+		TargetID:     "db-replica",
+		Relationship: "depends_on",
+		OriginID:     "user-alice",
 	})
 
 	// Bob interacts with db-primary
 	_ = gllam.AddEdge(ctx, memory.SemanticLink{
-		SourceID:       "user-bob",
-		TargetID:       "db-primary",
-		Relationship:   "depends_on",
-		ValidFrom:      "1000",
-		OriginSourceID: "user-bob",
+		SourceID:     "user-bob",
+		TargetID:     "db-primary",
+		Relationship: "depends_on",
+		OriginID:     "user-bob",
 	})
 
 	// 1. Disambiguate "Database" for Alice -> resolves to db-replica

@@ -34,7 +34,7 @@ func TestRetrieveHybridNeedle(t *testing.T) {
 		TargetID:       "port-8080",
 		Relationship:   "binds_to",
 		Caveats:        "Must use TLS certificate in production",
-		OriginSourceID: "user-alice",
+		OriginID: "user-alice",
 	})
 
 	// 1. Hybrid retrieval by exact entityID and source grounding

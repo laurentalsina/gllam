@@ -37,7 +37,6 @@ func TestSupersedeFactAndCrossCuttingInvalidation(t *testing.T) {
 		SourceID:     "db-server",
 		TargetID:     "postgres-v14",
 		Relationship: "uses_version",
-		ValidFrom:    "1000",
 	}
 	_ = gllam.AddEdge(ctx, oldLink)
 
@@ -46,7 +45,6 @@ func TestSupersedeFactAndCrossCuttingInvalidation(t *testing.T) {
 		SourceID:     "api-gateway",
 		TargetID:     "postgres-v14",
 		Relationship: "depends_on",
-		ValidFrom:    "1000",
 	}
 	_ = gllam.AddEdge(ctx, depLink)
 
@@ -55,7 +53,6 @@ func TestSupersedeFactAndCrossCuttingInvalidation(t *testing.T) {
 		SourceID:     "db-server",
 		TargetID:     "postgres-v15",
 		Relationship: "uses_version",
-		ValidFrom:    "2000",
 	}
 
 	err = gllam.SupersedeFact(ctx, oldLink, newLink, "Upgraded database engine to v15")
@@ -117,33 +114,20 @@ func TestOutOfOrderFactSupersession(t *testing.T) {
 		SourceID:     "service-a",
 		TargetID:     "v2",
 		Relationship: "uses_version",
-		ValidFrom:    "3000",
 	}
 
 	_ = gllam.AddEdge(ctx, activeLink)
 
-	// Out-of-order ingested older link (ValidFrom 1000 < 3000)
+	// Out-of-order ingested older link
 	olderLink := memory.SemanticLink{
 		SourceID:     "service-a",
 		TargetID:     "v1",
 		Relationship: "uses_version",
-		ValidFrom:    "1000",
 	}
 
 	err = gllam.SupersedeFact(ctx, activeLink, olderLink, "Ingested late")
 	if err != nil {
 		t.Fatalf("SupersedeFact for out-of-order ingestion failed: %v", err)
-	}
-
-	// Verify olderLink was backdated: valid_until set to activeLink.ValidFrom (3000)
-	var validUntil *string
-	err = gllam.dbRO.QueryRowContext(ctx, "SELECT valid_until FROM semantic_links WHERE source_id = 'service-a' AND target_id = 'v1'").Scan(&validUntil)
-	if err != nil {
-		t.Fatalf("Querying older link failed: %v", err)
-	}
-
-	if validUntil == nil || *validUntil != "3000" {
-		t.Errorf("Expected older link valid_until to be backdated to '3000', got %v", validUntil)
 	}
 }
 
@@ -169,9 +153,9 @@ func TestCircularDependencyInvalidationLoopPrevention(t *testing.T) {
 	_ = gllam.UpsertNode(ctx, memory.SemanticNode{ID: "rule-c", Name: "Rule C", Type: memory.NodeTypeRule})
 
 
-	_ = gllam.AddEdge(ctx, memory.SemanticLink{SourceID: "service-a", TargetID: "spec-b", Relationship: "depends_on", ValidFrom: "1000"})
-	_ = gllam.AddEdge(ctx, memory.SemanticLink{SourceID: "spec-b", TargetID: "rule-c", Relationship: "applies_rule", ValidFrom: "1000"})
-	_ = gllam.AddEdge(ctx, memory.SemanticLink{SourceID: "rule-c", TargetID: "service-a", Relationship: "references", ValidFrom: "1000"})
+	_ = gllam.AddEdge(ctx, memory.SemanticLink{SourceID: "service-a", TargetID: "spec-b", Relationship: "depends_on"})
+	_ = gllam.AddEdge(ctx, memory.SemanticLink{SourceID: "spec-b", TargetID: "rule-c", Relationship: "applies_rule"})
+	_ = gllam.AddEdge(ctx, memory.SemanticLink{SourceID: "rule-c", TargetID: "service-a", Relationship: "references"})
 
 	// Trigger invalidation on Service A
 	err = gllam.InvalidateDependentCrossCuttingLinks(ctx, "service-a", "2000")

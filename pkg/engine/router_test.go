@@ -5,7 +5,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/laurentalsina/gllam/pkg/memory"
 )
@@ -26,7 +25,6 @@ func TestExpandTemporalNeighborsMultiHop(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	nowStr := time.Now().String()
 
 	// Setup 3-hop temporal chain: Event A -> Event B -> Event C
 	nodes := []memory.SemanticNode{
@@ -43,15 +41,11 @@ func TestExpandTemporalNeighborsMultiHop(t *testing.T) {
 		SourceID:     "event-a",
 		TargetID:     "event-b",
 		Relationship: "happened_before",
-		ValidFrom:    nowStr,
 	})
 	_ = gllam.AddEdge(ctx, memory.SemanticLink{
 		SourceID:         "event-b",
 		TargetID:         "event-c",
 		Relationship:     "happened_before",
-		TemporalAnchorID: "event-c",
-		TemporalRelation: "before",
-		ValidFrom:        nowStr,
 	})
 
 	// Seed only Event A
