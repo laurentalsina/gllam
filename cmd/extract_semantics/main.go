@@ -154,7 +154,7 @@ func main() {
 	if err == nil {
 		for rows.Next() {
 			var ep memory.EpisodicSummary
-			if err := rows.Scan(&ep.ID, &ep.SessionID, &ep.SummaryText, &ep.CreatedAt); err == nil {
+			if err := rows.Scan(&ep.ID, &ep.SessionID, &ep.SummaryText, engine.ScanTime(&ep.CreatedAt)); err == nil {
 				allEpisodes = append(allEpisodes, ep)
 			}
 		}
@@ -166,7 +166,7 @@ func main() {
 		if fErr == nil {
 			for fallbackRows.Next() {
 				var ep memory.EpisodicSummary
-				if err := fallbackRows.Scan(&ep.ID, &ep.SessionID, &ep.SummaryText, &ep.CreatedAt); err == nil {
+				if err := fallbackRows.Scan(&ep.ID, &ep.SessionID, &ep.SummaryText, engine.ScanTime(&ep.CreatedAt)); err == nil {
 					allEpisodes = append(allEpisodes, ep)
 				}
 			}

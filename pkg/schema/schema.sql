@@ -31,58 +31,42 @@ CREATE TABLE IF NOT EXISTS procedural_knowledge (
 CREATE TABLE IF NOT EXISTS semantic_nodes (
     id TEXT PRIMARY KEY,
     name TEXT UNIQUE NOT NULL,
-    type TEXT NOT NULL,
+    type TEXT NOT NULL, 
     context_prompt TEXT,
     trust_weight INTEGER DEFAULT 100,
     taxonomy_path TEXT DEFAULT '/',        -- Materialized path (e.g. /Engineering/Infrastructure/Databases/Relational/Postgres)
-    is_category INTEGER DEFAULT 0,          -- Boolean flag indicating if node is a taxonomy category
-    caveat_summary TEXT                     -- Compacted historical edge caveat summary string
+    is_category INTEGER DEFAULT 0,         -- Boolean flag indicating if node is a taxonomy category
+    caveat_summary TEXT                    -- Compacted historical node caveat summary string
 );
 
-
+CREATE INDEX IF NOT EXISTS idx_semantic_nodes_id ON semantic_nodes(id);
 CREATE INDEX IF NOT EXISTS idx_semantic_nodes_taxonomy_path ON semantic_nodes(taxonomy_path);
 CREATE INDEX IF NOT EXISTS idx_semantic_nodes_is_category ON semantic_nodes(is_category);
 
-
-
--- 4. SEMANTIC LINKS (Caveat-qualified, temporally bounded relationships with grounded uncertainty support)
+-- 4. SEMANTIC LINKS (Caveat-qualified relationships with grounded uncertainty support)
 CREATE TABLE IF NOT EXISTS semantic_links (
     source_id TEXT NOT NULL,
     target_id TEXT NOT NULL,
     relationship TEXT NOT NULL,
     caveats TEXT NOT NULL,                -- Conditions, constraints, or exceptions
-    modality TEXT NOT NULL,               -- Epistemic: default, Alethic: physically/logically necessary, Deontic: obligatory/permitted/prohibited etc...
-    valid_from TEXT NOT NULL,             -- Unix timestamp string OR 'temporal_note'
-    valid_until TEXT,                     -- Unix timestamp string OR 'temporal_note' (NULL = currently active)
-    temporal_anchor_id TEXT,              -- Grounded node ID reference for relative timing (e.g. 'event-db-migration')
-    temporal_relation TEXT,               -- Allen Interval Algebra: 'before', 'after', 'equals', 'overlaps', 'during', 'contains', 'starts', 'finishes', 'meets'
-    temporal_offset_seconds INTEGER DEFAULT 0, -- Relative offset in seconds (+86400 = +1 day after anchor, -172800 = -2 days before anchor)
-    temporal_granularity TEXT DEFAULT 'exact', -- Granularity leniency: 'day' (snap 00:00), 'hour' (snap XX:00), 'exact' (no snap), 'month'
-    temporal_note TEXT,                   -- Qualitative phrase describing imprecise timestamp
-    origin_source_id TEXT,                -- Origin source node ID (human, agent, system)
+    origin_id TEXT,                       -- node ID (human, agent, system) that provided information about the link
     rule_context TEXT DEFAULT 'global',   -- 'user_preference' | 'session' | 'source' | 'global'
     constraint_type TEXT DEFAULT 'positive',-- 'positive' | 'negative'
     rule_rationale TEXT,                  -- Justification / 'because' clause (e.g. 'Security Compliance', 'Accessibility')
     resolution_rationale TEXT,            -- Explanation when resolving a contradiction
-    duration_turns INTEGER DEFAULT -1,    -- -1 for infinite, N for N-turn bound constraints
-    remaining_turns INTEGER DEFAULT -1,   -- Remaining turns before automatic expiration
-    updated_at TEXT NOT NULL,   -- RFC3339 timestamp
-
-
-
+    modality TEXT NOT NULL,               -- Epistemic: default, Alethic: physically/logically necessary, Deontic: obligatory/permitted/prohibited etc...
+    created_at TEXT NOT NULL,             -- RFC3339 timestamp
+    updated_at TEXT NOT NULL,             -- RFC3339 timestamp
     PRIMARY KEY (source_id, target_id, relationship),
     FOREIGN KEY (source_id) REFERENCES semantic_nodes(id),
     FOREIGN KEY (target_id) REFERENCES semantic_nodes(id),
-    FOREIGN KEY (temporal_anchor_id) REFERENCES semantic_nodes(id),
     FOREIGN KEY (origin_source_id) REFERENCES semantic_nodes(id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_semantic_links_target ON semantic_links(target_id);
-CREATE INDEX IF NOT EXISTS idx_semantic_links_origin ON semantic_links(origin_source_id);
+CREATE INDEX IF NOT EXISTS idx_semantic_links_source ON semantic_links(source_id);
+CREATE INDEX IF NOT EXISTS idx_semantic_links_origin ON semantic_links(origin_id);
 CREATE INDEX IF NOT EXISTS idx_semantic_links_source_rel ON semantic_links(source_id, relationship);
-
-
-
 
 -- 5. DOCUMENT LINEAGE (Strict information source URI traceability)
 CREATE TABLE IF NOT EXISTS document_lineage (

@@ -2,6 +2,7 @@ package engine
 
 import (
 	"fmt"
+	"strconv"
 	"time"
 )
 
@@ -17,6 +18,10 @@ type timeScanner struct {
 }
 
 func scanTime(t *time.Time) timeScanner { return timeScanner{t} }
+
+// ScanTime is the exported form of scanTime for use by cmd/* packages that
+// execute raw SQL queries and need to scan TEXT timestamp columns into time.Time.
+func ScanTime(t *time.Time) timeScanner { return timeScanner{t} }
 
 // sqliteFormats lists the formats go-sqlite3 uses when storing time.Time as TEXT.
 // Ordered from most to least precise so the first successful parse wins.
@@ -46,7 +51,15 @@ func (ts timeScanner) Scan(value any) error {
 				return nil
 			}
 		}
+		// Final fallback: old Unix integer stored as a TEXT string (pre-migration rows)
+		if unix, err := strconv.ParseInt(v, 10, 64); err == nil {
+			*ts.t = time.Unix(unix, 0)
+			return nil
+		}
 		return fmt.Errorf("cannot parse %q as a time value", v)
+	case int64:
+		*ts.t = time.Unix(v, 0)
+		return nil
 	default:
 		return fmt.Errorf("unsupported type for time.Time scan: %T", value)
 	}

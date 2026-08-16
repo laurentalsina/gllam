@@ -18,7 +18,6 @@ const (
 )
 
 
-
 type EpisodicSummary struct {
 
     ID          string `json:"id"`
@@ -26,6 +25,7 @@ type EpisodicSummary struct {
     SummaryText string `json:"summary_text"`
     CreatedAt   time.Time `json:"created_at"`
 }
+
 
 type ProceduralKnowledge struct {
     ID                string `json:"id"`
@@ -38,8 +38,10 @@ type ProceduralKnowledge struct {
     IsHighlyHelpful   bool   `json:"is_highly_helpful"`
     Version           int    `json:"version"`
     SupersededBy      string `json:"superseded_by"`
+    CreatedAt         time.Time `json:"created_at"`
     UpdatedAt         time.Time `json:"updated_at"`
 }
+
 
 type SemanticNode struct {
 	ID            string `json:"id"`
@@ -50,6 +52,8 @@ type SemanticNode struct {
 	TaxonomyPath  string `json:"taxonomy_path"` // Materialized path (e.g. /Engineering/Infrastructure/Databases/Relational/Postgres)
 	IsCategory    bool   `json:"is_category"`   // Flag indicating if node represents a taxonomy category
 	CaveatSummary string `json:"caveat_summary,omitempty"` // Compacted historical edge caveat summary
+        CreatedAt     time.Time `json:"created_at"`
+        UpdatedAt     time.Time `json:"updated_at"`
 }
 
 
@@ -60,7 +64,9 @@ type TaxonomyNode struct {
 	IsCategory   bool            `json:"is_category"`
 	ParentPath   string          `json:"parent_path,omitempty"`
 	Children     []*TaxonomyNode `json:"children,omitempty"`
-	DirectMemberCount int       `json:"direct_member_count,omitempty"`
+	DirectMemberCount int        `json:"direct_member_count,omitempty"`
+        CreatedAt     time.Time      `json:"created_at"`
+        UpdatedAt     time.Time      `json:"updated_at"`
 }
 
 
@@ -69,28 +75,28 @@ type SemanticLink struct {
     TargetID              string  `json:"target_id"`
     Relationship          string  `json:"relationship"`
     Caveats               string  `json:"caveats"`
-    ValidFrom             string  `json:"valid_from"`              // Unix timestamp string OR "temporal_note"
-    ValidUntil            *string `json:"valid_until"`             // Unix timestamp string OR "temporal_note" OR nil
-    TemporalAnchorID      string  `json:"temporal_anchor_id"`     // Grounded node ID reference for relative timing
-    TemporalRelation      string  `json:"temporal_relation"`     // Allen Interval Algebra: "before"|"after"|"equals"|...
-    TemporalOffsetSeconds int64   `json:"temporal_offset_seconds"`// Relative offset in seconds
-    TemporalGranularity   string  `json:"temporal_granularity"`   // "day" (snap 00:00:00) | "hour" | "exact" | "month"
-    TemporalNote          string  `json:"temporal_note"`           // Qualitative phrase describing imprecise timestamp
-    OriginSourceID        string  `json:"origin_source_id"`       // FK to semantic_nodes(id) for human/agent/system origin
-    RuleContext           string  `json:"rule_context"`           // "user_preference" | "session" | "source" | "global"
+    OriginID              string  `json:"origin__id"`              // node (id) for human/agent/system that provided information about the link
+    RuleContext           string  `json:"rule_context"`            // "user_preference" | "session" | "source" | "global"
     ConstraintType        string  `json:"constraint_type"`         // "positive" | "negative"
     RuleRationale         string  `json:"rule_rationale"`          // Justification / "because" clause
     ResolutionRationale   string  `json:"resolution_rationale"`    // Explanation when resolving a contradiction
-    DurationTurns         int64   `json:"duration_turns"`          // -1 for infinite, N for turn-bounded rules
-    RemainingTurns        int64   `json:"remaining_turns"`         // Remaining turns before auto-expiration
+    Modality              string  `json:"modality"`                // Epistemic, Alethic, Deontic 
+    CreatedAt             time.Time `json:"created_at"`
     UpdatedAt             time.Time `json:"updated_at"`
-
-
-
 }
 
-
-
+// this is not used yet, separating temporal information from semantic links
+// type SemanticTemporalLink struct {
+//     ValidFrom             string  `json:"valid_from"`              // Unix timestamp string OR "temporal_note"
+//     ValidUntil            *string `json:"valid_until"`             // Unix timestamp string OR "temporal_note" OR nil
+//     TemporalAnchorID      string  `json:"temporal_anchor_id"`     // Grounded node ID reference for relative timing
+//     TemporalRelation      string  `json:"temporal_relation"`     // Allen Interval Algebra: "before"|"after"|"equals"|...
+//     TemporalOffset        int64   `json:"temporal_offset"`       // Relative offset in temporal relationship
+//     TemporalGranularity   string  `json:"temporal_granularity"`   // "day" (snap 00:00:00) | "hour" | "exact" | "month"
+//     TemporalNote          string  `json:"temporal_note"`           // Qualitative phrase describing imprecise timestamp
+//     DurationTurns         int64   `json:"duration_turns"`          // -1 for infinite, N for turn-bounded rules
+//     RemainingTurns        int64   `json:"remaining_turns"`         // Remaining turns before auto-expiration
+// }
 
 type DocumentVersion struct {
 	ID            string `json:"id"`

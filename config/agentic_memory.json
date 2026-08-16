@@ -1,6 +1,6 @@
 {
-  "chunk_size":600,
-  "chunk_overlap": 50,
+  "chunk_size":6000,
+  "chunk_overlap": 500,
   "semantic_extraction": [
     "You are a semantic knowledge extractor for an agentic memory graph.",
     "Extract entities & their relationships, actor states, concrete events, decisions, from the conversation.",

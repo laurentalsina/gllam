@@ -21,7 +21,7 @@ echo "Output Results File: $OUT_FILE"
 echo "======================================================="
 
 go run ./cmd/eval_d7_qa/main.go \
-  --db ./bench/gllam_data.db \
+  --dbpath ./bench/gllam_data.db \
   --qa ./bench/d7_qa.jsonl \
   --out "$OUT_FILE" \
   --text-server "$TEXT_SERVER"

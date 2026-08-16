@@ -217,7 +217,7 @@ func (e *GllamEngine) DBRO() *sql.DB {
     return e.dbRO
 }
 
-// InitSchema reads and executes schema.sql to create all tables and indexes.
+// InitSchema runs schema.sql files it find in path and above
 func (e *GllamEngine) InitSchema() error {
 	schemaPaths := []string{
 		"pkg/schema/schema.sql",
@@ -237,24 +237,6 @@ func (e *GllamEngine) InitSchema() error {
 		return fmt.Errorf("failed to read schema.sql from any known path: %w", lastErr)
 	}
 
-	// Run column migrations for existing databases before creating indexes from schema.sql
-	_, _ = e.db.Exec("ALTER TABLE semantic_nodes ADD COLUMN trust_weight INTEGER DEFAULT 100;")
-	_, _ = e.db.Exec("ALTER TABLE semantic_nodes ADD COLUMN taxonomy_path TEXT DEFAULT '/';")
-	_, _ = e.db.Exec("ALTER TABLE semantic_nodes ADD COLUMN is_category INTEGER DEFAULT 0;")
-	_, _ = e.db.Exec("ALTER TABLE semantic_nodes ADD COLUMN caveat_summary TEXT;")
-
-	_, _ = e.db.Exec("ALTER TABLE semantic_links ADD COLUMN temporal_anchor_id TEXT;")
-	_, _ = e.db.Exec("ALTER TABLE semantic_links ADD COLUMN temporal_relation TEXT;")
-	_, _ = e.db.Exec("ALTER TABLE semantic_links ADD COLUMN temporal_offset_seconds INTEGER DEFAULT 0;")
-	_, _ = e.db.Exec("ALTER TABLE semantic_links ADD COLUMN temporal_granularity TEXT DEFAULT 'exact';")
-	_, _ = e.db.Exec("ALTER TABLE semantic_links ADD COLUMN temporal_note TEXT;")
-	_, _ = e.db.Exec("ALTER TABLE semantic_links ADD COLUMN origin_source_id TEXT;")
-	_, _ = e.db.Exec("ALTER TABLE semantic_links ADD COLUMN rule_context TEXT DEFAULT 'global';")
-	_, _ = e.db.Exec("ALTER TABLE semantic_links ADD COLUMN constraint_type TEXT DEFAULT 'positive';")
-	_, _ = e.db.Exec("ALTER TABLE semantic_links ADD COLUMN rule_rationale TEXT;")
-	_, _ = e.db.Exec("ALTER TABLE semantic_links ADD COLUMN resolution_rationale TEXT;")
-	_, _ = e.db.Exec("ALTER TABLE semantic_links ADD COLUMN duration_turns INTEGER DEFAULT -1;")
-	_, _ = e.db.Exec("ALTER TABLE semantic_links ADD COLUMN remaining_turns INTEGER DEFAULT -1;")
 
 	if _, err := e.db.Exec(string(schemaBytes)); err != nil {
 		return fmt.Errorf("failed to execute schema.sql: %w", err)

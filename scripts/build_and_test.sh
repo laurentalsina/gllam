@@ -11,9 +11,6 @@ cd "$ROOT_DIR"
 export CGO_ENABLED=1
 export CGO_CFLAGS="-I/home/laurent/vllm/.venv/lib/python3.13/site-packages/_rocm_sdk_devel/lib/rocm_sysdeps/include"
 
-echo "=== Running Go Package Unit Tests ==="
-go test -v ./pkg/...
-
 echo ""
 echo "=== Compiling Go Executables in ./cmd/... ==="
 
@@ -41,5 +38,8 @@ if [ ${#FAILED_PACKAGES[@]} -gt 0 ]; then
     done
     exit 1
 fi
+
+echo "=== Running Go Package Unit Tests ==="
+go test -v ./pkg/...
 
 echo "ALL TESTS PASSED AND ALL EXECUTABLES COMPILED CLEANLY."
