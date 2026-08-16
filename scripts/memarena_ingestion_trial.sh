@@ -1,0 +1,1 @@
+source ../source_setup_gllam.sh; CGO_ENABLED=1 CGO_CFLAGS="-I/home/laurent/vllm/.venv/lib/python3.13/site-packages/_rocm_sdk_devel/lib/rocm_sysdeps/include" go run ./cmd/extract_semantics/main.go -clean -trial
