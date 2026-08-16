@@ -501,12 +501,8 @@ func FormatUnsolvableDiagnostic(goalPredicate string, links []memory.SemanticLin
 				lSrc := SanitizePDDLName(l.SourceID)
 				lTgt := SanitizePDDLName(l.TargetID)
 				lRel := strings.ToLower(l.Relationship)
-				lAnchor := SanitizePDDLName(l.TemporalAnchorID)
-				lTempRel := strings.ToLower(l.TemporalRelation)
-
-				if (lSrc == tgt && lTgt == src && lRel == "happened_before") ||
-					(lSrc == tgt && lAnchor == src && lTempRel == "before") ||
-					(lSrc == src && lTgt == tgt && lRel == "happened_after") {
+				if lSrc == tgt && lTgt == src && lRel == "happened_before" ||
+					lSrc == src && lTgt == tgt && lRel == "happened_after" {
 					return fmt.Sprintf("⚠️ TIMELINE CONTRADICTION: Requested sequence '%s before %s' is mathematically impossible because the graph records '%s occurred before %s'.", src, tgt, tgt, src)
 				}
 			}

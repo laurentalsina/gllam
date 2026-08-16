@@ -428,9 +428,6 @@ func main() {
 					if link.SourceID == "" || link.TargetID == "" || link.Relationship == "" {
 						continue
 					}
-					if link.ValidFrom == "" {
-						link.ValidFrom = fmt.Sprintf("%d", episode.CreatedAt.Unix())
-					}
 
 					if err := gllam.AddEdge(ctx, link); err != nil {
 						if strings.Contains(err.Error(), "FOREIGN KEY constraint failed") {

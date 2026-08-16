@@ -68,11 +68,12 @@ func FilterNodesAndLinksForAspect(nodes []memory.SemanticNode, links []memory.Se
 		} else {
 			switch aspect {
 			case AspectTemporal:
-				if rel == "happened_before" || rel == "happened_after" || rel == "during_interval" || rel == "contains_interval" || l.TemporalAnchorID != "" {
+				// Temporal fields moved to SemanticTemporalLink; no temporal filter on SemanticLink
+				if rel == "happened_before" || rel == "happened_after" || rel == "during_interval" || rel == "contains_interval" {
 					includeLink = true
 				}
 			case AspectInstruction:
-				if rel == "has_constraint" || rel == "is_preference" || rel == "applies_rule" || rel == "supersedes_rule" || l.RuleContext != "" || l.OriginSourceID != "" {
+				if rel == "has_constraint" || rel == "is_preference" || rel == "applies_rule" || rel == "supersedes_rule" || l.RuleContext != "" {
 					includeLink = true
 				}
 			case AspectStateTransition:
@@ -85,7 +86,7 @@ func FilterNodesAndLinksForAspect(nodes []memory.SemanticNode, links []memory.Se
 		if includeLink {
 			subLinks = append(subLinks, l)
 			for _, n := range nodes {
-				if (n.ID == l.SourceID || n.ID == l.TargetID || n.ID == l.TemporalAnchorID || n.ID == l.OriginSourceID) && n.Type != memory.NodeTypeFallacy {
+				if (n.ID == l.SourceID || n.ID == l.TargetID) && n.Type != memory.NodeTypeFallacy {
 					subNodesMap[n.ID] = n
 				}
 			}
@@ -121,9 +122,6 @@ func CompileGraphToPDDLAspect(nodes []memory.SemanticNode, links []memory.Semant
 	predicates := make(map[string]bool)
 
 
-	// Detect temporal cycles in graph edges
-	cycleRes := DetectTemporalCycles(links)
-
 	// Register explicit nodes (excluding fallacy nodes)
 	for _, node := range nodes {
 		if node.Type == memory.NodeTypeFallacy || strings.HasPrefix(strings.ToLower(node.ID), "fallacy_") {
@@ -141,14 +139,6 @@ func CompileGraphToPDDLAspect(nodes []memory.SemanticNode, links []memory.Semant
 	}
 
 	var initStatements []string
-
-	// If temporal cycles exist, inject explicit contradiction facts into initial state
-	if cycleRes.HasCycle && len(cycleRes.CycleNodes) >= 2 {
-		predicates["has_temporal_cycle"] = true
-		c1 := cycleRes.CycleNodes[0]
-		c2 := cycleRes.CycleNodes[1]
-		initStatements = append(initStatements, fmt.Sprintf("    (has_temporal_cycle %s %s)", c1, c2))
-	}
 
 	for _, link := range links {
 		rel := SanitizePDDLName(link.Relationship)
@@ -174,31 +164,6 @@ func CompileGraphToPDDLAspect(nodes []memory.SemanticNode, links []memory.Semant
 
 		// Create the PDDL initial state declaration
 		initStatements = append(initStatements, fmt.Sprintf("    (%s %s %s)", rel, src, tgt))
-
-		// If a grounded temporal anchor ID and relation exist, emit grounded temporal predicates using Allen's Interval Algebra
-		if link.TemporalAnchorID != "" && link.TemporalRelation != "" {
-			anchor := SanitizePDDLName(link.TemporalAnchorID)
-			tempRel := SanitizePDDLName(link.TemporalRelation)
-			switch tempRel {
-			case "before":
-				tempRel = "happened_before"
-			case "after":
-				tempRel = "happened_after"
-			case "during":
-				tempRel = "during_interval"
-			case "contains":
-				tempRel = "contains_interval"
-			case "equals", "overlaps", "starts", "finishes", "meets":
-				// keep sanitized name as predicate
-			}
-			predicates[tempRel] = true
-			if _, exists := nodeTypeMap[anchor]; !exists {
-				nodeTypeMap[anchor] = memory.NodeTypeEntity
-				objectsByType[memory.NodeTypeEntity] = append(objectsByType[memory.NodeTypeEntity], anchor)
-			}
-			initStatements = append(initStatements, fmt.Sprintf("    (%s %s %s)", tempRel, src, anchor))
-		}
-
 
 	}
 
@@ -482,21 +447,11 @@ func DetectTemporalCycles(links []memory.SemanticLink) CycleResult {
 		src := SanitizePDDLName(l.SourceID)
 		tgt := SanitizePDDLName(l.TargetID)
 		rel := strings.ToLower(l.Relationship)
-		tempRel := strings.ToLower(l.TemporalRelation)
-		anchor := SanitizePDDLName(l.TemporalAnchorID)
 
-		if rel == "happened_before" || tempRel == "before" {
-			targetNode := tgt
-			if anchor != "" && tempRel == "before" {
-				targetNode = anchor
-			}
-			adj[src] = append(adj[src], targetNode)
-		} else if rel == "happened_after" || tempRel == "after" {
-			targetNode := tgt
-			if anchor != "" && tempRel == "after" {
-				targetNode = anchor
-			}
-			adj[targetNode] = append(adj[targetNode], src)
+		if rel == "happened_before" {
+			adj[src] = append(adj[src], tgt)
+		} else if rel == "happened_after" {
+			adj[tgt] = append(adj[tgt], src)
 		}
 	}
 

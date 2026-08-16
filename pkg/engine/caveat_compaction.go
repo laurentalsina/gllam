@@ -5,25 +5,26 @@ import (
 	"database/sql"
 	"fmt"
 	"sort"
-	"strconv"
 	"strings"
+	"time"
 
 	"github.com/laurentalsina/gllam/pkg/memory"
 )
 
 // CompactNodeCaveats ranks and compacts node caveats for a specific entity node when total caveats exceed maxInline.
-// High-priority active caveats remain inline, while older/lower-trust caveats are synthesized into a node-level CaveatSummary.
+// High-priority caveats (by origin trust weight and recency) remain inline, while lower-priority caveats are
+// synthesized into a node-level CaveatSummary.
 func (e *GllamEngine) CompactNodeCaveats(ctx context.Context, nodeID string, maxInline int) (string, int, int, error) {
 	if maxInline <= 0 {
 		maxInline = 5
 	}
 
-	// Fetch all links connected to nodeID (as source or target)
+	// Fetch all links connected to nodeID (as source or target), joining the origin node for trust weight
 	query := `
-		SELECT l.source_id, l.target_id, l.relationship, l.caveats, l.valid_from, l.valid_until, l.origin_source_id,
-		       COALESCE(n_src.trust_weight, 500) as src_trust
+		SELECT l.source_id, l.target_id, l.relationship, l.caveats, l.origin_id, l.created_at,
+		       COALESCE(n_origin.trust_weight, 100) as origin_trust
 		FROM semantic_links l
-		LEFT JOIN semantic_nodes n_src ON l.origin_source_id = n_src.id
+		LEFT JOIN semantic_nodes n_origin ON l.origin_id = n_origin.id
 		WHERE (l.source_id = ? OR l.target_id = ?) AND l.caveats IS NOT NULL AND l.caveats != ''`
 
 	rows, err := e.dbRO.QueryContext(ctx, query, nodeID, nodeID)
@@ -33,40 +34,28 @@ func (e *GllamEngine) CompactNodeCaveats(ctx context.Context, nodeID string, max
 	defer rows.Close()
 
 	type caveatItem struct {
-		link        memory.SemanticLink
-		srcTrust    int
-		isActive    bool
-		validFromTS int64
+		link       memory.SemanticLink
+		originTrust int
+		createdAt  string
 	}
 	var items []caveatItem
 
 	for rows.Next() {
 		var l memory.SemanticLink
-		var srcTrust int
-		var validUntil sql.NullString
-		var validFrom sql.NullString
-		var originSrc sql.NullString
+		var originTrust int
+		var createdAt string
+		var originID sql.NullString
 
-		if err := rows.Scan(&l.SourceID, &l.TargetID, &l.Relationship, &l.Caveats, &validFrom, &validUntil, &originSrc, &srcTrust); err == nil {
-			isActive := true
-			if validUntil.Valid && validUntil.String != "" {
-				l.ValidUntil = &validUntil.String
-				isActive = false
+		if err := rows.Scan(&l.SourceID, &l.TargetID, &l.Relationship, &l.Caveats, &originID, &createdAt, &originTrust); err == nil {
+			if originID.Valid {
+				l.OriginID = originID.String
 			}
-			var fromTS int64
-			if validFrom.Valid {
-				l.ValidFrom = validFrom.String
-				fromTS, _ = strconv.ParseInt(validFrom.String, 10, 64)
-			}
-			if originSrc.Valid {
-				l.OriginSourceID = originSrc.String
-			}
+			l.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
 
 			items = append(items, caveatItem{
 				link:        l,
-				srcTrust:    srcTrust,
-				isActive:    isActive,
-				validFromTS: fromTS,
+				originTrust: originTrust,
+				createdAt:   createdAt,
 			})
 		}
 	}
@@ -75,27 +64,24 @@ func (e *GllamEngine) CompactNodeCaveats(ctx context.Context, nodeID string, max
 		return "", len(items), 0, nil
 	}
 
-	// Sort items by priority: Active > Source Trust > Recency
+	// Sort items by priority: Higher origin trust weight first, then recency
 	sort.Slice(items, func(i, j int) bool {
-		if items[i].isActive != items[j].isActive {
-			return items[i].isActive // Active first
+		if items[i].originTrust != items[j].originTrust {
+			return items[i].originTrust > items[j].originTrust
 		}
-		if items[i].srcTrust != items[j].srcTrust {
-			return items[i].srcTrust > items[j].srcTrust // Higher trust weight first
-		}
-		return items[i].validFromTS > items[j].validFromTS // Recency
+		return items[i].createdAt > items[j].createdAt
 	})
 
 	retained := items[:maxInline]
 	compacted := items[maxInline:]
 
-	// Build synthetic caveat summary string for historical/lower-priority caveats
+	// Build synthetic caveat summary string for lower-priority caveats
 	var caveatTexts []string
 	for _, c := range compacted {
 		caveatTexts = append(caveatTexts, fmt.Sprintf("[%s -> %s (%s)]: %s", c.link.SourceID, c.link.TargetID, c.link.Relationship, c.link.Caveats))
 	}
 
-	summaryText := fmt.Sprintf("Compacted Node Caveat Epoch (%d historical items): %s", len(compacted), strings.Join(caveatTexts, "; "))
+	summaryText := fmt.Sprintf("Compacted Node Caveat Epoch (%d lower-priority items): %s", len(compacted), strings.Join(caveatTexts, "; "))
 
 	// Update semantic_nodes caveat_summary
 	updateQuery := `UPDATE semantic_nodes SET caveat_summary = ? WHERE id = ?`

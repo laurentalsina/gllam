@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"time"
 
 	"github.com/laurentalsina/gllam/pkg/engine"
 	"github.com/laurentalsina/gllam/pkg/memory"
@@ -106,14 +105,11 @@ func main() {
 				}
 
 				if targetID != "" {
-					link := memory.SemanticLink{
+				link := memory.SemanticLink{
 						SourceID:     item.ID,
 						TargetID:     targetID,
 						Relationship: "supports_format",
 						Caveats:      fmt.Sprintf("Format variant: %s", f),
-						ValidFrom:    fmt.Sprintf("%d", time.Now().Unix()),
-						UpdatedAt:    time.Now(),
-
 					}
 					if err := gllam.AddEdge(ctx, link); err != nil {
 						// Might already exist

@@ -52,13 +52,10 @@ func main() {
 	})
 
 	// Obsolete link (should be filtered out by FilterActiveSummaryFacts)
-	obsoleteUntil := "1500"
 	_ = gllam.AddEdge(ctx, memory.SemanticLink{
 		SourceID:     "caddy-service",
 		TargetID:     "port-8079",
 		Relationship: "binds_to",
-		ValidFrom:    "1000",
-		ValidUntil:   &obsoleteUntil,
 	})
 
 	// Extract reusable procedural workflow
@@ -72,7 +69,7 @@ func main() {
 	links := []memory.SemanticLink{
 		{SourceID: "caddy-service", TargetID: "port-8080", Relationship: "binds_to", Caveats: "Must use TLS certificate"},
 		{SourceID: "user-alice", TargetID: "rule-format", Relationship: "is_preference", RuleContext: "user_preference", ConstraintType: "positive", Caveats: "Always output response tables in Markdown"},
-		{SourceID: "caddy-service", TargetID: "port-8079", Relationship: "binds_to", ValidUntil: &obsoleteUntil},
+		{SourceID: "caddy-service", TargetID: "port-8079", Relationship: "binds_to"},
 	}
 
 	episodes := []memory.EpisodicSummary{

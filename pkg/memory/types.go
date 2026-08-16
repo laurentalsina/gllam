@@ -19,7 +19,6 @@ const (
 
 
 type EpisodicSummary struct {
-
     ID          string `json:"id"`
     SessionID   string `json:"session_id"`
     SummaryText string `json:"summary_text"`
@@ -111,6 +110,7 @@ type DocumentVersion struct {
 	CreatedAt     time.Time `json:"created_at"`
 }
 
+
 type CompactedRevisionEpoch struct {
 	AuthorID         string `json:"author_id"`
 	AuthorName       string `json:"author_name"`
@@ -118,6 +118,7 @@ type CompactedRevisionEpoch struct {
 	TimeRange        string `json:"time_range"`
 	SyntheticSummary string `json:"synthetic_summary"`
 }
+
 
 type DocumentLineage struct {
 	ID               string                   `json:"id"`
@@ -135,7 +136,6 @@ type DocumentLineage struct {
 }
 
 
-
 type CompiledContext struct {
 	Procedural    []ProceduralKnowledge
 	SemanticNodes []SemanticNode
@@ -145,6 +145,7 @@ type CompiledContext struct {
 	PlannerOutput string
 }
 
+
 type SyntheticTraceTestScenario struct {
 	ID               string   `json:"id"`
 	PromptQuery      string   `json:"prompt_query"`
@@ -153,6 +154,7 @@ type SyntheticTraceTestScenario struct {
 	IsConsistent     bool     `json:"is_consistent"`
 	ClarityScore     float64  `json:"clarity_score"`
 }
+
 
 type MemorySleepReport struct {
 	SleepCycleID              string                      `json:"sleep_cycle_id"`
@@ -164,6 +166,3 @@ type MemorySleepReport struct {
 	MemoryClarityScore        float64                     `json:"memory_clarity_score"`
 	MemoryConsistencyScore    float64                     `json:"memory_consistency_score"`
 }
-
-
-

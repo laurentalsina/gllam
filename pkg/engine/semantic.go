@@ -66,9 +66,9 @@ func (e *GllamEngine) AddEdge(ctx context.Context, link memory.SemanticLink) err
 	var existingOriginSource sql.NullString
 
 	query := `
-        SELECT caveats, target_id, origin_source_id 
+        SELECT caveats, target_id, origin_id 
         FROM semantic_links 
-        WHERE source_id = ? AND relationship = ? AND valid_until IS NULL
+        WHERE source_id = ? AND relationship = ?
         LIMIT 1`
 
 	err := e.db.QueryRowContext(ctx, query, link.SourceID, link.Relationship).Scan(&existingCaveats, &existingTargetID, &existingOriginSource)
@@ -82,15 +82,15 @@ func (e *GllamEngine) AddEdge(ctx context.Context, link memory.SemanticLink) err
 		"located_in": true,
 	}
 
-	// If an existing active link was found, it points to a different target, and the relationship is mutually exclusive:
+	// If an existing link was found, it points to a different target, and the relationship is mutually exclusive:
 	if err == nil && existingTargetID != link.TargetID && isMutuallyExclusive[link.Relationship] {
 		// Epistemic Hierarchy Source Trust Weighting Check
 		newTrustWeight := 100
 		existingTrustWeight := 100
 
-		if link.OriginSourceID != "" {
+		if link.OriginID != "" {
 			var tw sql.NullInt64
-			if err := e.db.QueryRowContext(ctx, "SELECT trust_weight FROM semantic_nodes WHERE id = ?", link.OriginSourceID).Scan(&tw); err == nil && tw.Valid {
+			if err := e.db.QueryRowContext(ctx, "SELECT trust_weight FROM semantic_nodes WHERE id = ?", link.OriginID).Scan(&tw); err == nil && tw.Valid {
 				newTrustWeight = int(tw.Int64)
 			}
 		}
@@ -102,13 +102,11 @@ func (e *GllamEngine) AddEdge(ctx context.Context, link memory.SemanticLink) err
 			}
 		}
 
-		nowStr := fmt.Sprintf("%d", time.Now().Unix())
-
 		if newTrustWeight > existingTrustWeight {
-			// Incoming claim has HIGHER trust weight (e.g. Jira Resolved 900 vs Draft 100) -> Expire existing claim automatically!
-			expireQuery := `UPDATE semantic_links SET valid_until = ? WHERE source_id = ? AND target_id = ? AND relationship = ? AND valid_until IS NULL`
-			if _, err := e.db.ExecContext(ctx, expireQuery, nowStr, link.SourceID, existingTargetID, link.Relationship); err != nil {
-				return fmt.Errorf("failed to expire existing lower-trust claim: %w", err)
+			// Incoming claim has HIGHER trust weight -> Delete existing claim automatically!
+			deleteQuery := `DELETE FROM semantic_links WHERE source_id = ? AND target_id = ? AND relationship = ?`
+			if _, err := e.db.ExecContext(ctx, deleteQuery, link.SourceID, existingTargetID, link.Relationship); err != nil {
+				return fmt.Errorf("failed to delete existing lower-trust claim: %w", err)
 			}
 
 			// Insert resolves_conflict edge
@@ -117,27 +115,24 @@ func (e *GllamEngine) AddEdge(ctx context.Context, link memory.SemanticLink) err
 				TargetID:            existingTargetID,
 				Relationship:        "resolves_conflict",
 				ResolutionRationale: fmt.Sprintf("Automated Epistemic Hierarchy Resolution: Incoming source trust weight (%d) higher than existing (%d)", newTrustWeight, existingTrustWeight),
-				ValidFrom:           nowStr,
-				OriginSourceID:      link.OriginSourceID,
+				OriginID:            link.OriginID,
 			})
 		} else if existingTrustWeight > newTrustWeight {
-			// Existing claim has HIGHER trust weight -> Automatically reject incoming claim by setting valid_until!
-			link.ValidUntil = &nowStr
+			// Existing claim has HIGHER trust weight -> Automatically reject incoming claim
 			_ = e.AddEdge(ctx, memory.SemanticLink{
 				SourceID:            existingTargetID,
 				TargetID:            link.TargetID,
 				Relationship:        "resolves_conflict",
 				ResolutionRationale: fmt.Sprintf("Automated Epistemic Hierarchy Resolution: Existing source trust weight (%d) higher than incoming (%d)", existingTrustWeight, newTrustWeight),
-				ValidFrom:           nowStr,
-				OriginSourceID:      existingOriginSource.String,
+				OriginID:            existingOriginSource.String,
 			})
 			return nil
 		} else if !e.AllowUserGrilling || (e.SystemPrompts != nil && !e.SystemPrompts.AllowUserGrilling) {
 			// Equal trust weights & User Grilling is DISABLED (e.g. BEAM Benchmark Evaluation Mode):
 			// Automatically resolve by Recency Preference (newer incoming claim supersedes older claim)
-			expireQuery := `UPDATE semantic_links SET valid_until = ? WHERE source_id = ? AND target_id = ? AND relationship = ? AND valid_until IS NULL`
-			if _, err := e.db.ExecContext(ctx, expireQuery, nowStr, link.SourceID, existingTargetID, link.Relationship); err != nil {
-				return fmt.Errorf("failed to expire older claim in benchmark mode: %w", err)
+			deleteQuery := `DELETE FROM semantic_links WHERE source_id = ? AND target_id = ? AND relationship = ?`
+			if _, err := e.db.ExecContext(ctx, deleteQuery, link.SourceID, existingTargetID, link.Relationship); err != nil {
+				return fmt.Errorf("failed to delete older claim in benchmark mode: %w", err)
 			}
 
 			_ = e.AddEdge(ctx, memory.SemanticLink{
@@ -145,8 +140,7 @@ func (e *GllamEngine) AddEdge(ctx context.Context, link memory.SemanticLink) err
 				TargetID:            existingTargetID,
 				Relationship:        "resolves_conflict",
 				ResolutionRationale: fmt.Sprintf("Non-Interactive Benchmark Recency Resolution (AllowUserGrilling=false): Equal trust weights (%d)", newTrustWeight),
-				ValidFrom:           nowStr,
-				OriginSourceID:      link.OriginSourceID,
+				OriginID:            link.OriginID,
 			})
 		} else {
 			// Equal trust weights & User Grilling ENABLED -> Create unresolved contradiction node for human REPL grilling
@@ -163,48 +157,20 @@ func (e *GllamEngine) AddEdge(ctx context.Context, link memory.SemanticLink) err
 				SourceID:     link.SourceID,
 				TargetID:     conflictID,
 				Relationship: "has_unresolved_conflict",
-				ValidFrom:    nowStr,
 			})
 			_ = e.AddEdge(ctx, memory.SemanticLink{
 				SourceID:     conflictID,
 				TargetID:     existingTargetID,
 				Relationship: "conflicting_claim",
-				ValidFrom:    nowStr,
 			})
 			_ = e.AddEdge(ctx, memory.SemanticLink{
 				SourceID:     conflictID,
 				TargetID:     link.TargetID,
 				Relationship: "conflicting_claim",
-				ValidFrom:    nowStr,
 			})
 		}
-
 	}
 
-
-    // Default valid_from if unassigned
-    nowTime := time.Now()
-    if link.ValidFrom == "" {
-        if link.TemporalNote != "" {
-            link.ValidFrom = "temporal_note"
-        } else {
-            link.ValidFrom = fmt.Sprintf("%d", nowTime.Unix())
-        }
-    }
-
-    // Event-Anchored State Invalidation (Trap 9):
-    // When a new state or preference link is added, mark previous active state links as expired
-    // using the new link's valid_from timestamp and temporal anchor ID.
-    if link.Relationship == "has_state" || link.Relationship == "is_preference" {
-        _ = e.InvalidateObsoleteEdgeWithAnchor(ctx, link.SourceID, link.Relationship, link.TargetID, link.ValidFrom, link.TemporalAnchorID, link.TemporalNote)
-    }
-
-    // Insert the new link (idempotent update if it already exists)
-
-    gran := link.TemporalGranularity
-    if gran == "" {
-        gran = "exact"
-    }
     ruleCtx := link.RuleContext
     if ruleCtx == "" {
         ruleCtx = "global"
@@ -214,53 +180,24 @@ func (e *GllamEngine) AddEdge(ctx context.Context, link memory.SemanticLink) err
         cType = "positive"
     }
 
-
-    durTurns := link.DurationTurns
-    if durTurns == 0 {
-        durTurns = -1
-    }
-    remTurns := link.RemainingTurns
-    if remTurns == 0 {
-        if durTurns > 0 {
-            remTurns = durTurns
-        } else {
-            remTurns = -1
-        }
-    }
+	nowTime := time.Now().Format(time.RFC3339)
 
     insertQuery := `
-        INSERT INTO semantic_links (source_id, target_id, relationship, caveats, valid_from, valid_until, temporal_anchor_id, temporal_relation, temporal_offset_seconds, temporal_granularity, temporal_note, origin_source_id, rule_context, constraint_type, rule_rationale, resolution_rationale, duration_turns, remaining_turns, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO semantic_links (source_id, target_id, relationship, caveats, origin_id, rule_context, constraint_type, rule_rationale, resolution_rationale, modality, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(source_id, target_id, relationship) DO UPDATE SET 
             caveats = excluded.caveats,
-            valid_from = excluded.valid_from,
-            valid_until = excluded.valid_until,
-            temporal_anchor_id = excluded.temporal_anchor_id,
-            temporal_relation = excluded.temporal_relation,
-            temporal_offset_seconds = excluded.temporal_offset_seconds,
-            temporal_granularity = excluded.temporal_granularity,
-            temporal_note = excluded.temporal_note,
-            origin_source_id = excluded.origin_source_id,
+            origin_id = excluded.origin_id,
             rule_context = excluded.rule_context,
             constraint_type = excluded.constraint_type,
             rule_rationale = excluded.rule_rationale,
             resolution_rationale = excluded.resolution_rationale,
-            duration_turns = excluded.duration_turns,
-            remaining_turns = excluded.remaining_turns,
+            modality = excluded.modality,
             updated_at = excluded.updated_at`
 
-    var anchorID, tempRel, tempNote, origSource, rationaleVal, resRationaleVal sql.NullString
-    if link.TemporalAnchorID != "" && !strings.EqualFold(link.TemporalAnchorID, "null") && !strings.EqualFold(link.TemporalAnchorID, "none") && !strings.EqualFold(link.TemporalAnchorID, "nil") {
-        anchorID = sql.NullString{String: link.TemporalAnchorID, Valid: true}
-    }
-    if link.TemporalRelation != "" {
-        tempRel = sql.NullString{String: link.TemporalRelation, Valid: true}
-    }
-    if link.TemporalNote != "" {
-        tempNote = sql.NullString{String: link.TemporalNote, Valid: true}
-    }
-    if link.OriginSourceID != "" && !strings.EqualFold(link.OriginSourceID, "null") && !strings.EqualFold(link.OriginSourceID, "none") && !strings.EqualFold(link.OriginSourceID, "nil") {
-        origSource = sql.NullString{String: link.OriginSourceID, Valid: true}
+    var origSource, rationaleVal, resRationaleVal sql.NullString
+    if link.OriginID != "" && !strings.EqualFold(link.OriginID, "null") && !strings.EqualFold(link.OriginID, "none") && !strings.EqualFold(link.OriginID, "nil") {
+        origSource = sql.NullString{String: link.OriginID, Valid: true}
     }
     if link.RuleRationale != "" {
         rationaleVal = sql.NullString{String: link.RuleRationale, Valid: true}
@@ -271,12 +208,7 @@ func (e *GllamEngine) AddEdge(ctx context.Context, link memory.SemanticLink) err
 
     _, err = e.db.ExecContext(ctx, insertQuery,
         link.SourceID, link.TargetID, link.Relationship, link.Caveats,
-        link.ValidFrom, link.ValidUntil, anchorID, tempRel, link.TemporalOffsetSeconds, gran, tempNote, origSource, ruleCtx, cType, rationaleVal, resRationaleVal, durTurns, remTurns, nowTime)
-
-
-
-
-
+        origSource, ruleCtx, cType, rationaleVal, resRationaleVal, link.Modality, nowTime, nowTime)
 
     if err != nil {
         return fmt.Errorf("failed to add edge: %w", err)
@@ -285,38 +217,17 @@ func (e *GllamEngine) AddEdge(ctx context.Context, link memory.SemanticLink) err
     return nil
 }
 
-
 // InvalidateObsoleteEdge marks an older link as expired when a new preference supersedes it
 func (e *GllamEngine) InvalidateObsoleteEdge(ctx context.Context, sourceID, relationship, targetID string) error {
-	return e.InvalidateObsoleteEdgeWithAnchor(ctx, sourceID, relationship, targetID, "", "", "")
+	return nil
 }
+
 
 // InvalidateObsoleteEdgeWithAnchor marks older links as expired using an event's timestamp or anchor ID
 func (e *GllamEngine) InvalidateObsoleteEdgeWithAnchor(ctx context.Context, sourceID, relationship, targetID string, validUntil string, anchorID string, tempNote string) error {
-	if validUntil == "" {
-		if tempNote != "" || anchorID != "" {
-			validUntil = "temporal_note"
-		} else {
-			validUntil = fmt.Sprintf("%d", time.Now().Unix())
-		}
-	}
-
-	query := `
-		UPDATE semantic_links 
-		SET valid_until = ?, 
-		    temporal_anchor_id = COALESCE(NULLIF(?, ''), temporal_anchor_id),
-		    temporal_relation = CASE WHEN ? != '' THEN 'ended_by' ELSE temporal_relation END,
-		    temporal_note = COALESCE(NULLIF(?, ''), temporal_note),
-		    updated_at = ?
-		WHERE source_id = ? AND relationship = ? AND (target_id != ? OR ? = '') AND valid_until IS NULL`
-
-	now := time.Now()
-	_, err := e.db.ExecContext(ctx, query, validUntil, anchorID, anchorID, tempNote, now, sourceID, relationship, targetID, targetID)
-	if err != nil {
-		return fmt.Errorf("failed to invalidate obsolete edge: %w", err)
-	}
 	return nil
 }
+
 
 
 
@@ -440,42 +351,24 @@ func (e *GllamEngine) SearchSimilarNodes(ctx context.Context, queryText string, 
 // It dynamically resolves temporal_anchor_id timestamps when valid_from or valid_until is "temporal_note".
 func (e *GllamEngine) GetActiveLinksAtTime(ctx context.Context, timestamp int64) ([]memory.SemanticLink, error) {
     query := `
-        SELECT source_id, target_id, relationship, caveats, valid_from, valid_until, temporal_anchor_id, temporal_relation, temporal_offset_seconds, temporal_granularity, temporal_note, origin_source_id, rule_context, constraint_type, rule_rationale, resolution_rationale, duration_turns, remaining_turns, updated_at
-        FROM semantic_links
-        WHERE (valid_from = 'temporal_note' OR CAST(valid_from AS INTEGER) <= ?) 
-          AND (valid_until IS NULL OR valid_until = 'temporal_note' OR CAST(valid_until AS INTEGER) > ?)
-        ORDER BY valid_from ASC`
+        SELECT source_id, target_id, relationship, caveats, origin_id, rule_context, constraint_type, rule_rationale, resolution_rationale, modality, created_at, updated_at
+        FROM semantic_links`
 
-    rows, err := e.dbRO.QueryContext(ctx, query, timestamp, timestamp)
+    rows, err := e.dbRO.QueryContext(ctx, query)
     if err != nil {
-        return nil, fmt.Errorf("failed to query active links at timestamp %d: %w", timestamp, err)
+        return nil, fmt.Errorf("failed to query links: %w", err)
     }
     defer rows.Close()
 
-    var candidates []memory.SemanticLink
+    var activeLinks []memory.SemanticLink
     for rows.Next() {
         var l memory.SemanticLink
-        var anchorID, tempRel, tempGran, tempNote, origSource, rCtx, cType, ratVal, resRatVal sql.NullString
-        var durTurns, remTurns sql.NullInt64
-        if err := rows.Scan(&l.SourceID, &l.TargetID, &l.Relationship, &l.Caveats, &l.ValidFrom, &l.ValidUntil, &anchorID, &tempRel, &l.TemporalOffsetSeconds, &tempGran, &tempNote, &origSource, &rCtx, &cType, &ratVal, &resRatVal, &durTurns, &remTurns, scanTime(&l.UpdatedAt)); err != nil {
+        var origSource, rCtx, cType, ratVal, resRatVal, mod sql.NullString
+        if err := rows.Scan(&l.SourceID, &l.TargetID, &l.Relationship, &l.Caveats, &origSource, &rCtx, &cType, &ratVal, &resRatVal, &mod, scanTime(&l.CreatedAt), scanTime(&l.UpdatedAt)); err != nil {
             return nil, fmt.Errorf("failed to scan link: %w", err)
         }
-        if anchorID.Valid {
-            l.TemporalAnchorID = anchorID.String
-        }
-        if tempRel.Valid {
-            l.TemporalRelation = tempRel.String
-        }
-        if tempGran.Valid {
-            l.TemporalGranularity = tempGran.String
-        } else {
-            l.TemporalGranularity = "exact"
-        }
-        if tempNote.Valid {
-            l.TemporalNote = tempNote.String
-        }
         if origSource.Valid {
-            l.OriginSourceID = origSource.String
+            l.OriginID = origSource.String
         }
         if rCtx.Valid {
             l.RuleContext = rCtx.String
@@ -489,39 +382,8 @@ func (e *GllamEngine) GetActiveLinksAtTime(ctx context.Context, timestamp int64)
         if resRatVal.Valid {
             l.ResolutionRationale = resRatVal.String
         }
-        if durTurns.Valid {
-            l.DurationTurns = durTurns.Int64
-        } else {
-            l.DurationTurns = -1
-        }
-        if remTurns.Valid {
-            l.RemainingTurns = remTurns.Int64
-        } else {
-            l.RemainingTurns = -1
-        }
-        candidates = append(candidates, l)
-    }
-    rows.Close()
-
-    // Dynamic Anchor Resolution: Filter candidates whose anchored event timestamp invalidates them at time `timestamp`
-    var activeLinks []memory.SemanticLink
-    for _, l := range candidates {
-        if l.TemporalAnchorID != "" {
-            anchorTS := e.resolveAnchorTimestamp(ctx, l.TemporalAnchorID, l.TemporalOffsetSeconds, l.TemporalGranularity)
-            if anchorTS > 0 {
-                // If valid_from is anchored after requested timestamp, link wasn't active yet
-                if l.ValidFrom == "temporal_note" && (l.TemporalRelation == "after" || l.TemporalRelation == "ended_by") {
-                    if timestamp < anchorTS {
-                        continue
-                    }
-                }
-                // If valid_until is anchored before/ended_by requested timestamp, link has expired
-                if l.ValidUntil != nil && *l.ValidUntil == "temporal_note" && (l.TemporalRelation == "ended_by" || l.TemporalRelation == "before") {
-                    if timestamp >= anchorTS {
-                        continue
-                    }
-                }
-            }
+        if mod.Valid {
+            l.Modality = mod.String
         }
         activeLinks = append(activeLinks, l)
     }
@@ -529,31 +391,10 @@ func (e *GllamEngine) GetActiveLinksAtTime(ctx context.Context, timestamp int64)
     return activeLinks, nil
 }
 
-// resolveAnchorTimestamp looks up the unix timestamp of an anchor node/link, applies offset seconds,
-// and applies leniency boundary snapping based on granularity ("day", "hour", "month", "exact").
 func (e *GllamEngine) resolveAnchorTimestamp(ctx context.Context, anchorID string, offsetSeconds int64, granularity string) int64 {
-	var ts int64
-	query := `SELECT CAST(valid_from AS INTEGER) FROM semantic_links WHERE source_id = ? AND valid_from != 'temporal_note' LIMIT 1`
-	if err := e.dbRO.QueryRowContext(ctx, query, anchorID).Scan(&ts); err == nil && ts > 0 {
-		effectiveTS := ts + offsetSeconds
-		tTime := time.Unix(effectiveTS, 0).UTC()
-
-		switch strings.ToLower(granularity) {
-		case "day":
-			// Round down to beginning of that day (00:00:00 UTC) for human leniency ("2 weeks ago", "3 days ago")
-			return time.Date(tTime.Year(), tTime.Month(), tTime.Day(), 0, 0, 0, 0, time.UTC).Unix()
-		case "hour":
-			// Round down to beginning of that hour (XX:00:00 UTC)
-			return time.Date(tTime.Year(), tTime.Month(), tTime.Day(), tTime.Hour(), 0, 0, 0, time.UTC).Unix()
-		case "month":
-			// Round down to 1st of that month (00:00:00 UTC)
-			return time.Date(tTime.Year(), tTime.Month(), 1, 0, 0, 0, 0, time.UTC).Unix()
-		default:
-			return effectiveTS
-		}
-	}
 	return 0
 }
+
 
 // ExpandTemporalNeighbors performs N-hop traversal over temporal links and temporal anchors
 // to ensure complete transitive ordering chains (e.g. A -> B -> C) are loaded into context.
@@ -592,13 +433,13 @@ func (e *GllamEngine) ExpandTemporalNeighborsWithTime(ctx context.Context, seedN
 
 			if evalTimestamp == nil {
 				query = `
-					SELECT source_id, target_id, relationship, caveats, valid_from, valid_until, temporal_anchor_id, temporal_relation, temporal_offset_seconds, temporal_granularity, temporal_note, origin_source_id, rule_context, constraint_type, rule_rationale, resolution_rationale, duration_turns, remaining_turns, updated_at
+					SELECT source_id, target_id, relationship, caveats, origin_id, rule_context, constraint_type, rule_rationale, resolution_rationale, modality, created_at, updated_at
 					FROM semantic_links
 					WHERE source_id = ? OR target_id = ? OR temporal_anchor_id = ?`
 				rows, err = e.dbRO.QueryContext(ctx, query, currentID, currentID, currentID)
 			} else {
 				query = `
-					SELECT source_id, target_id, relationship, caveats, valid_from, valid_until, temporal_anchor_id, temporal_relation, temporal_offset_seconds, temporal_granularity, temporal_note, origin_source_id, rule_context, constraint_type, rule_rationale, resolution_rationale, duration_turns, remaining_turns, updated_at
+					SELECT source_id, target_id, relationship, caveats, origin_id, rule_context, constraint_type, rule_rationale, resolution_rationale, modality, created_at, updated_at
 					FROM semantic_links
 					WHERE (source_id = ? OR target_id = ? OR temporal_anchor_id = ?)
 					  AND (valid_from = 'temporal_note' OR CAST(valid_from AS INTEGER) <= ?)
@@ -611,59 +452,34 @@ func (e *GllamEngine) ExpandTemporalNeighborsWithTime(ctx context.Context, seedN
 
 			for rows.Next() {
 				var l memory.SemanticLink
-				var anchorID, tempRel, tempGran, tempNote, origSource, rCtx, cType, ratVal, resRatVal sql.NullString
-				var durTurns, remTurns sql.NullInt64
-				if err := rows.Scan(&l.SourceID, &l.TargetID, &l.Relationship, &l.Caveats, &l.ValidFrom, &l.ValidUntil, &anchorID, &tempRel, &l.TemporalOffsetSeconds, &tempGran, &tempNote, &origSource, &rCtx, &cType, &ratVal, &resRatVal, &durTurns, &remTurns, scanTime(&l.UpdatedAt)); err != nil {
+				var origSource, rCtx, cType, ratVal, resRatVal, mod sql.NullString
+		if err := rows.Scan(&l.SourceID, &l.TargetID, &l.Relationship, &l.Caveats, &origSource, &rCtx, &cType, &ratVal, &resRatVal, &mod, scanTime(&l.CreatedAt), scanTime(&l.UpdatedAt)); err != nil {
 					continue
 				}
-				if anchorID.Valid {
-					l.TemporalAnchorID = anchorID.String
-				}
-				if tempRel.Valid {
-					l.TemporalRelation = tempRel.String
-				}
-				if tempGran.Valid {
-					l.TemporalGranularity = tempGran.String
-				} else {
-					l.TemporalGranularity = "exact"
-				}
-				if tempNote.Valid {
-					l.TemporalNote = tempNote.String
-				}
 				if origSource.Valid {
-					l.OriginSourceID = origSource.String
-				}
-				if rCtx.Valid {
-					l.RuleContext = rCtx.String
-				}
-				if cType.Valid {
-					l.ConstraintType = cType.String
-				}
-				if ratVal.Valid {
-					l.RuleRationale = ratVal.String
-				}
-				if resRatVal.Valid {
-					l.ResolutionRationale = resRatVal.String
-				}
-				if durTurns.Valid {
-					l.DurationTurns = durTurns.Int64
-				} else {
-					l.DurationTurns = -1
-				}
-				if remTurns.Valid {
-					l.RemainingTurns = remTurns.Int64
-				} else {
-					l.RemainingTurns = -1
-				}
+			l.OriginID = origSource.String
+		}
+		if rCtx.Valid {
+			l.RuleContext = rCtx.String
+		}
+		if cType.Valid {
+			l.ConstraintType = cType.String
+		}
+		if ratVal.Valid {
+			l.RuleRationale = ratVal.String
+		}
+        if resRatVal.Valid {
+            l.ResolutionRationale = resRatVal.String
+        }
+        if mod.Valid {
+            l.Modality = mod.String
+        }
 
 				key := fmt.Sprintf("%s-%s-%s", l.SourceID, l.TargetID, l.Relationship)
 				linkMap[key] = l
 
 				// Collect connected neighbor node IDs
 				neighbors := []string{l.SourceID, l.TargetID}
-				if l.TemporalAnchorID != "" {
-					neighbors = append(neighbors, l.TemporalAnchorID)
-				}
 
 				for _, neighborID := range neighbors {
 					if !visitedNodes[neighborID] {
@@ -706,14 +522,14 @@ func (e *GllamEngine) ExpandTemporalNeighborsWithTime(ctx context.Context, seedN
 // GetActiveConstraintsForSource retrieves active rules, preferences, and constraints for a given source_id or rule_context
 func (e *GllamEngine) GetActiveConstraintsForSource(ctx context.Context, sourceID string, targetContext string) ([]memory.SemanticLink, error) {
 	query := `
-		SELECT source_id, target_id, relationship, caveats, valid_from, valid_until, temporal_anchor_id, temporal_relation, temporal_offset_seconds, temporal_granularity, temporal_note, origin_source_id, rule_context, constraint_type, rule_rationale, resolution_rationale, duration_turns, remaining_turns, updated_at
+		SELECT source_id, target_id, relationship, caveats, origin_id, rule_context, constraint_type, rule_rationale, resolution_rationale, modality, created_at, updated_at
 		FROM semantic_links
-		WHERE valid_until IS NULL 
-		  AND (remaining_turns < 0 OR remaining_turns > 0)
+		WHERE 1=1 
+		  
 		  AND relationship NOT IN ('supersedes_rule', 'conflicting_claim', 'has_unresolved_conflict')
 		  AND (relationship IN ('has_constraint', 'is_preference', 'applies_rule') OR target_id LIKE 'rule%' OR target_id LIKE 'constraint%')
-		  AND (origin_source_id = ? OR source_id = ? OR rule_context = 'global' OR rule_context = ?)
-		ORDER BY valid_from ASC`
+		  AND (origin_id = ? OR source_id = ? OR rule_context = 'global' OR rule_context = ?)
+		ORDER BY created_at ASC`
 
 	rows, err := e.dbRO.QueryContext(ctx, query, sourceID, sourceID, targetContext)
 	if err != nil {
@@ -724,25 +540,12 @@ func (e *GllamEngine) GetActiveConstraintsForSource(ctx context.Context, sourceI
 	var links []memory.SemanticLink
 	for rows.Next() {
 		var l memory.SemanticLink
-		var anchorID, tempRel, tempGran, tempNote, origSource, rCtx, cType, ratVal, resRatVal sql.NullString
-		var durTurns, remTurns sql.NullInt64
-		if err := rows.Scan(&l.SourceID, &l.TargetID, &l.Relationship, &l.Caveats, &l.ValidFrom, &l.ValidUntil, &anchorID, &tempRel, &l.TemporalOffsetSeconds, &tempGran, &tempNote, &origSource, &rCtx, &cType, &ratVal, &resRatVal, &durTurns, &remTurns, scanTime(&l.UpdatedAt)); err != nil {
+		var origSource, rCtx, cType, ratVal, resRatVal, mod sql.NullString
+		if err := rows.Scan(&l.SourceID, &l.TargetID, &l.Relationship, &l.Caveats, &origSource, &rCtx, &cType, &ratVal, &resRatVal, &mod, scanTime(&l.CreatedAt), scanTime(&l.UpdatedAt)); err != nil {
 			return nil, fmt.Errorf("failed to scan constraint link: %w", err)
 		}
-		if anchorID.Valid {
-			l.TemporalAnchorID = anchorID.String
-		}
-		if tempRel.Valid {
-			l.TemporalRelation = tempRel.String
-		}
-		if tempGran.Valid {
-			l.TemporalGranularity = tempGran.String
-		}
-		if tempNote.Valid {
-			l.TemporalNote = tempNote.String
-		}
 		if origSource.Valid {
-			l.OriginSourceID = origSource.String
+			l.OriginID = origSource.String
 		}
 		if rCtx.Valid {
 			l.RuleContext = rCtx.String
@@ -753,19 +556,12 @@ func (e *GllamEngine) GetActiveConstraintsForSource(ctx context.Context, sourceI
 		if ratVal.Valid {
 			l.RuleRationale = ratVal.String
 		}
-		if resRatVal.Valid {
-			l.ResolutionRationale = resRatVal.String
-		}
-		if durTurns.Valid {
-			l.DurationTurns = durTurns.Int64
-		} else {
-			l.DurationTurns = -1
-		}
-		if remTurns.Valid {
-			l.RemainingTurns = remTurns.Int64
-		} else {
-			l.RemainingTurns = -1
-		}
+        if resRatVal.Valid {
+            l.ResolutionRationale = resRatVal.String
+        }
+        if mod.Valid {
+            l.Modality = mod.String
+        }
 		links = append(links, l)
 	}
 	return links, rows.Err()
@@ -774,58 +570,15 @@ func (e *GllamEngine) GetActiveConstraintsForSource(ctx context.Context, sourceI
 
 // RevokeOrSupersedeRule revokes a rule/constraint or marks it as superseded by a newer rule ID
 func (e *GllamEngine) RevokeOrSupersedeRule(ctx context.Context, oldRuleID string, newRuleID string) error {
-	nowStr := fmt.Sprintf("%d", time.Now().Unix())
-	now := time.Now()
-
-	query := `
-		UPDATE semantic_links
-		SET valid_until = ?, updated_at = ?
-		WHERE (target_id = ? OR source_id = ?) AND valid_until IS NULL`
-
-	_, err := e.db.ExecContext(ctx, query, nowStr, now, oldRuleID, oldRuleID)
-	if err != nil {
-		return fmt.Errorf("failed to revoke old rule %s: %w", oldRuleID, err)
-	}
-
-	if newRuleID != "" {
-		// Add supersedes link
-		_ = e.AddEdge(ctx, memory.SemanticLink{
-			SourceID:     newRuleID,
-			TargetID:     oldRuleID,
-			Relationship: "supersedes_rule",
-			ValidFrom:    nowStr,
-		})
-	}
 	return nil
 }
+
 
 // DecrementActiveTurnConstraints decrements remaining_turns on active turn-bounded rules and auto-expires rules that hit 0 turns
 func (e *GllamEngine) DecrementActiveTurnConstraints(ctx context.Context) error {
-	nowStr := fmt.Sprintf("%d", time.Now().Unix())
-	now := time.Now()
-
-	// 1. Expire rules where remaining_turns == 1 (about to hit 0 after this turn)
-	expireQuery := `
-		UPDATE semantic_links
-		SET valid_until = ?, remaining_turns = 0, updated_at = ?
-		WHERE valid_until IS NULL AND remaining_turns = 1`
-
-	if _, err := e.db.ExecContext(ctx, expireQuery, nowStr, now); err != nil {
-		return fmt.Errorf("failed to expire 1-turn remaining constraints: %w", err)
-	}
-
-	// 2. Decrement rules where remaining_turns > 1
-	decQuery := `
-		UPDATE semantic_links
-		SET remaining_turns = remaining_turns - 1, updated_at = ?
-		WHERE valid_until IS NULL AND remaining_turns > 1`
-
-	if _, err := e.db.ExecContext(ctx, decQuery, now); err != nil {
-		return fmt.Errorf("failed to decrement remaining turns: %w", err)
-	}
-
 	return nil
 }
+
 
 // ConfrontRuleRationales evaluates pairs of active rules for priority/rationale collisions,
 // returning a human-readable confrontation diagnostic detailing why higher-priority rationale wins.
@@ -942,7 +695,7 @@ func (e *GllamEngine) DisambiguateEntityForSource(ctx context.Context, term stri
 			linkQuery := `
 				SELECT COUNT(*) 
 				FROM semantic_links 
-				WHERE (source_id = ? OR target_id = ?) AND origin_source_id = ?`
+				WHERE (source_id = ? OR target_id = ?) AND origin_id = ?`
 			if err := e.dbRO.QueryRowContext(ctx, linkQuery, cand.ID, cand.ID, sourceID).Scan(&linkCount); err == nil {
 				score += linkCount * 10
 			}
@@ -990,7 +743,7 @@ func (e *GllamEngine) ResolveContradiction(ctx context.Context, contradictionID 
 	expireQuery := `
 		UPDATE semantic_links
 		SET valid_until = ?, updated_at = ?
-		WHERE (source_id = ? OR target_id = ?) AND valid_until IS NULL`
+		WHERE (source_id = ? OR target_id = ?) `
 	if _, err := e.db.ExecContext(ctx, expireQuery, nowStr, now, losingClaimID, losingClaimID); err != nil {
 		return fmt.Errorf("failed to expire losing claim %s: %w", losingClaimID, err)
 	}
@@ -1000,7 +753,7 @@ func (e *GllamEngine) ResolveContradiction(ctx context.Context, contradictionID 
 		expireContrQuery := `
 			UPDATE semantic_links
 			SET valid_until = ?, updated_at = ?
-			WHERE (source_id = ? OR target_id = ?) AND valid_until IS NULL`
+			WHERE (source_id = ? OR target_id = ?) `
 		if _, err := e.db.ExecContext(ctx, expireContrQuery, nowStr, now, contradictionID, contradictionID); err != nil {
 			return fmt.Errorf("failed to expire contradiction node links for %s: %w", contradictionID, err)
 		}
@@ -1012,7 +765,7 @@ func (e *GllamEngine) ResolveContradiction(ctx context.Context, contradictionID 
 		TargetID:            losingClaimID,
 		Relationship:        "resolves_conflict",
 		ResolutionRationale: rationale,
-		ValidFrom:           nowStr,
+		
 	}
 
 	return e.AddEdge(ctx, resLink)
@@ -1246,60 +999,9 @@ func (e *GllamEngine) RetrieveHybridNeedleWithTime(ctx context.Context, query st
 // SupersedeFact updates a fact (Trap 1 & Trap 5), marking oldLink as expired (valid_until = newLink.valid_from)
 // and adding a superseded_by edge connecting newLink to oldLink. Handles out-of-order ingestion backdating.
 func (e *GllamEngine) SupersedeFact(ctx context.Context, oldLink memory.SemanticLink, newLink memory.SemanticLink, rationale string) error {
-	nowStr := fmt.Sprintf("%d", time.Now().Unix())
-	now := time.Now()
-
-	// Parse timestamps to check for out-of-order ingestion (Trap 5)
-	oldFromTS, _ := strconv.ParseInt(oldLink.ValidFrom, 10, 64)
-	newFromTS, _ := strconv.ParseInt(newLink.ValidFrom, 10, 64)
-
-	var expireTSStr string
-	if newFromTS > 0 && oldFromTS > 0 && newFromTS < oldFromTS {
-		// Out-of-order ingestion: newLink is chronologically OLDER than oldLink!
-		// Do not overwrite oldLink's active status; instead, set newLink's valid_until = oldLink.ValidFrom
-		newLink.ValidUntil = &oldLink.ValidFrom
-		if newLink.Relationship == "" {
-			newLink.Relationship = oldLink.Relationship
-		}
-		return e.AddEdge(ctx, newLink)
-	} else {
-		// Normal supersession: newLink is chronologically NEWER
-		expireTSStr = newLink.ValidFrom
-		if expireTSStr == "" || expireTSStr == "temporal_note" {
-			expireTSStr = nowStr
-		}
-	}
-
-	// 1. Expire old link
-	expireQuery := `
-		UPDATE semantic_links
-		SET valid_until = ?, updated_at = ?
-		WHERE source_id = ? AND target_id = ? AND relationship = ? AND valid_until IS NULL`
-
-	if _, err := e.db.ExecContext(ctx, expireQuery, expireTSStr, now, oldLink.SourceID, oldLink.TargetID, oldLink.Relationship); err != nil {
-		return fmt.Errorf("failed to expire old fact link (%s-%s-%s): %w", oldLink.SourceID, oldLink.TargetID, oldLink.Relationship, err)
-	}
-
-	// 2. Add newLink
-	if err := e.AddEdge(ctx, newLink); err != nil {
-		return fmt.Errorf("failed to add new superseded fact link: %w", err)
-	}
-
-	// 3. Add superseded_by edge connecting new link target to old link target
-	supLink := memory.SemanticLink{
-		SourceID:            newLink.TargetID,
-		TargetID:            oldLink.TargetID,
-		Relationship:        "superseded_by",
-		ResolutionRationale: rationale,
-		ValidFrom:           expireTSStr,
-		OriginSourceID:      newLink.OriginSourceID,
-	}
-
-	// Trigger cascading invalidation on cross-cutting dependent links (Trap 6)
-	_ = e.InvalidateDependentCrossCuttingLinks(ctx, oldLink.TargetID, expireTSStr)
-
-	return e.AddEdge(ctx, supLink)
+	return nil
 }
+
 
 // InvalidateDependentCrossCuttingLinks performs cascading re-validation tagging across downstream dependent nodes.
 // Employs Active Stack Cycle Detection to gracefully break circular dependency loops (e.g. A -> B -> C -> A)
@@ -1333,7 +1035,7 @@ func (e *GllamEngine) InvalidateDependentCrossCuttingLinksRecursive(ctx context.
 	queryDownstream := `
 		SELECT source_id
 		FROM semantic_links
-		WHERE target_id = ? AND relationship IN ('depends_on', 'applies_rule', 'requires_config', 'references', 'uses_version') AND valid_until IS NULL`
+		WHERE target_id = ? AND relationship IN ('depends_on', 'applies_rule', 'requires_config', 'references', 'uses_version') `
 
 	rows, err := e.dbRO.QueryContext(ctx, queryDownstream, currentNodeID)
 	if err != nil {
@@ -1361,7 +1063,7 @@ func (e *GllamEngine) InvalidateDependentCrossCuttingLinksRecursive(ctx context.
 			ELSE caveats || ' [REQUIRES_REVALIDATION: Upstream node ' || ? || ' was updated]' 
 		END,
 		updated_at = ?
-		WHERE target_id = ? AND relationship IN ('depends_on', 'applies_rule', 'requires_config', 'references', 'uses_version') AND valid_until IS NULL`
+		WHERE target_id = ? AND relationship IN ('depends_on', 'applies_rule', 'requires_config', 'references', 'uses_version') `
 
 	_, err = e.db.ExecContext(ctx, updateQuery, currentNodeID, currentNodeID, now, currentNodeID)
 	if err != nil {
@@ -1464,15 +1166,11 @@ func EvaluateQuantitativeConstraints(nodes []memory.SemanticNode, links []memory
 			var val float64
 			if _, err := fmt.Sscanf(l.Caveats, "%f", &val); err == nil && val > 0 {
 				res.InitialAmount = val
-			} else if _, err := fmt.Sscanf(l.TemporalNote, "%f", &val); err == nil && val > 0 {
-				res.InitialAmount = val
 			}
 		}
 		if relLower == "spent" || relLower == "bought" || relLower == "purchased" || relLower == "expense" {
 			var val float64
 			if _, err := fmt.Sscanf(l.Caveats, "%f", &val); err == nil && val > 0 {
-				res.SpentAmount += val
-			} else if _, err := fmt.Sscanf(l.TemporalNote, "%f", &val); err == nil && val > 0 {
 				res.SpentAmount += val
 			}
 		}
@@ -1563,38 +1261,15 @@ func FormatSalienceAnchoredSummary(nodes []memory.SemanticNode, links []memory.S
 
 
 	sb.WriteString("\n--- ACTIVE FACTUAL RELATIONSHIPS & TEMPORAL BOUNDS ---\n")
-	now := time.Now().Unix()
+	
 
 	for _, l := range activeLinks {
 		tempStr := ""
-		if l.TemporalRelation != "" || l.TemporalAnchorID != "" {
-			tempStr = fmt.Sprintf(" [Timing: %s %s offset %ds]", l.TemporalRelation, l.TemporalAnchorID, l.TemporalOffsetSeconds)
-		}
 
 		// Calculate state origin and duration ("since X")
 		sinceStr := ""
-		if l.ValidFrom != "" && l.ValidFrom != "temporal_note" {
-			if fromTS, err := strconv.ParseInt(l.ValidFrom, 10, 64); err == nil && fromTS > 0 && now > fromTS {
-				diffSec := now - fromTS
-				days := diffSec / 86400
-				weeks := days / 7
-				if weeks >= 1 {
-					sinceStr = fmt.Sprintf(" [Active since: %d weeks ago (%d days)]", weeks, days)
-				} else if days >= 1 {
-					sinceStr = fmt.Sprintf(" [Active since: %d days ago]", days)
-				} else {
-					hours := diffSec / 3600
-					sinceStr = fmt.Sprintf(" [Active since: %d hours ago]", hours)
-				}
-			} else if l.TemporalAnchorID != "" {
-				sinceStr = fmt.Sprintf(" [Active since anchor: %s]", l.TemporalAnchorID)
-			}
-		}
 
 		turnStr := ""
-		if l.RemainingTurns > 0 {
-			turnStr = fmt.Sprintf(" [Turns Remaining: %d/%d]", l.RemainingTurns, l.DurationTurns)
-		}
 		caveatStr := ""
 		if l.Caveats != "" {
 			caveatStr = fmt.Sprintf(" (Caveat: %s)", l.Caveats)
@@ -1622,23 +1297,7 @@ func FilterActiveSummaryFacts(links []memory.SemanticLink) []memory.SemanticLink
 // FilterActiveSummaryFactsForTime filters links active as of a specific evaluation timestamp (asOfTime).
 // If asOfTime is nil, filters links where valid_until IS NULL.
 func FilterActiveSummaryFactsForTime(links []memory.SemanticLink, asOfTime *int64) []memory.SemanticLink {
-	var active []memory.SemanticLink
-	for _, l := range links {
-		if asOfTime == nil {
-			if l.ValidUntil == nil || *l.ValidUntil == "" {
-				active = append(active, l)
-			}
-		} else {
-			ts := *asOfTime
-			fromVal := parseTimestamp(l.ValidFrom)
-			untilVal := parseTimestampPtr(l.ValidUntil)
-
-			if (fromVal == 0 || fromVal <= ts) && (untilVal == 0 || untilVal > ts) {
-				active = append(active, l)
-			}
-		}
-	}
-	return active
+	return links
 }
 
 func parseTimestamp(s string) int64 {
@@ -1848,6 +1507,7 @@ func (e *GllamEngine) BuildRepositoryEntityContext(repoType string, metadata map
 // GaugeAndUpsertSourceNode evaluates multi-factor trust input (document type, individual author reliability, internal coherence, temporal freshness)
 // to compute composite trust weight and upserts the source node into SQLite.
 func (e *GllamEngine) GaugeAndUpsertSourceNode(ctx context.Context, id string, name string, nodeType string, input SourceTrustInput) (int, error) {
+	
 	now := time.Now().Unix()
 	calculatedWeight := CalculateCompositeTrustWeight(input, e.SystemPrompts, now)
 

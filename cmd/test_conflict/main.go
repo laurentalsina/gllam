@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"time"
 
 	"github.com/laurentalsina/gllam/pkg/engine"
 	"github.com/laurentalsina/gllam/pkg/memory"
@@ -22,8 +21,6 @@ func main() {
 	}
 	defer gllam.Close()
 
-	now := time.Now().Unix()
-
 	// Insert nodes
 	nodes := []memory.SemanticNode{
 		{ID: "state-active", Name: "active_state", Type: "state"},
@@ -35,15 +32,12 @@ func main() {
 		_ = gllam.StoreNodeEmbedding(ctx, n.ID)
 	}
 
-	nowStr := fmt.Sprintf("%d", now)
-
 	// Insert conflicting edges
 	// Edge 1
 	_ = gllam.AddEdge(ctx, memory.SemanticLink{
 		SourceID:     "pkg-react",
 		TargetID:     "state-active",
 		Relationship: "has_state",
-		ValidFrom:    nowStr,
 	})
 
 	// Edge 2 (triggers conflict)
@@ -51,9 +45,7 @@ func main() {
 		SourceID:     "pkg-react",
 		TargetID:     "state-deprecated",
 		Relationship: "has_state",
-		ValidFrom:    nowStr,
 	})
-
 
 	fmt.Println("Inserted conflicting edges successfully.")
 }

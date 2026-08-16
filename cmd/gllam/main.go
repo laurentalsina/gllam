@@ -166,9 +166,7 @@ func seedSampleData(ctx context.Context, gllam *engine.GllamEngine) {
         TargetID:     "tailscale",
         Relationship: "binds_to",
         Caveats:      "Must use Tailscale FQDN (e.g., caddy.tailnet.ts.net)",
-        ValidFrom:    fmt.Sprintf("%d", time.Now().Unix()),
         UpdatedAt:    time.Now(),
-
     }
     gllam.AddEdge(ctx, bindLink)
 

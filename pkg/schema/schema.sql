@@ -24,6 +24,7 @@ CREATE TABLE IF NOT EXISTS procedural_knowledge (
     is_highly_helpful BOOLEAN DEFAULT 0,  -- Explicitly flagged as golden standard
     version INTEGER DEFAULT 1,
     superseded_by TEXT,                   -- Self-reference to newer procedural ID
+    created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL    -- RFC3339 timestamp
 );
 
@@ -36,7 +37,9 @@ CREATE TABLE IF NOT EXISTS semantic_nodes (
     trust_weight INTEGER DEFAULT 100,
     taxonomy_path TEXT DEFAULT '/',        -- Materialized path (e.g. /Engineering/Infrastructure/Databases/Relational/Postgres)
     is_category INTEGER DEFAULT 0,         -- Boolean flag indicating if node is a taxonomy category
-    caveat_summary TEXT                    -- Compacted historical node caveat summary string
+    caveat_summary TEXT,                   -- Compacted historical node caveat summary string
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_semantic_nodes_id ON semantic_nodes(id);
@@ -60,7 +63,7 @@ CREATE TABLE IF NOT EXISTS semantic_links (
     PRIMARY KEY (source_id, target_id, relationship),
     FOREIGN KEY (source_id) REFERENCES semantic_nodes(id),
     FOREIGN KEY (target_id) REFERENCES semantic_nodes(id),
-    FOREIGN KEY (origin_source_id) REFERENCES semantic_nodes(id)
+    FOREIGN KEY (origin_id) REFERENCES semantic_nodes(id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_semantic_links_target ON semantic_links(target_id);

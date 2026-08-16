@@ -67,7 +67,7 @@ func (e *GllamEngine) ProcessUncategorizedBatch(ctx context.Context, batchSize i
 			TargetID:     catID,
 			Relationship: "is_a",
 			Caveats:      "Taxonomy categorization",
-			ValidFrom:    fmt.Sprintf("%d", time.Now().Unix()),
+			
 		}
 		if err := e.AddEdge(ctx, isALink); err != nil {
 			log.Printf("Failed to add is_a link for node %s -> %s: %v", n.ID, catID, err)
