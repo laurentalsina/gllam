@@ -85,7 +85,7 @@ func main() {
 				ID:          sessionID,
 				SessionID:   sessionID,
 				SummaryText: currentSession.String(),
-				CreatedAt:   time.Now().Unix() + int64(sessionIdx), // sequential timestamps
+				CreatedAt:   time.Now().Add(time.Duration(sessionIdx) * time.Second), // sequential timestamps
 			}
 
 			if err := gllam.SaveEpisodicSummary(ctx, summary); err != nil {

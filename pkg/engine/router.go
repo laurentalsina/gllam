@@ -170,7 +170,7 @@ func (e *GllamEngine) RouteAndAssemble(ctx context.Context, userPrompt string, e
             if err == nil {
                 for rows.Next() {
                     var ep memory.EpisodicSummary
-                    if err := rows.Scan(&ep.ID, &ep.SessionID, &ep.SummaryText, &ep.CreatedAt); err == nil {
+                    if err := rows.Scan(&ep.ID, &ep.SessionID, &ep.SummaryText, scanTime(&ep.CreatedAt)); err == nil {
                         isDup := false
                         for _, existing := range episodes {
                             if existing.ID == ep.ID {
@@ -394,7 +394,7 @@ func FormatSystemPrompt(ctx *memory.CompiledContext) string {
     if len(ctx.Episodic) > 0 {
         sb.WriteString("## Recent Episodes\n\n")
         for _, ep := range ctx.Episodic {
-            sb.WriteString(fmt.Sprintf("- [%s] %s\n", formatTimestamp(ep.CreatedAt), ep.SummaryText))
+            sb.WriteString(fmt.Sprintf("- [%s] %s\n", ep.CreatedAt.Format(time.RFC3339), ep.SummaryText))
         }
         sb.WriteString("\n")
     }
@@ -516,10 +516,4 @@ func FormatUnsolvableDiagnostic(goalPredicate string, links []memory.SemanticLin
 	}
 
 	return fmt.Sprintf("⚠️ TIMELINE UNPROVABLE: Goal predicate %s could not be verified by the planning engine.", goalPredicate)
-}
-
-
-// formatTimestamp converts a Unix timestamp to a readable format
-func formatTimestamp(ts int64) string {
-    return fmt.Sprintf("%d", ts)
 }

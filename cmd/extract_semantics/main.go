@@ -244,7 +244,7 @@ func main() {
 		}
 		chunk := chunks[cIdx]
 
-		userPrompt := fmt.Sprintf("Conversation Episode [1 / %d] (Session ID: %s | Created At: %d):\nTranscript Chunk (%d/%d):\n%s\n\nExtract semantic nodes and links:", len(episodes), ep.ID, ep.CreatedAt, cIdx+1, len(chunks), chunk.Text)
+		userPrompt := fmt.Sprintf("Conversation Episode [1 / %d] (Session ID: %s | Created At: %s):\nTranscript Chunk (%d/%d):\n%s\n\nExtract semantic nodes and links:", len(episodes), ep.ID, ep.CreatedAt.Format(time.RFC3339), cIdx+1, len(chunks), chunk.Text)
 
 		fmt.Println("================================================================================")
 		fmt.Printf("🔬 TRIAL EXTRACTION MODE (Model: %s)\n", llmClient.Model)
@@ -340,7 +340,7 @@ func main() {
 					continue
 				}
 
-				userPrompt := fmt.Sprintf("Conversation Episode [%d / %d] (Session ID: %s | Created At: %d):\nTranscript Chunk (%d/%d):\n%s\n\nExtract JSON:", index+1, len(episodes), episode.ID, episode.CreatedAt, cIdx+1, len(chunks), chunk.Text)
+				userPrompt := fmt.Sprintf("Conversation Episode [%d / %d] (Session ID: %s | Created At: %s):\nTranscript Chunk (%d/%d):\n%s\n\nExtract JSON:", index+1, len(episodes), episode.ID, episode.CreatedAt.Format(time.RFC3339), cIdx+1, len(chunks), chunk.Text)
 				var response string
 				var err error
 				llmStart := time.Now()
@@ -429,7 +429,7 @@ func main() {
 						continue
 					}
 					if link.ValidFrom == "" {
-						link.ValidFrom = fmt.Sprintf("%d", episode.CreatedAt)
+						link.ValidFrom = fmt.Sprintf("%d", episode.CreatedAt.Unix())
 					}
 
 					if err := gllam.AddEdge(ctx, link); err != nil {

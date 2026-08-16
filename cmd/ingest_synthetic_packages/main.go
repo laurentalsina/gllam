@@ -30,7 +30,8 @@ func main() {
 
 	fmt.Println("Ingesting Synthetic Software Package Dataset...")
 
-	now := time.Now().Unix()
+	nowTime := time.Now()
+	nowStr := fmt.Sprintf("%d", nowTime.Unix())
 
 	// 1. Define Nodes
 	nodes := []memory.SemanticNode{
@@ -61,40 +62,38 @@ func main() {
 		}
 	}
 
-	nowStr := fmt.Sprintf("%d", now)
-
 	// 2. Define Links
 	links := []memory.SemanticLink{
 		// Release to Package mapping
-		{SourceID: "rel-react-18.0.0", TargetID: "pkg-react", Relationship: "is_release_of", ValidFrom: nowStr, UpdatedAt: now},
-		{SourceID: "rel-react-17.0.2", TargetID: "pkg-react", Relationship: "is_release_of", ValidFrom: nowStr, UpdatedAt: now},
+		{SourceID: "rel-react-18.0.0", TargetID: "pkg-react", Relationship: "is_release_of", ValidFrom: nowStr, UpdatedAt: nowTime},
+		{SourceID: "rel-react-17.0.2", TargetID: "pkg-react", Relationship: "is_release_of", ValidFrom: nowStr, UpdatedAt: nowTime},
 		
 		// Dependencies for React 18.0.0
 		{
 			SourceID: "rel-react-18.0.0", TargetID: "rel-loose-envify-1.4.0", 
 			Relationship: "depends_on", Caveats: "Required for production builds", 
-			ValidFrom: nowStr, UpdatedAt: now,
+			ValidFrom: nowStr, UpdatedAt: nowTime,
 		},
 		
 		// Dependencies for React 17.0.2
 		{
 			SourceID: "rel-react-17.0.2", TargetID: "rel-loose-envify-1.3.1", 
 			Relationship: "depends_on", Caveats: "Required for production builds", 
-			ValidFrom: nowStr, UpdatedAt: now,
+			ValidFrom: nowStr, UpdatedAt: nowTime,
 		},
 
 		// Features
 		{
 			SourceID: "rel-react-18.0.0", TargetID: "feat-concurrent", 
 			Relationship: "introduces_feature", Caveats: "Requires opt-in via createRoot API", 
-			ValidFrom: nowStr, UpdatedAt: now,
+			ValidFrom: nowStr, UpdatedAt: nowTime,
 		},
 
 		// Vulnerabilities
 		{
 			SourceID: "cve-2023-12345", TargetID: "rel-loose-envify-1.4.0", 
 			Relationship: "affects", Caveats: "Critical RCE if parsing untrusted environment variables. Fixed in 1.4.1", 
-			ValidFrom: nowStr, UpdatedAt: now,
+			ValidFrom: nowStr, UpdatedAt: nowTime,
 		},
 	}
 

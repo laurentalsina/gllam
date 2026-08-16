@@ -87,7 +87,7 @@ func main() {
 			ID:          s.SessionID,
 			SessionID:   s.SessionID,
 			SummaryText: transcriptBuilder.String(),
-			CreatedAt:   time.Now().Unix(),
+			CreatedAt:   time.Now(),
 		}
 
 		if err := gllam.SaveEpisodicSummary(ctx, summary); err != nil {

@@ -7,7 +7,7 @@ CREATE TABLE IF NOT EXISTS episodic_summaries (
     id TEXT PRIMARY KEY,
     session_id TEXT NOT NULL,
     summary_text TEXT NOT NULL,
-    created_at INTEGER NOT NULL -- Unix timestamp
+    created_at TEXT NOT NULL    -- RFC3339 timestamp
 );
 
 CREATE INDEX IF NOT EXISTS idx_episodic_created ON episodic_summaries(created_at DESC);
@@ -24,7 +24,7 @@ CREATE TABLE IF NOT EXISTS procedural_knowledge (
     is_highly_helpful BOOLEAN DEFAULT 0,  -- Explicitly flagged as golden standard
     version INTEGER DEFAULT 1,
     superseded_by TEXT,                   -- Self-reference to newer procedural ID
-    updated_at INTEGER NOT NULL
+    updated_at TEXT NOT NULL    -- RFC3339 timestamp
 );
 
 -- 3. SEMANTIC NODES (Grounded entities & taxonomy categories)
@@ -66,7 +66,7 @@ CREATE TABLE IF NOT EXISTS semantic_links (
     resolution_rationale TEXT,            -- Explanation when resolving a contradiction
     duration_turns INTEGER DEFAULT -1,    -- -1 for infinite, N for N-turn bound constraints
     remaining_turns INTEGER DEFAULT -1,   -- Remaining turns before automatic expiration
-    updated_at INTEGER NOT NULL,
+    updated_at TEXT NOT NULL,   -- RFC3339 timestamp
 
 
 
@@ -94,7 +94,7 @@ CREATE TABLE IF NOT EXISTS document_lineage (
     line_number INTEGER DEFAULT 0,
     char_offset INTEGER DEFAULT 0,
     checksum TEXT,
-    created_at INTEGER NOT NULL,
+    created_at TEXT NOT NULL,   -- RFC3339 timestamp
     FOREIGN KEY (node_id) REFERENCES semantic_nodes(id) ON DELETE CASCADE
 );
 
@@ -112,7 +112,7 @@ CREATE TABLE IF NOT EXISTS document_versions (
     start_line INTEGER DEFAULT 0,
     end_line INTEGER DEFAULT 0,
     char_offset INTEGER DEFAULT 0,
-    created_at INTEGER NOT NULL,
+    created_at TEXT NOT NULL,   -- RFC3339 timestamp
     FOREIGN KEY (lineage_id) REFERENCES document_lineage(id) ON DELETE CASCADE
 );
 

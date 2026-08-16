@@ -112,7 +112,7 @@ func main() {
 						Relationship: "supports_format",
 						Caveats:      fmt.Sprintf("Format variant: %s", f),
 						ValidFrom:    fmt.Sprintf("%d", time.Now().Unix()),
-						UpdatedAt:    time.Now().Unix(),
+						UpdatedAt:    time.Now(),
 
 					}
 					if err := gllam.AddEdge(ctx, link); err != nil {

@@ -1,5 +1,7 @@
 package memory
 
+import "time"
+
 const (
 	NodeTypeEvent         = "event"
 	NodeTypeState         = "state"
@@ -22,7 +24,7 @@ type EpisodicSummary struct {
     ID          string `json:"id"`
     SessionID   string `json:"session_id"`
     SummaryText string `json:"summary_text"`
-    CreatedAt   int64  `json:"created_at"`
+    CreatedAt   time.Time `json:"created_at"`
 }
 
 type ProceduralKnowledge struct {
@@ -36,7 +38,7 @@ type ProceduralKnowledge struct {
     IsHighlyHelpful   bool   `json:"is_highly_helpful"`
     Version           int    `json:"version"`
     SupersededBy      string `json:"superseded_by"`
-    UpdatedAt         int64  `json:"updated_at"`
+    UpdatedAt         time.Time `json:"updated_at"`
 }
 
 type SemanticNode struct {
@@ -81,7 +83,7 @@ type SemanticLink struct {
     ResolutionRationale   string  `json:"resolution_rationale"`    // Explanation when resolving a contradiction
     DurationTurns         int64   `json:"duration_turns"`          // -1 for infinite, N for turn-bounded rules
     RemainingTurns        int64   `json:"remaining_turns"`         // Remaining turns before auto-expiration
-    UpdatedAt             int64   `json:"updated_at"`
+    UpdatedAt             time.Time `json:"updated_at"`
 
 
 
@@ -100,7 +102,7 @@ type DocumentVersion struct {
 	StartLine     int    `json:"start_line,omitempty"`
 	EndLine       int    `json:"end_line,omitempty"`
 	CharOffset    int    `json:"char_offset,omitempty"`
-	CreatedAt     int64  `json:"created_at"`
+	CreatedAt     time.Time `json:"created_at"`
 }
 
 type CompactedRevisionEpoch struct {
@@ -123,7 +125,7 @@ type DocumentLineage struct {
 	Authors          []string                 `json:"authors,omitempty"`
 	Versions         []DocumentVersion        `json:"versions,omitempty"`
 	RevisionEpochs   []CompactedRevisionEpoch `json:"revision_epochs,omitempty"`
-	CreatedAt        int64                    `json:"created_at"`
+	CreatedAt        time.Time                `json:"created_at"`
 }
 
 

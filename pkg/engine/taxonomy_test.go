@@ -163,7 +163,7 @@ func TestAutonomousOntologicalLayer(t *testing.T) {
 		TimesApplied:      5,
 		IsHighlyHelpful:   true,
 		Version:           1,
-		UpdatedAt:         time.Now().Unix(),
+		UpdatedAt:         time.Now(),
 	}
 	if err := gllam.UpsertProceduralKnowledge(ctx, dbProcedure); err != nil {
 		t.Fatalf("Failed to upsert procedural knowledge: %v", err)

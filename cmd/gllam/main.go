@@ -150,7 +150,7 @@ func seedSampleData(ctx context.Context, gllam *engine.GllamEngine) {
         TimesApplied:      3,
         IsHighlyHelpful:   true,
         Version:           1,
-        UpdatedAt:         time.Now().Unix(),
+        UpdatedAt:         time.Now(),
     }
     gllam.UpsertProceduralKnowledge(ctx, caddyProcedure)
 
@@ -167,7 +167,7 @@ func seedSampleData(ctx context.Context, gllam *engine.GllamEngine) {
         Relationship: "binds_to",
         Caveats:      "Must use Tailscale FQDN (e.g., caddy.tailnet.ts.net)",
         ValidFrom:    fmt.Sprintf("%d", time.Now().Unix()),
-        UpdatedAt:    time.Now().Unix(),
+        UpdatedAt:    time.Now(),
 
     }
     gllam.AddEdge(ctx, bindLink)
@@ -177,7 +177,7 @@ func seedSampleData(ctx context.Context, gllam *engine.GllamEngine) {
         ID:          "session-001",
         SessionID:   "2024-07-20-morning",
         SummaryText: "Deployed Caddy reverse proxy with Tailscale integration for secure internal access",
-        CreatedAt:   time.Now().Unix(),
+        CreatedAt:   time.Now(),
     }
     gllam.SaveEpisodicSummary(ctx, summary)
 }

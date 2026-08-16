@@ -183,12 +183,12 @@ func (e *GllamEngine) AddEdge(ctx context.Context, link memory.SemanticLink) err
 
 
     // Default valid_from if unassigned
-    now := time.Now().Unix()
+    nowTime := time.Now()
     if link.ValidFrom == "" {
         if link.TemporalNote != "" {
             link.ValidFrom = "temporal_note"
         } else {
-            link.ValidFrom = fmt.Sprintf("%d", now)
+            link.ValidFrom = fmt.Sprintf("%d", nowTime.Unix())
         }
     }
 
@@ -271,7 +271,7 @@ func (e *GllamEngine) AddEdge(ctx context.Context, link memory.SemanticLink) err
 
     _, err = e.db.ExecContext(ctx, insertQuery,
         link.SourceID, link.TargetID, link.Relationship, link.Caveats,
-        link.ValidFrom, link.ValidUntil, anchorID, tempRel, link.TemporalOffsetSeconds, gran, tempNote, origSource, ruleCtx, cType, rationaleVal, resRationaleVal, durTurns, remTurns, now)
+        link.ValidFrom, link.ValidUntil, anchorID, tempRel, link.TemporalOffsetSeconds, gran, tempNote, origSource, ruleCtx, cType, rationaleVal, resRationaleVal, durTurns, remTurns, nowTime)
 
 
 
@@ -310,7 +310,7 @@ func (e *GllamEngine) InvalidateObsoleteEdgeWithAnchor(ctx context.Context, sour
 		    updated_at = ?
 		WHERE source_id = ? AND relationship = ? AND (target_id != ? OR ? = '') AND valid_until IS NULL`
 
-	now := time.Now().Unix()
+	now := time.Now()
 	_, err := e.db.ExecContext(ctx, query, validUntil, anchorID, anchorID, tempNote, now, sourceID, relationship, targetID, targetID)
 	if err != nil {
 		return fmt.Errorf("failed to invalidate obsolete edge: %w", err)
@@ -457,7 +457,7 @@ func (e *GllamEngine) GetActiveLinksAtTime(ctx context.Context, timestamp int64)
         var l memory.SemanticLink
         var anchorID, tempRel, tempGran, tempNote, origSource, rCtx, cType, ratVal, resRatVal sql.NullString
         var durTurns, remTurns sql.NullInt64
-        if err := rows.Scan(&l.SourceID, &l.TargetID, &l.Relationship, &l.Caveats, &l.ValidFrom, &l.ValidUntil, &anchorID, &tempRel, &l.TemporalOffsetSeconds, &tempGran, &tempNote, &origSource, &rCtx, &cType, &ratVal, &resRatVal, &durTurns, &remTurns, &l.UpdatedAt); err != nil {
+        if err := rows.Scan(&l.SourceID, &l.TargetID, &l.Relationship, &l.Caveats, &l.ValidFrom, &l.ValidUntil, &anchorID, &tempRel, &l.TemporalOffsetSeconds, &tempGran, &tempNote, &origSource, &rCtx, &cType, &ratVal, &resRatVal, &durTurns, &remTurns, scanTime(&l.UpdatedAt)); err != nil {
             return nil, fmt.Errorf("failed to scan link: %w", err)
         }
         if anchorID.Valid {
@@ -613,7 +613,7 @@ func (e *GllamEngine) ExpandTemporalNeighborsWithTime(ctx context.Context, seedN
 				var l memory.SemanticLink
 				var anchorID, tempRel, tempGran, tempNote, origSource, rCtx, cType, ratVal, resRatVal sql.NullString
 				var durTurns, remTurns sql.NullInt64
-				if err := rows.Scan(&l.SourceID, &l.TargetID, &l.Relationship, &l.Caveats, &l.ValidFrom, &l.ValidUntil, &anchorID, &tempRel, &l.TemporalOffsetSeconds, &tempGran, &tempNote, &origSource, &rCtx, &cType, &ratVal, &resRatVal, &durTurns, &remTurns, &l.UpdatedAt); err != nil {
+				if err := rows.Scan(&l.SourceID, &l.TargetID, &l.Relationship, &l.Caveats, &l.ValidFrom, &l.ValidUntil, &anchorID, &tempRel, &l.TemporalOffsetSeconds, &tempGran, &tempNote, &origSource, &rCtx, &cType, &ratVal, &resRatVal, &durTurns, &remTurns, scanTime(&l.UpdatedAt)); err != nil {
 					continue
 				}
 				if anchorID.Valid {
@@ -726,7 +726,7 @@ func (e *GllamEngine) GetActiveConstraintsForSource(ctx context.Context, sourceI
 		var l memory.SemanticLink
 		var anchorID, tempRel, tempGran, tempNote, origSource, rCtx, cType, ratVal, resRatVal sql.NullString
 		var durTurns, remTurns sql.NullInt64
-		if err := rows.Scan(&l.SourceID, &l.TargetID, &l.Relationship, &l.Caveats, &l.ValidFrom, &l.ValidUntil, &anchorID, &tempRel, &l.TemporalOffsetSeconds, &tempGran, &tempNote, &origSource, &rCtx, &cType, &ratVal, &resRatVal, &durTurns, &remTurns, &l.UpdatedAt); err != nil {
+		if err := rows.Scan(&l.SourceID, &l.TargetID, &l.Relationship, &l.Caveats, &l.ValidFrom, &l.ValidUntil, &anchorID, &tempRel, &l.TemporalOffsetSeconds, &tempGran, &tempNote, &origSource, &rCtx, &cType, &ratVal, &resRatVal, &durTurns, &remTurns, scanTime(&l.UpdatedAt)); err != nil {
 			return nil, fmt.Errorf("failed to scan constraint link: %w", err)
 		}
 		if anchorID.Valid {
@@ -775,7 +775,7 @@ func (e *GllamEngine) GetActiveConstraintsForSource(ctx context.Context, sourceI
 // RevokeOrSupersedeRule revokes a rule/constraint or marks it as superseded by a newer rule ID
 func (e *GllamEngine) RevokeOrSupersedeRule(ctx context.Context, oldRuleID string, newRuleID string) error {
 	nowStr := fmt.Sprintf("%d", time.Now().Unix())
-	now := time.Now().Unix()
+	now := time.Now()
 
 	query := `
 		UPDATE semantic_links
@@ -802,7 +802,7 @@ func (e *GllamEngine) RevokeOrSupersedeRule(ctx context.Context, oldRuleID strin
 // DecrementActiveTurnConstraints decrements remaining_turns on active turn-bounded rules and auto-expires rules that hit 0 turns
 func (e *GllamEngine) DecrementActiveTurnConstraints(ctx context.Context) error {
 	nowStr := fmt.Sprintf("%d", time.Now().Unix())
-	now := time.Now().Unix()
+	now := time.Now()
 
 	// 1. Expire rules where remaining_turns == 1 (about to hit 0 after this turn)
 	expireQuery := `
@@ -984,7 +984,7 @@ func (e *GllamEngine) DisambiguateEntityForSource(ctx context.Context, term stri
 // marking losingClaimID as expired (valid_until = now) and inserting a resolves_conflict edge.
 func (e *GllamEngine) ResolveContradiction(ctx context.Context, contradictionID string, winningClaimID string, losingClaimID string, rationale string) error {
 	nowStr := fmt.Sprintf("%d", time.Now().Unix())
-	now := time.Now().Unix()
+	now := time.Now()
 
 	// 1. Expire losing claim links
 	expireQuery := `
@@ -1247,7 +1247,7 @@ func (e *GllamEngine) RetrieveHybridNeedleWithTime(ctx context.Context, query st
 // and adding a superseded_by edge connecting newLink to oldLink. Handles out-of-order ingestion backdating.
 func (e *GllamEngine) SupersedeFact(ctx context.Context, oldLink memory.SemanticLink, newLink memory.SemanticLink, rationale string) error {
 	nowStr := fmt.Sprintf("%d", time.Now().Unix())
-	now := time.Now().Unix()
+	now := time.Now()
 
 	// Parse timestamps to check for out-of-order ingestion (Trap 5)
 	oldFromTS, _ := strconv.ParseInt(oldLink.ValidFrom, 10, 64)
@@ -1327,7 +1327,7 @@ func (e *GllamEngine) InvalidateDependentCrossCuttingLinksRecursive(ctx context.
 		delete(activeStack, currentNodeID) // Unmark when exiting branch
 	}()
 
-	now := time.Now().Unix()
+	now := time.Now()
 
 	// Query downstream nodes connected to currentNodeID as target_id
 	queryDownstream := `
@@ -1673,7 +1673,7 @@ func PreserveGlobalDirectives(links []memory.SemanticLink) string {
 
 // ExtractProceduralWorkflow detects repeated operational step patterns and persists a reusable procedural recipe (Trap 3).
 func (e *GllamEngine) ExtractProceduralWorkflow(ctx context.Context, name string, triggerContext string, instructions string, feedbackRules string) error {
-	now := time.Now().Unix()
+	now := time.Now()
 	taskType := strings.ToLower(strings.ReplaceAll(name, " ", "_"))
 	query := `
 		INSERT INTO procedural_knowledge (id, task_type, scope, trigger_context, instructions, user_feedback_rules, times_applied, is_highly_helpful, version, updated_at)
@@ -1907,12 +1907,12 @@ func (e *GllamEngine) AttributeContainerEntryToSource(ctx context.Context, conta
 // AddDocumentLineage stores source URI provenance for a semantic node (Issue #8 Strict Information Lineage).
 
 func (e *GllamEngine) AddDocumentLineage(ctx context.Context, lineage memory.DocumentLineage) error {
-	now := time.Now().Unix()
-	if lineage.CreatedAt == 0 {
+	now := time.Now()
+	if lineage.CreatedAt.IsZero() {
 		lineage.CreatedAt = now
 	}
 	if lineage.ID == "" {
-		lineage.ID = fmt.Sprintf("lin-%s-%d", lineage.NodeID, now)
+		lineage.ID = fmt.Sprintf("lin-%s-%d", lineage.NodeID, now.Unix())
 	}
 
 	query := `
@@ -1957,7 +1957,7 @@ func (e *GllamEngine) GetDocumentLineageForNodes(ctx context.Context, nodeIDs []
 		var l memory.DocumentLineage
 		var title, checksum sql.NullString
 		var lineNo, charOff sql.NullInt64
-		if err := rows.Scan(&l.ID, &l.NodeID, &l.SourceURI, &title, &l.SourceType, &lineNo, &charOff, &checksum, &l.CreatedAt); err != nil {
+		if err := rows.Scan(&l.ID, &l.NodeID, &l.SourceURI, &title, &l.SourceType, &lineNo, &charOff, &checksum, scanTime(&l.CreatedAt)); err != nil {
 			continue
 		}
 		if title.Valid {
@@ -2011,8 +2011,8 @@ func CompactRevisionHistory(versions []memory.DocumentVersion) []memory.Compacte
 	var currentEpoch *memory.CompactedRevisionEpoch
 	var currentStartVer int
 	var currentEndVer int
-	var minTS int64
-	var maxTS int64
+	var minTS time.Time
+	var maxTS time.Time
 	var summaries []string
 
 	for i, v := range versions {
@@ -2031,7 +2031,7 @@ func CompactRevisionHistory(versions []memory.DocumentVersion) []memory.Compacte
 		} else if v.AuthorID == currentEpoch.AuthorID {
 			// Same author consecutive edits -> group into single synthetic epoch!
 			currentEndVer = v.VersionNumber
-			if v.CreatedAt > maxTS {
+			if v.CreatedAt.After(maxTS) {
 				maxTS = v.CreatedAt
 			}
 			if v.ChangeSummary != "" {
@@ -2044,10 +2044,10 @@ func CompactRevisionHistory(versions []memory.DocumentVersion) []memory.Compacte
 			} else {
 				currentEpoch.VersionRange = fmt.Sprintf("v%d-v%d", currentStartVer, currentEndVer)
 			}
-			if minTS == maxTS {
-				currentEpoch.TimeRange = formatTimestamp(minTS)
+			if minTS.Equal(maxTS) {
+				currentEpoch.TimeRange = minTS.Format(time.RFC3339)
 			} else {
-				currentEpoch.TimeRange = fmt.Sprintf("%s to %s", formatTimestamp(minTS), formatTimestamp(maxTS))
+				currentEpoch.TimeRange = fmt.Sprintf("%s to %s", minTS.Format(time.RFC3339), maxTS.Format(time.RFC3339))
 			}
 			currentEpoch.SyntheticSummary = strings.Join(summaries, "; ")
 			epochs = append(epochs, *currentEpoch)
@@ -2073,10 +2073,10 @@ func CompactRevisionHistory(versions []memory.DocumentVersion) []memory.Compacte
 			} else {
 				currentEpoch.VersionRange = fmt.Sprintf("v%d-v%d", currentStartVer, currentEndVer)
 			}
-			if minTS == maxTS {
-				currentEpoch.TimeRange = formatTimestamp(minTS)
+			if minTS.Equal(maxTS) {
+				currentEpoch.TimeRange = minTS.Format(time.RFC3339)
 			} else {
-				currentEpoch.TimeRange = fmt.Sprintf("%s to %s", formatTimestamp(minTS), formatTimestamp(maxTS))
+				currentEpoch.TimeRange = fmt.Sprintf("%s to %s", minTS.Format(time.RFC3339), maxTS.Format(time.RFC3339))
 			}
 			currentEpoch.SyntheticSummary = strings.Join(summaries, "; ")
 			epochs = append(epochs, *currentEpoch)
@@ -2089,12 +2089,12 @@ func CompactRevisionHistory(versions []memory.DocumentVersion) []memory.Compacte
 
 // AddDocumentVersion records a multi-author edit version history entry for a document lineage record.
 func (e *GllamEngine) AddDocumentVersion(ctx context.Context, ver memory.DocumentVersion) error {
-	now := time.Now().Unix()
-	if ver.CreatedAt == 0 {
+	now := time.Now()
+	if ver.CreatedAt.IsZero() {
 		ver.CreatedAt = now
 	}
 	if ver.ID == "" {
-		ver.ID = fmt.Sprintf("ver-%s-%d-%d", ver.LineageID, ver.VersionNumber, now)
+		ver.ID = fmt.Sprintf("ver-%s-%d-%d", ver.LineageID, ver.VersionNumber, now.Unix())
 	}
 
 	query := `
@@ -2128,7 +2128,7 @@ func (e *GllamEngine) GetDocumentVersionsForLineage(ctx context.Context, lineage
 		var v memory.DocumentVersion
 		var authorName, changeSummary sql.NullString
 		var startLine, endLine, charOff sql.NullInt64
-		if err := rows.Scan(&v.ID, &v.LineageID, &v.VersionNumber, &v.AuthorID, &authorName, &changeSummary, &startLine, &endLine, &charOff, &v.CreatedAt); err != nil {
+		if err := rows.Scan(&v.ID, &v.LineageID, &v.VersionNumber, &v.AuthorID, &authorName, &changeSummary, &startLine, &endLine, &charOff, scanTime(&v.CreatedAt)); err != nil {
 			continue
 		}
 		if authorName.Valid {

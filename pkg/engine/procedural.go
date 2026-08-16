@@ -34,7 +34,7 @@ func (e *GllamEngine) UpsertProceduralKnowledge(ctx context.Context, pk memory.P
 // MarkProcedureHelpful toggles the is_highly_helpful flag for a procedure
 func (e *GllamEngine) MarkProcedureHelpful(ctx context.Context, taskType string, helpful bool) error {
     query := `UPDATE procedural_knowledge SET is_highly_helpful = ?, updated_at = ? WHERE task_type = ?`
-    now := time.Now().Unix()
+    now := time.Now()
     _, err := e.db.ExecContext(ctx, query, helpful, now, taskType)
     if err != nil {
         return fmt.Errorf("failed to mark procedure helpful: %w", err)
@@ -52,7 +52,7 @@ func (e *GllamEngine) RetrieveProcedure(ctx context.Context, taskType string) (*
 
     err := e.db.QueryRowContext(ctx, query, taskType).Scan(
         &pk.ID, &pk.TaskType, &pk.Scope, &pk.TriggerContext, &pk.Instructions, &pk.UserFeedbackRules,
-        &pk.TimesApplied, &pk.IsHighlyHelpful, &pk.Version, &pk.SupersededBy, &pk.UpdatedAt)
+        &pk.TimesApplied, &pk.IsHighlyHelpful, &pk.Version, &pk.SupersededBy, scanTime(&pk.UpdatedAt))
     if err != nil {
         return nil, fmt.Errorf("failed to retrieve procedure: %w", err)
     }
@@ -86,7 +86,7 @@ func (e *GllamEngine) GetTopProcedures(ctx context.Context, limit int) ([]memory
         var pk memory.ProceduralKnowledge
         if err := rows.Scan(
             &pk.ID, &pk.TaskType, &pk.Scope, &pk.TriggerContext, &pk.Instructions, &pk.UserFeedbackRules,
-            &pk.TimesApplied, &pk.IsHighlyHelpful, &pk.Version, &pk.SupersededBy, &pk.UpdatedAt); err != nil {
+            &pk.TimesApplied, &pk.IsHighlyHelpful, &pk.Version, &pk.SupersededBy, scanTime(&pk.UpdatedAt)); err != nil {
             return nil, fmt.Errorf("failed to scan procedure: %w", err)
         }
         procedures = append(procedures, pk)
@@ -171,7 +171,7 @@ func (e *GllamEngine) SearchSimilarProcedures(ctx context.Context, queryText str
         var pk memory.ProceduralKnowledge
         if err := rows.Scan(
             &pk.ID, &pk.TaskType, &pk.Scope, &pk.TriggerContext, &pk.Instructions, &pk.UserFeedbackRules,
-            &pk.TimesApplied, &pk.IsHighlyHelpful, &pk.Version, &pk.SupersededBy, &pk.UpdatedAt); err != nil {
+            &pk.TimesApplied, &pk.IsHighlyHelpful, &pk.Version, &pk.SupersededBy, scanTime(&pk.UpdatedAt)); err != nil {
             return nil, fmt.Errorf("failed to scan procedure: %w", err)
         }
         procedures = append(procedures, pk)
@@ -200,7 +200,7 @@ func (e *GllamEngine) GetInternalProceduresByTrigger(ctx context.Context, scope 
         var tc sql.NullString
         if err := rows.Scan(
             &pk.ID, &pk.TaskType, &pk.Scope, &tc, &pk.Instructions, &pk.UserFeedbackRules,
-            &pk.TimesApplied, &pk.IsHighlyHelpful, &pk.Version, &pk.SupersededBy, &pk.UpdatedAt); err != nil {
+            &pk.TimesApplied, &pk.IsHighlyHelpful, &pk.Version, &pk.SupersededBy, scanTime(&pk.UpdatedAt)); err != nil {
             return nil, fmt.Errorf("failed to scan internal procedure: %w", err)
         }
         if tc.Valid {
@@ -236,7 +236,7 @@ func (e *GllamEngine) GetProceduresByTaxonomyPrefix(ctx context.Context, taxonom
 		var tc sql.NullString
 		if err := rows.Scan(
 			&pk.ID, &pk.TaskType, &pk.Scope, &tc, &pk.Instructions, &pk.UserFeedbackRules,
-			&pk.TimesApplied, &pk.IsHighlyHelpful, &pk.Version, &pk.SupersededBy, &pk.UpdatedAt); err != nil {
+			&pk.TimesApplied, &pk.IsHighlyHelpful, &pk.Version, &pk.SupersededBy, scanTime(&pk.UpdatedAt)); err != nil {
 			return nil, fmt.Errorf("failed to scan procedure: %w", err)
 		}
 		if tc.Valid {

@@ -115,7 +115,7 @@ func main() {
 				Relationship: "depends_on",
 				Caveats:      fmt.Sprintf("Version constraint: %s", version),
 				ValidFrom:    fmt.Sprintf("%d", time.Now().Unix()),
-				UpdatedAt:    time.Now().Unix(),
+				UpdatedAt:    time.Now(),
 
 			}
 

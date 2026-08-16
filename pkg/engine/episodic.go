@@ -3,6 +3,7 @@ package engine
 import (
     "context"
     "fmt"
+    "time"
 
     "github.com/laurentalsina/gllam/pkg/memory"
 )
@@ -50,7 +51,7 @@ func (e *GllamEngine) GetRecentEpisodes(ctx context.Context, limit int) ([]memor
     var episodes []memory.EpisodicSummary
     for rows.Next() {
         var es memory.EpisodicSummary
-        if err := rows.Scan(&es.ID, &es.SessionID, &es.SummaryText, &es.CreatedAt); err != nil {
+        if err := rows.Scan(&es.ID, &es.SessionID, &es.SummaryText, scanTime(&es.CreatedAt)); err != nil {
             return nil, fmt.Errorf("failed to scan episode: %w", err)
         }
         episodes = append(episodes, es)
@@ -60,14 +61,14 @@ func (e *GllamEngine) GetRecentEpisodes(ctx context.Context, limit int) ([]memor
 }
 
 // GetEpisodesInWindow retrieves episodic summaries within a temporal window (read-only → dbRO)
-func (e *GllamEngine) GetEpisodesInWindow(ctx context.Context, startTime, endTime int64) ([]memory.EpisodicSummary, error) {
+func (e *GllamEngine) GetEpisodesInWindow(ctx context.Context, startTime, endTime time.Time) ([]memory.EpisodicSummary, error) {
     query := `
         SELECT id, session_id, summary_text, created_at
         FROM episodic_summaries
         WHERE created_at >= ? AND created_at <= ?
         ORDER BY created_at DESC`
 
-    rows, err := e.dbRO.QueryContext(ctx, query, startTime, endTime)
+    rows, err := e.dbRO.QueryContext(ctx, query, startTime.Format(time.RFC3339), endTime.Format(time.RFC3339))
     if err != nil {
         return nil, fmt.Errorf("failed to get episodes in window: %w", err)
     }
@@ -76,7 +77,7 @@ func (e *GllamEngine) GetEpisodesInWindow(ctx context.Context, startTime, endTim
     var episodes []memory.EpisodicSummary
     for rows.Next() {
         var es memory.EpisodicSummary
-        if err := rows.Scan(&es.ID, &es.SessionID, &es.SummaryText, &es.CreatedAt); err != nil {
+        if err := rows.Scan(&es.ID, &es.SessionID, &es.SummaryText, scanTime(&es.CreatedAt)); err != nil {
             return nil, fmt.Errorf("failed to scan episode: %w", err)
         }
         episodes = append(episodes, es)
@@ -120,7 +121,7 @@ func (e *GllamEngine) SearchSimilarEpisodes(ctx context.Context, queryText strin
     var episodes []memory.EpisodicSummary
     for rows.Next() {
         var es memory.EpisodicSummary
-        if err := rows.Scan(&es.ID, &es.SessionID, &es.SummaryText, &es.CreatedAt); err != nil {
+        if err := rows.Scan(&es.ID, &es.SessionID, &es.SummaryText, scanTime(&es.CreatedAt)); err != nil {
             return nil, fmt.Errorf("failed to scan episode: %w", err)
         }
         episodes = append(episodes, es)
