@@ -13,6 +13,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"database/sql"
 
 	"github.com/laurentalsina/gllam/pkg/engine"
 	"github.com/laurentalsina/gllam/pkg/memory"
@@ -288,7 +289,7 @@ func main() {
 		if ep.SourceURI != "" {
 			baseURI = ep.SourceURI
 		}
-		createdFromRef := fmt.Sprintf("%s/%s#chunk-%d", strings.TrimRight(baseURI, "/"), ep.ID, cIdx+1)
+		createdFromRef := fmt.Sprintf("%s %s#chunk-%d", strings.TrimRight(baseURI, "/"), ep.ID, cIdx+1)
 		for i := range extData.Nodes {
 			extData.Nodes[i].CreatedAt = now
 			extData.Nodes[i].UpdatedAt = now
@@ -459,7 +460,7 @@ func main() {
 					if episode.SourceURI != "" {
 						baseURI = episode.SourceURI
 					}
-					link.CreatedFrom = fmt.Sprintf("%s/%s#chunk-%d", strings.TrimRight(baseURI, "/"), episode.ID, cIdx+1)
+					link.CreatedFrom = fmt.Sprintf("%s %s#chunk-%d", strings.TrimRight(baseURI, "/"), episode.ID, cIdx+1)
 
 					if err := gllam.AddEdge(ctx, link); err != nil {
 						if strings.Contains(err.Error(), "FOREIGN KEY constraint failed") {

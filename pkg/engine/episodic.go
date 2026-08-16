@@ -4,6 +4,7 @@ import (
     "context"
     "fmt"
     "time"
+    "database/sql"
 
     "github.com/laurentalsina/gllam/pkg/memory"
 )

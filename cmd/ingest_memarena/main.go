@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -83,11 +84,15 @@ func main() {
 			transcriptBuilder.WriteString(fmt.Sprintf("%s: %s\n", turn.SpeakerID, turn.Text))
 		}
 
+		absCorpusPath := *corpusPath
+		if abs, errAbs := filepath.Abs(*corpusPath); errAbs == nil {
+			absCorpusPath = abs
+		}
 		summary := memory.EpisodicSummary{
 			ID:          s.SessionID,
 			SessionID:   s.SessionID,
 			SummaryText: transcriptBuilder.String(),
-			SourceURI:   fmt.Sprintf("file://%s", strings.TrimPrefix(*corpusPath, "./")),
+			SourceURI:   fmt.Sprintf("file://%s", absCorpusPath),
 			CreatedAt:   time.Now(),
 		}
 
