@@ -13,7 +13,8 @@ sbom_compliance_en.json
 
 # Logs
 *.log
+raw_embed.json
 
 # bench output
 bench/pddl_domains/
-bench/extraction_snapshot_*
+bench/memarena/extraction_snapshot_*
