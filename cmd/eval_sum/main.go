@@ -43,12 +43,11 @@ func main() {
 
 	// Global preference directive
 	_ = gllam.AddEdge(ctx, memory.SemanticLink{
-		SourceID:       "user-alice",
-		TargetID:       "rule-format",
-		Relationship:   "is_preference",
-		RuleContext:    "user_preference",
-		ConstraintType: "positive",
-		Caveats:        "Always output response tables in Markdown",
+		SourceID:     "user-alice",
+		TargetID:     "rule-format",
+		Relationship: "is_preference",
+		Modality:     "deontic",
+		Caveats:      "Always output response tables in Markdown",
 	})
 
 	// Obsolete link (should be filtered out by FilterActiveSummaryFacts)
@@ -68,8 +67,8 @@ func main() {
 	}
 	links := []memory.SemanticLink{
 		{SourceID: "caddy-service", TargetID: "port-8080", Relationship: "binds_to", Caveats: "Must use TLS certificate"},
-		{SourceID: "user-alice", TargetID: "rule-format", Relationship: "is_preference", RuleContext: "user_preference", ConstraintType: "positive", Caveats: "Always output response tables in Markdown"},
 		{SourceID: "caddy-service", TargetID: "port-8079", Relationship: "binds_to"},
+		{SourceID: "user-alice", TargetID: "rule-format", Relationship: "is_preference", Modality: "deontic", Caveats: "Always output response tables in Markdown"},
 	}
 
 	episodes := []memory.EpisodicSummary{

@@ -1,0 +1,9 @@
+{
+  "timestamp": "2026-08-16T21:15:52+02:00",
+  "db_path": "./bench/gllam_data.db",
+  "model": "local_server",
+  "total_nodes": 0,
+  "total_links": 0,
+  "node_type_counts": {},
+  "link_type_counts": {}
+}

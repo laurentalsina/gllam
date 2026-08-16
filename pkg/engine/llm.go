@@ -121,6 +121,33 @@ func (c *LLMClient) Generate(ctx context.Context, systemPrompt, userPrompt strin
 	return c.GenerateWithFormat(ctx, systemPrompt, userPrompt, nil)
 }
 
+// adaptResponseFormat translates the custom llama-server JSON Schema format into standard OpenAI/OpenRouter format when using remote endpoints
+func (c *LLMClient) adaptResponseFormat(original map[string]interface{}) map[string]interface{} {
+	if original == nil {
+		return nil
+	}
+
+	// Check if this is OpenRouter/OpenAI-compatible and needs standard JSON Schema format
+	isLocal := strings.Contains(c.BaseURL, "127.0.0.1") || strings.Contains(c.BaseURL, "localhost") || strings.Contains(c.BaseURL, "100.96.")
+
+	t, okType := original["type"].(string)
+	schema, okSchema := original["schema"]
+
+	if !isLocal && okType && t == "json_object" && okSchema {
+		// Convert to standard OpenAI / OpenRouter json_schema format
+		return map[string]interface{}{
+			"type": "json_schema",
+			"json_schema": map[string]interface{}{
+				"name":   "semantic_extraction",
+				"strict": true,
+				"schema": schema,
+			},
+		}
+	}
+
+	return original
+}
+
 // GenerateWithFormat sends a completion request with an optional constrained response_format schema
 func (c *LLMClient) GenerateWithFormat(ctx context.Context, systemPrompt, userPrompt string, responseFormat map[string]interface{}) (string, error) {
 	url := c.resolveChatURL()
@@ -133,7 +160,7 @@ func (c *LLMClient) GenerateWithFormat(ctx context.Context, systemPrompt, userPr
 				{Role: "system", Content: systemPrompt},
 				{Role: "user", Content: userPrompt},
 			},
-			ResponseFormat: responseFormat,
+			ResponseFormat: c.adaptResponseFormat(responseFormat),
 			Temperature:    0.1,
 			Stream:         false,
 			MaxTokens:      16384,
@@ -243,6 +270,7 @@ func (c *LLMClient) GenerateWithFormat(ctx context.Context, systemPrompt, userPr
 
 	for scanner.Scan() {
 		line := scanner.Text()
+		fmt.Println("RAW LINE:", line)
 		if !strings.HasPrefix(line, "data: ") {
 			continue
 		}

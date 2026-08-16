@@ -39,6 +39,7 @@ CREATE TABLE IF NOT EXISTS semantic_nodes (
     taxonomy_path TEXT DEFAULT '/',        -- Materialized path (e.g. /Engineering/Infrastructure/Databases/Relational/Postgres)
     is_category INTEGER DEFAULT 0,         -- Boolean flag indicating if node is a taxonomy category
     caveat_summary TEXT,                   -- Compacted historical node caveat summary string
+    created_from TEXT,                     -- Reference to raw data that led to the creation of the node
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
@@ -53,12 +54,9 @@ CREATE TABLE IF NOT EXISTS semantic_links (
     target_id TEXT NOT NULL,
     relationship TEXT NOT NULL,
     caveats TEXT NOT NULL,                -- Conditions, constraints, or exceptions
+    modality TEXT NOT NULL,               -- Epistemic: default, Alethic: physically/logically necessary, Deontic: obligatory/permitted/prohibited etc...
     origin_id TEXT,                       -- node ID (human, agent, system) that provided information about the link
-    rule_context TEXT DEFAULT 'global',   -- 'user_preference' | 'session' | 'source' | 'global'
-    constraint_type TEXT DEFAULT 'positive',-- 'positive' | 'negative'
-    rule_rationale TEXT,                  -- Justification / 'because' clause (e.g. 'Security Compliance', 'Accessibility')
     resolution_rationale TEXT,            -- Explanation when resolving a contradiction
-    modality TEXT NOT NULL,               -- Epistemic: default, Alethic: physically/logically necessary, Deontic: obligatory/permitted/prohibited etc...
     created_from TEXT,                    -- Reference to raw data that led to the creation of the link
     created_at TEXT NOT NULL,             -- RFC3339 timestamp
     updated_at TEXT NOT NULL,             -- RFC3339 timestamp
@@ -72,6 +70,7 @@ CREATE INDEX IF NOT EXISTS idx_semantic_links_target ON semantic_links(target_id
 CREATE INDEX IF NOT EXISTS idx_semantic_links_source ON semantic_links(source_id);
 CREATE INDEX IF NOT EXISTS idx_semantic_links_origin ON semantic_links(origin_id);
 CREATE INDEX IF NOT EXISTS idx_semantic_links_source_rel ON semantic_links(source_id, relationship);
+CREATE INDEX IF NOT EXISTS idx_semantic_links_modality ON semantic_links(modality);
 
 -- 5. DOCUMENT LINEAGE (Strict information source URI traceability)
 CREATE TABLE IF NOT EXISTS document_lineage (

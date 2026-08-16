@@ -73,7 +73,7 @@ func FilterNodesAndLinksForAspect(nodes []memory.SemanticNode, links []memory.Se
 					includeLink = true
 				}
 			case AspectInstruction:
-				if rel == "has_constraint" || rel == "is_preference" || rel == "applies_rule" || rel == "supersedes_rule" || l.RuleContext != "" {
+				if rel == "has_constraint" || rel == "is_preference" || rel == "applies_rule" || rel == "supersedes_rule" || l.Modality == "deontic" {
 					includeLink = true
 				}
 			case AspectStateTransition:
@@ -121,7 +121,6 @@ func CompileGraphToPDDLAspect(nodes []memory.SemanticNode, links []memory.Semant
 	nodeTypeMap := make(map[string]string)     // nodeID -> type
 	predicates := make(map[string]bool)
 
-
 	// Register explicit nodes (excluding fallacy nodes)
 	for _, node := range nodes {
 		if node.Type == memory.NodeTypeFallacy || strings.HasPrefix(strings.ToLower(node.ID), "fallacy_") {
@@ -138,17 +137,12 @@ func CompileGraphToPDDLAspect(nodes []memory.SemanticNode, links []memory.Semant
 		}
 	}
 
+	// Map initial states and extract dynamic predicates from active semantic links
 	var initStatements []string
-
 	for _, link := range links {
 		rel := SanitizePDDLName(link.Relationship)
-		if rel == "exhibits_fallacy" || rel == "subverts_claim" {
-			continue
-		}
-
 		src := SanitizePDDLName(link.SourceID)
 		tgt := SanitizePDDLName(link.TargetID)
-
 
 		predicates[rel] = true
 

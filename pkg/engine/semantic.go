@@ -37,6 +37,11 @@ func (e *GllamEngine) UpsertNode(ctx context.Context, node memory.SemanticNode) 
 		caveatSummaryVal = sql.NullString{String: node.CaveatSummary, Valid: true}
 	}
 
+	var createdFromVal sql.NullString
+	if node.CreatedFrom != "" {
+		createdFromVal = sql.NullString{String: node.CreatedFrom, Valid: true}
+	}
+
 	now := time.Now().UTC().Format(time.RFC3339)
 	createdTime := now
 	if !node.CreatedAt.IsZero() {
@@ -44,8 +49,8 @@ func (e *GllamEngine) UpsertNode(ctx context.Context, node memory.SemanticNode) 
 	}
 
 	query := `
-        INSERT INTO semantic_nodes (id, name, type, context_prompt, trust_weight, taxonomy_path, is_category, caveat_summary, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO semantic_nodes (id, name, type, context_prompt, trust_weight, taxonomy_path, is_category, caveat_summary, created_from, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET 
             name = excluded.name, 
             type = excluded.type, 
@@ -54,9 +59,10 @@ func (e *GllamEngine) UpsertNode(ctx context.Context, node memory.SemanticNode) 
             taxonomy_path = CASE WHEN excluded.taxonomy_path != '/' AND excluded.taxonomy_path != '' THEN excluded.taxonomy_path ELSE semantic_nodes.taxonomy_path END,
             is_category = CASE WHEN excluded.is_category != 0 THEN excluded.is_category ELSE semantic_nodes.is_category END,
             caveat_summary = CASE WHEN excluded.caveat_summary IS NOT NULL AND excluded.caveat_summary != '' THEN excluded.caveat_summary ELSE semantic_nodes.caveat_summary END,
+            created_from = COALESCE(excluded.created_from, semantic_nodes.created_from),
             updated_at = excluded.updated_at`
 
-	_, err := e.db.ExecContext(ctx, query, node.ID, node.Name, node.Type, node.ContextPrompt, node.TrustWeight, node.TaxonomyPath, isCatInt, caveatSummaryVal, createdTime, now)
+	_, err := e.db.ExecContext(ctx, query, node.ID, node.Name, node.Type, node.ContextPrompt, node.TrustWeight, node.TaxonomyPath, isCatInt, caveatSummaryVal, createdFromVal, createdTime, now)
 	if err != nil {
 		return fmt.Errorf("failed to upsert node: %w", err)
 	}
@@ -177,42 +183,30 @@ func (e *GllamEngine) AddEdge(ctx context.Context, link memory.SemanticLink) err
 			})
 		}
 	}
-
-    ruleCtx := link.RuleContext
-    if ruleCtx == "" {
-        ruleCtx = "global"
-    }
-    cType := link.ConstraintType
-    if cType == "" {
-        cType = "positive"
-    }
-
 	nowTime := time.Now().UTC().Format(time.RFC3339)
 	createdTime := nowTime
 	if !link.CreatedAt.IsZero() {
 		createdTime = link.CreatedAt.UTC().Format(time.RFC3339)
 	}
 
+	if link.Modality == "" {
+		link.Modality = "epistemic"
+	}
+
     insertQuery := `
-        INSERT INTO semantic_links (source_id, target_id, relationship, caveats, origin_id, rule_context, constraint_type, rule_rationale, resolution_rationale, modality, created_from, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO semantic_links (source_id, target_id, relationship, caveats, modality, origin_id, resolution_rationale, created_from, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(source_id, target_id, relationship) DO UPDATE SET 
             caveats = excluded.caveats,
-            origin_id = excluded.origin_id,
-            rule_context = excluded.rule_context,
-            constraint_type = excluded.constraint_type,
-            rule_rationale = excluded.rule_rationale,
-            resolution_rationale = excluded.resolution_rationale,
             modality = excluded.modality,
+            origin_id = excluded.origin_id,
+            resolution_rationale = excluded.resolution_rationale,
             created_from = excluded.created_from,
             updated_at = excluded.updated_at`
 
-    var origSource, rationaleVal, resRationaleVal sql.NullString
+    var origSource, resRationaleVal sql.NullString
     if link.OriginID != "" && !strings.EqualFold(link.OriginID, "null") && !strings.EqualFold(link.OriginID, "none") && !strings.EqualFold(link.OriginID, "nil") {
         origSource = sql.NullString{String: link.OriginID, Valid: true}
-    }
-    if link.RuleRationale != "" {
-        rationaleVal = sql.NullString{String: link.RuleRationale, Valid: true}
     }
     if link.ResolutionRationale != "" {
         resRationaleVal = sql.NullString{String: link.ResolutionRationale, Valid: true}
@@ -224,8 +218,8 @@ func (e *GllamEngine) AddEdge(ctx context.Context, link memory.SemanticLink) err
     }
 
     _, err = e.db.ExecContext(ctx, insertQuery,
-        link.SourceID, link.TargetID, link.Relationship, link.Caveats,
-        origSource, ruleCtx, cType, rationaleVal, resRationaleVal, link.Modality, createdFromVal, createdTime, nowTime)
+        link.SourceID, link.TargetID, link.Relationship, link.Caveats, link.Modality,
+        origSource, resRationaleVal, createdFromVal, createdTime, nowTime)
 
     if err != nil {
         return fmt.Errorf("failed to add edge: %w", err)
@@ -368,7 +362,7 @@ func (e *GllamEngine) SearchSimilarNodes(ctx context.Context, queryText string, 
 // It dynamically resolves temporal_anchor_id timestamps when valid_from or valid_until is "temporal_note".
 func (e *GllamEngine) GetActiveLinksAtTime(ctx context.Context, timestamp int64) ([]memory.SemanticLink, error) {
     query := `
-        SELECT source_id, target_id, relationship, caveats, origin_id, rule_context, constraint_type, rule_rationale, resolution_rationale, modality, created_from, created_at, updated_at
+        SELECT source_id, target_id, relationship, caveats, modality, origin_id, resolution_rationale, created_from, created_at, updated_at
         FROM semantic_links`
 
     rows, err := e.dbRO.QueryContext(ctx, query)
@@ -380,27 +374,15 @@ func (e *GllamEngine) GetActiveLinksAtTime(ctx context.Context, timestamp int64)
     var activeLinks []memory.SemanticLink
     for rows.Next() {
         var l memory.SemanticLink
-        var origSource, rCtx, cType, ratVal, resRatVal, mod, createdFrom sql.NullString
-        if err := rows.Scan(&l.SourceID, &l.TargetID, &l.Relationship, &l.Caveats, &origSource, &rCtx, &cType, &ratVal, &resRatVal, &mod, &createdFrom, scanTime(&l.CreatedAt), scanTime(&l.UpdatedAt)); err != nil {
+        var origSource, resRatVal, createdFrom sql.NullString
+        if err := rows.Scan(&l.SourceID, &l.TargetID, &l.Relationship, &l.Caveats, &l.Modality, &origSource, &resRatVal, &createdFrom, scanTime(&l.CreatedAt), scanTime(&l.UpdatedAt)); err != nil {
             return nil, fmt.Errorf("failed to scan link: %w", err)
         }
         if origSource.Valid {
             l.OriginID = origSource.String
         }
-        if rCtx.Valid {
-            l.RuleContext = rCtx.String
-        }
-        if cType.Valid {
-            l.ConstraintType = cType.String
-        }
-        if ratVal.Valid {
-            l.RuleRationale = ratVal.String
-        }
         if resRatVal.Valid {
             l.ResolutionRationale = resRatVal.String
-        }
-        if mod.Valid {
-            l.Modality = mod.String
         }
         if createdFrom.Valid {
             l.CreatedFrom = createdFrom.String
@@ -452,7 +434,7 @@ func (e *GllamEngine) ExpandTemporalNeighborsWithTime(ctx context.Context, seedN
 			var err error
 
 			query = `
-				SELECT source_id, target_id, relationship, caveats, origin_id, rule_context, constraint_type, rule_rationale, resolution_rationale, modality, created_from, created_at, updated_at
+				SELECT source_id, target_id, relationship, caveats, modality, origin_id, resolution_rationale, created_from, created_at, updated_at
 				FROM semantic_links
 				WHERE source_id = ? OR target_id = ?`
 			rows, err = e.dbRO.QueryContext(ctx, query, currentID, currentID)
@@ -463,27 +445,15 @@ func (e *GllamEngine) ExpandTemporalNeighborsWithTime(ctx context.Context, seedN
 
 			for rows.Next() {
 				var l memory.SemanticLink
-				var origSource, rCtx, cType, ratVal, resRatVal, mod, createdFrom sql.NullString
-				if err := rows.Scan(&l.SourceID, &l.TargetID, &l.Relationship, &l.Caveats, &origSource, &rCtx, &cType, &ratVal, &resRatVal, &mod, &createdFrom, scanTime(&l.CreatedAt), scanTime(&l.UpdatedAt)); err != nil {
+				var origSource, resRatVal, createdFrom sql.NullString
+				if err := rows.Scan(&l.SourceID, &l.TargetID, &l.Relationship, &l.Caveats, &l.Modality, &origSource, &resRatVal, &createdFrom, scanTime(&l.CreatedAt), scanTime(&l.UpdatedAt)); err != nil {
 					continue
 				}
 				if origSource.Valid {
 					l.OriginID = origSource.String
 				}
-				if rCtx.Valid {
-					l.RuleContext = rCtx.String
-				}
-				if cType.Valid {
-					l.ConstraintType = cType.String
-				}
-				if ratVal.Valid {
-					l.RuleRationale = ratVal.String
-				}
 				if resRatVal.Valid {
 					l.ResolutionRationale = resRatVal.String
-				}
-				if mod.Valid {
-					l.Modality = mod.String
 				}
 				if createdFrom.Valid {
 					l.CreatedFrom = createdFrom.String
@@ -502,14 +472,17 @@ func (e *GllamEngine) ExpandTemporalNeighborsWithTime(ctx context.Context, seedN
 
 						// Fetch Node metadata if missing
 						var node memory.SemanticNode
-						var ctxPrompt, caveatSum sql.NullString
-						nodeQuery := `SELECT id, name, type, context_prompt, caveat_summary FROM semantic_nodes WHERE id = ?`
-						if err := e.dbRO.QueryRowContext(ctx, nodeQuery, neighborID).Scan(&node.ID, &node.Name, &node.Type, &ctxPrompt, &caveatSum); err == nil {
+						var ctxPrompt, caveatSum, createdFrom sql.NullString
+						nodeQuery := `SELECT id, name, type, context_prompt, caveat_summary, created_from FROM semantic_nodes WHERE id = ?`
+						if err := e.dbRO.QueryRowContext(ctx, nodeQuery, neighborID).Scan(&node.ID, &node.Name, &node.Type, &ctxPrompt, &caveatSum, &createdFrom); err == nil {
 							if ctxPrompt.Valid {
 								node.ContextPrompt = ctxPrompt.String
 							}
 							if caveatSum.Valid {
 								node.CaveatSummary = caveatSum.String
+							}
+							if createdFrom.Valid {
+								node.CreatedFrom = createdFrom.String
 							}
 							nodeMap[node.ID] = node
 						}
@@ -533,19 +506,22 @@ func (e *GllamEngine) ExpandTemporalNeighborsWithTime(ctx context.Context, seedN
 	return expNodes, expLinks, nil
 }
 
-// GetActiveConstraintsForSource retrieves active rules, preferences, and constraints for a given source_id or rule_context
+// GetActiveConstraintsForSource retrieves active rules, preferences, and constraints for a given source_id or targetContext
 func (e *GllamEngine) GetActiveConstraintsForSource(ctx context.Context, sourceID string, targetContext string) ([]memory.SemanticLink, error) {
 	query := `
-		SELECT source_id, target_id, relationship, caveats, origin_id, rule_context, constraint_type, rule_rationale, resolution_rationale, modality, created_from, created_at, updated_at
-		FROM semantic_links
+		SELECT source_id, target_id, relationship, caveats, modality, origin_id, resolution_rationale, created_from, created_at, updated_at
+		FROM semantic_links d
 		WHERE 1=1 
-		  
 		  AND relationship NOT IN ('supersedes_rule', 'conflicting_claim', 'has_unresolved_conflict')
-		  AND (relationship IN ('has_constraint', 'is_preference', 'applies_rule') OR target_id LIKE 'rule%' OR target_id LIKE 'constraint%')
-		  AND (origin_id = ? OR source_id = ? OR rule_context = 'global' OR rule_context = ?)
-		ORDER BY created_at ASC`
+		  AND (modality = 'deontic' OR relationship IN ('has_constraint', 'is_preference', 'applies_rule') OR target_id LIKE 'rule%' OR target_id LIKE 'constraint%')
+		  AND (source_id = ? OR ? = 'global' OR ? = '')
+		  AND NOT EXISTS (
+		      SELECT 1 FROM semantic_links s 
+		      WHERE s.relationship = 'supersedes_rule' AND s.target_id = d.target_id
+		  )
+		ORDER BY rowid ASC`
 
-	rows, err := e.dbRO.QueryContext(ctx, query, sourceID, sourceID, targetContext)
+	rows, err := e.dbRO.QueryContext(ctx, query, sourceID, targetContext, sourceID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query active constraints for source %s: %w", sourceID, err)
 	}
@@ -554,31 +530,19 @@ func (e *GllamEngine) GetActiveConstraintsForSource(ctx context.Context, sourceI
 	var links []memory.SemanticLink
 	for rows.Next() {
 		var l memory.SemanticLink
-		var origSource, rCtx, cType, ratVal, resRatVal, mod, createdFrom sql.NullString
-		if err := rows.Scan(&l.SourceID, &l.TargetID, &l.Relationship, &l.Caveats, &origSource, &rCtx, &cType, &ratVal, &resRatVal, &mod, &createdFrom, scanTime(&l.CreatedAt), scanTime(&l.UpdatedAt)); err != nil {
+		var origSource, resRatVal, createdFrom sql.NullString
+		if err := rows.Scan(&l.SourceID, &l.TargetID, &l.Relationship, &l.Caveats, &l.Modality, &origSource, &resRatVal, &createdFrom, scanTime(&l.CreatedAt), scanTime(&l.UpdatedAt)); err != nil {
 			return nil, fmt.Errorf("failed to scan constraint link: %w", err)
 		}
 		if origSource.Valid {
 			l.OriginID = origSource.String
 		}
-		if rCtx.Valid {
-			l.RuleContext = rCtx.String
+		if resRatVal.Valid {
+			l.ResolutionRationale = resRatVal.String
 		}
-		if cType.Valid {
-			l.ConstraintType = cType.String
+		if createdFrom.Valid {
+			l.CreatedFrom = createdFrom.String
 		}
-		if ratVal.Valid {
-			l.RuleRationale = ratVal.String
-		}
-        if resRatVal.Valid {
-            l.ResolutionRationale = resRatVal.String
-        }
-        if mod.Valid {
-            l.Modality = mod.String
-        }
-        if createdFrom.Valid {
-            l.CreatedFrom = createdFrom.String
-        }
 		links = append(links, l)
 	}
 	return links, rows.Err()
@@ -587,7 +551,19 @@ func (e *GllamEngine) GetActiveConstraintsForSource(ctx context.Context, sourceI
 
 // RevokeOrSupersedeRule revokes a rule/constraint or marks it as superseded by a newer rule ID
 func (e *GllamEngine) RevokeOrSupersedeRule(ctx context.Context, oldRuleID string, newRuleID string) error {
-	return nil
+	if newRuleID != "" {
+		// Add supersedes link
+		return e.AddEdge(ctx, memory.SemanticLink{
+			SourceID:     newRuleID,
+			TargetID:     oldRuleID,
+			Relationship: "supersedes_rule",
+			Modality:     "deontic",
+		})
+	} else {
+		// If newRuleID is empty, we just delete the rule link to revoke it
+		_, err := e.db.ExecContext(ctx, "DELETE FROM semantic_links WHERE (target_id = ? OR source_id = ?) AND (modality = 'deontic' OR relationship = 'supersedes_rule')", oldRuleID, oldRuleID)
+		return err
+	}
 }
 
 
@@ -604,9 +580,13 @@ func ConfrontRuleRationales(links []memory.SemanticLink) string {
 	var negRules []memory.SemanticLink
 
 	for _, l := range links {
-		if l.ConstraintType == "negative" || strings.Contains(strings.ToLower(l.TargetID), "no_") || strings.Contains(strings.ToLower(l.TargetID), "never_") || strings.Contains(strings.ToLower(l.TargetID), "dont_") {
+		targetLower := strings.ToLower(l.TargetID)
+		relLower := strings.ToLower(l.Relationship)
+		caveatsLower := strings.ToLower(l.Caveats)
+
+		if strings.Contains(targetLower, "no_") || strings.Contains(targetLower, "never_") || strings.Contains(targetLower, "dont_") || strings.Contains(relLower, "prohibit") || strings.Contains(caveatsLower, "negative") {
 			negRules = append(negRules, l)
-		} else if l.ConstraintType == "positive" || l.RuleContext == "user_preference" {
+		} else if relLower == "is_preference" || relLower == "has_constraint" || relLower == "applies_rule" || l.Modality == "deontic" {
 			posRules = append(posRules, l)
 		}
 	}
@@ -630,17 +610,17 @@ func ConfrontRuleRationales(links []memory.SemanticLink) string {
 			}
 
 			if collision {
-				negRat := neg.RuleRationale
+				negRat := neg.Caveats
 				if negRat == "" {
 					negRat = "Security & Global Policy"
 				}
-				posRat := pos.RuleRationale
+				posRat := pos.Caveats
 				if posRat == "" {
 					posRat = "User Style Preference"
 				}
 
-				notice := fmt.Sprintf("⚠️ RULE RATIONALE CONFRONTATION RESOLVED: Negative restriction '%s' (Rationale: %s, Scope: %s) supersedes positive directive '%s' (Rationale: %s, Scope: %s).",
-					neg.TargetID, negRat, neg.RuleContext, pos.TargetID, posRat, pos.RuleContext)
+				notice := fmt.Sprintf("⚠️ RULE RATIONALE CONFRONTATION RESOLVED: Negative restriction '%s' (Rationale: %s) supersedes positive directive '%s' (Rationale: %s).",
+					neg.TargetID, negRat, pos.TargetID, posRat)
 				notices = append(notices, notice)
 			}
 		}
@@ -667,7 +647,7 @@ func (e *GllamEngine) DisambiguateEntityForSource(ctx context.Context, term stri
 
 	// 1. Query candidate nodes matching the term in ID or Name
 	query := `
-		SELECT id, name, type, context_prompt
+		SELECT id, name, type, context_prompt, created_from
 		FROM semantic_nodes
 		WHERE LOWER(name) LIKE ? OR LOWER(id) LIKE ?`
 	pattern := "%" + termLower + "%"
@@ -681,10 +661,13 @@ func (e *GllamEngine) DisambiguateEntityForSource(ctx context.Context, term stri
 	var candidates []memory.SemanticNode
 	for rows.Next() {
 		var n memory.SemanticNode
-		var ctxPrompt sql.NullString
-		if err := rows.Scan(&n.ID, &n.Name, &n.Type, &ctxPrompt); err == nil {
+		var ctxPrompt, createdFrom sql.NullString
+		if err := rows.Scan(&n.ID, &n.Name, &n.Type, &ctxPrompt, &createdFrom); err == nil {
 			if ctxPrompt.Valid {
 				n.ContextPrompt = ctxPrompt.String
+			}
+			if createdFrom.Valid {
+				n.CreatedFrom = createdFrom.String
 			}
 			candidates = append(candidates, n)
 		}
@@ -865,14 +848,17 @@ func (e *GllamEngine) RetrieveHybridNeedleWithTime(ctx context.Context, query st
 		if err == nil {
 			for _, res := range simResults {
 				var node memory.SemanticNode
-				var ctxPrompt, caveatSum sql.NullString
-				nodeQuery := `SELECT id, name, type, context_prompt, caveat_summary FROM semantic_nodes WHERE id = ?`
-				if err := e.dbRO.QueryRowContext(ctx, nodeQuery, res.NodeID).Scan(&node.ID, &node.Name, &node.Type, &ctxPrompt, &caveatSum); err == nil {
+				var ctxPrompt, caveatSum, createdFrom sql.NullString
+				nodeQuery := `SELECT id, name, type, context_prompt, caveat_summary, created_from FROM semantic_nodes WHERE id = ?`
+				if err := e.dbRO.QueryRowContext(ctx, nodeQuery, res.NodeID).Scan(&node.ID, &node.Name, &node.Type, &ctxPrompt, &caveatSum, &createdFrom); err == nil {
 					if ctxPrompt.Valid {
 						node.ContextPrompt = ctxPrompt.String
 					}
 					if caveatSum.Valid {
 						node.CaveatSummary = caveatSum.String
+					}
+					if createdFrom.Valid {
+						node.CreatedFrom = createdFrom.String
 					}
 					vectorNodes = append(vectorNodes, node)
 				}
@@ -895,14 +881,17 @@ func (e *GllamEngine) RetrieveHybridNeedleWithTime(ctx context.Context, query st
 	var seedNodes []memory.SemanticNode
 	for _, entID := range resolvedEntities {
 		var node memory.SemanticNode
-		var ctxPrompt, caveatSum sql.NullString
-		nodeQuery := `SELECT id, name, type, context_prompt, caveat_summary FROM semantic_nodes WHERE id = ?`
-		if err := e.dbRO.QueryRowContext(ctx, nodeQuery, entID).Scan(&node.ID, &node.Name, &node.Type, &ctxPrompt, &caveatSum); err == nil {
+		var ctxPrompt, caveatSum, createdFrom sql.NullString
+		nodeQuery := `SELECT id, name, type, context_prompt, caveat_summary, created_from FROM semantic_nodes WHERE id = ?`
+		if err := e.dbRO.QueryRowContext(ctx, nodeQuery, entID).Scan(&node.ID, &node.Name, &node.Type, &ctxPrompt, &caveatSum, &createdFrom); err == nil {
 			if ctxPrompt.Valid {
 				node.ContextPrompt = ctxPrompt.String
 			}
 			if caveatSum.Valid {
 				node.CaveatSummary = caveatSum.String
+			}
+			if createdFrom.Valid {
+				node.CreatedFrom = createdFrom.String
 			}
 			seedNodes = append(seedNodes, node)
 		}
@@ -1122,15 +1111,18 @@ func (e *GllamEngine) FindMultiHopPath(ctx context.Context, seedEntityIDs []stri
 	var seedNodes []memory.SemanticNode
 	for _, id := range seedEntityIDs {
 		var node memory.SemanticNode
-		var ctxPrompt, caveatSum sql.NullString
-		err := e.dbRO.QueryRowContext(ctx, "SELECT id, name, type, context_prompt, caveat_summary FROM semantic_nodes WHERE id = ?", id).
-			Scan(&node.ID, &node.Name, &node.Type, &ctxPrompt, &caveatSum)
+		var ctxPrompt, caveatSum, createdFrom sql.NullString
+		err := e.dbRO.QueryRowContext(ctx, "SELECT id, name, type, context_prompt, caveat_summary, created_from FROM semantic_nodes WHERE id = ?", id).
+			Scan(&node.ID, &node.Name, &node.Type, &ctxPrompt, &caveatSum, &createdFrom)
 		if err == nil {
 			if ctxPrompt.Valid {
 				node.ContextPrompt = ctxPrompt.String
 			}
 			if caveatSum.Valid {
 				node.CaveatSummary = caveatSum.String
+			}
+			if createdFrom.Valid {
+				node.CreatedFrom = createdFrom.String
 			}
 			seedNodes = append(seedNodes, node)
 		}
@@ -1328,8 +1320,8 @@ func parseTimestampPtr(s *string) int64 {
 func PreserveGlobalDirectives(links []memory.SemanticLink) string {
 	var directives []string
 	for _, l := range links {
-		if l.RuleContext == "user_preference" || l.ConstraintType == "negative" || l.Relationship == "is_preference" {
-			directive := fmt.Sprintf("• Rule (%s/%s): %s --(%s)--> %s", l.RuleContext, l.ConstraintType, l.SourceID, l.Relationship, l.TargetID)
+		if l.Modality == "deontic" || l.Relationship == "is_preference" || l.Relationship == "has_constraint" || l.Relationship == "applies_rule" || strings.HasPrefix(l.TargetID, "rule") || strings.HasPrefix(l.TargetID, "constraint") {
+			directive := fmt.Sprintf("• Rule (%s): %s --(%s)--> %s", l.Modality, l.SourceID, l.Relationship, l.TargetID)
 			if l.Caveats != "" {
 				directive += fmt.Sprintf(" [Rationale: %s]", l.Caveats)
 			}
@@ -1341,15 +1333,15 @@ func PreserveGlobalDirectives(links []memory.SemanticLink) string {
 
 // ExtractProceduralWorkflow detects repeated operational step patterns and persists a reusable procedural recipe (Trap 3).
 func (e *GllamEngine) ExtractProceduralWorkflow(ctx context.Context, name string, triggerContext string, instructions string, feedbackRules string) error {
-	now := time.Now()
+	nowStr := time.Now().UTC().Format(time.RFC3339)
 	taskType := strings.ToLower(strings.ReplaceAll(name, " ", "_"))
 	query := `
-		INSERT INTO procedural_knowledge (id, task_type, scope, trigger_context, instructions, user_feedback_rules, times_applied, is_highly_helpful, version, updated_at)
-		VALUES (?, ?, 'external', ?, ?, ?, 1, 1, 1, ?)
+		INSERT INTO procedural_knowledge (id, task_type, scope, trigger_context, instructions, user_feedback_rules, times_applied, is_highly_helpful, version, created_at, updated_at)
+		VALUES (?, ?, 'external', ?, ?, ?, 1, 1, 1, ?, ?)
 		ON CONFLICT(task_type) DO UPDATE SET instructions = excluded.instructions, times_applied = times_applied + 1, updated_at = excluded.updated_at`
 
 	id := fmt.Sprintf("proc-%s", strings.ToLower(strings.ReplaceAll(name, " ", "-")))
-	_, err := e.db.ExecContext(ctx, query, id, taskType, triggerContext, instructions, feedbackRules, now)
+	_, err := e.db.ExecContext(ctx, query, id, taskType, triggerContext, instructions, feedbackRules, nowStr, nowStr)
 	if err != nil {
 		return fmt.Errorf("failed to insert procedural workflow %s: %w", name, err)
 	}

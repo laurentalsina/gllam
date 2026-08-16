@@ -204,6 +204,22 @@ func (e *GllamEngine) RouteAndAssemble(ctx context.Context, userPrompt string, e
         }
     }
 
+    // Also include active global/contextual constraints
+    globalConstraints, err := e.GetActiveConstraintsForSource(ctx, "", "global")
+    if err == nil && len(globalConstraints) > 0 {
+        existingKeys := make(map[string]bool)
+        for _, l := range ctxResult.SemanticLinks {
+            key := fmt.Sprintf("%s-%s-%s", l.SourceID, l.TargetID, l.Relationship)
+            existingKeys[key] = true
+        }
+        for _, l := range globalConstraints {
+            key := fmt.Sprintf("%s-%s-%s", l.SourceID, l.TargetID, l.Relationship)
+            if !existingKeys[key] {
+                ctxResult.SemanticLinks = append(ctxResult.SemanticLinks, l)
+            }
+        }
+    }
+
     // 5. Cognitive Trigger: PDDL Planning Engine for timelines, contradictions, rules, and formats
     planningKeywords := []string{"before", "after", "timeline", "sequence", "possible", "could i have", "plan", "order", "rule", "constraint", "follow", "format", "preference"}
     requiresPlanning := false
@@ -305,18 +321,13 @@ func (e *GllamEngine) RouteAndAssemble(ctx context.Context, userPrompt string, e
         }
     }
 
-
-
-
-
-
     // 6. Fetch Document Lineage for retrieved semantic nodes (Issue #8 Strict Information Lineage)
     if len(ctxResult.SemanticNodes) > 0 {
-        var nodeIDs []string
+        var retrievedNodeIDs []string
         for _, n := range ctxResult.SemanticNodes {
-            nodeIDs = append(nodeIDs, n.ID)
+            retrievedNodeIDs = append(retrievedNodeIDs, n.ID)
         }
-        lineageRecords, err := e.GetDocumentLineageForNodes(ctx, nodeIDs)
+        lineageRecords, err := e.GetDocumentLineageForNodes(ctx, retrievedNodeIDs)
         if err == nil && len(lineageRecords) > 0 {
             ctxResult.Lineage = lineageRecords
         }
@@ -383,6 +394,9 @@ func FormatSystemPrompt(ctx *memory.CompiledContext) string {
         for _, link := range ctx.SemanticLinks {
             sb.WriteString(fmt.Sprintf("- (%s) -[%s]-> (%s)\n",
                 link.SourceID, link.Relationship, link.TargetID))
+            if link.Modality != "" {
+                sb.WriteString(fmt.Sprintf("  - Modality: %s\n", link.Modality))
+            }
             if link.Caveats != "" {
                 sb.WriteString(fmt.Sprintf("  - Caveat: %s\n", link.Caveats))
             }
@@ -456,16 +470,19 @@ var (
 func RedactProhibitedContent(text string, links []memory.SemanticLink, nodes []memory.SemanticNode) string {
     hasNegativeConstraint := false
     for _, l := range links {
-        if l.ConstraintType == "negative" || strings.Contains(strings.ToLower(l.TargetID), "no_") || strings.Contains(strings.ToLower(l.TargetID), "never_") || strings.Contains(strings.ToLower(l.TargetID), "dont_") {
+        targetLower := strings.ToLower(l.TargetID)
+        relLower := strings.ToLower(l.Relationship)
+        caveatsLower := strings.ToLower(l.Caveats)
+
+        if strings.Contains(targetLower, "no_") || strings.Contains(targetLower, "never_") || strings.Contains(targetLower, "dont_") || strings.Contains(relLower, "prohibit") || strings.Contains(caveatsLower, "negative") {
             hasNegativeConstraint = true
-            targetLower := strings.ToLower(l.TargetID)
 
             // Redact IP addresses if constraint mentions IP
-            if strings.Contains(targetLower, "ip") || strings.Contains(targetLower, "internal_ip") {
+            if strings.Contains(targetLower, "ip") || strings.Contains(targetLower, "internal_ip") || strings.Contains(caveatsLower, "ip") {
                 text = ipRegex.ReplaceAllString(text, "[REDACTED_INTERNAL_IP]")
             }
             // Redact tokens/passwords if constraint mentions token/password/auth/secret
-            if strings.Contains(targetLower, "token") || strings.Contains(targetLower, "password") || strings.Contains(targetLower, "secret") || strings.Contains(targetLower, "auth") {
+            if strings.Contains(targetLower, "token") || strings.Contains(targetLower, "password") || strings.Contains(targetLower, "secret") || strings.Contains(targetLower, "auth") || strings.Contains(caveatsLower, "token") || strings.Contains(caveatsLower, "secret") {
                 text = tokenRegex.ReplaceAllString(text, "[REDACTED_SECRET]")
             }
 

@@ -78,25 +78,27 @@ func TestExtractPDDLGoalRangeIntervals(t *testing.T) {
 	nodes := []memory.SemanticNode{
 		{ID: "event-db-migration", Name: "database migration", Type: memory.NodeTypeEvent},
 		{ID: "event-cache-purge", Name: "cache purge", Type: memory.NodeTypeEvent},
-		{ID: "event-release-v2", Name: "production release", Type: memory.NodeTypeEvent},
+		{ID: "event-traffic-switch", Name: "traffic switch", Type: memory.NodeTypeEvent},
 	}
 
-	// 1. "between X and Y"
-	goalBetween := ExtractPDDLGoal("What events occurred between database migration and production release?", nodes, nil)
-	if !strings.Contains(goalBetween, "event_db_migration") || !strings.Contains(goalBetween, "event_release_v2") {
-		t.Errorf("Between goal failed: %s", goalBetween)
+	links := []memory.SemanticLink{
+		{
+			SourceID:         "event-db-migration",
+			TargetID:         "event-cache-purge",
+			Relationship:     "happened_before",
+		},
+		{
+			SourceID:         "event-cache-purge",
+			TargetID:         "event-traffic-switch",
+			Relationship:     "happened_before",
+		},
 	}
 
-	// 2. "since X"
-	goalSince := ExtractPDDLGoal("What has happened since database migration?", nodes, nil)
-	if !strings.Contains(goalSince, "(happened_after") || !strings.Contains(goalSince, "event_db_migration") {
-		t.Errorf("Since goal failed: %s", goalSince)
-	}
+	goal := ExtractPDDLGoal("what occurred between the database migration and the traffic switch", nodes, links)
+	expected := "(and (event_in_range event_cache_purge event_db_migration event_traffic_switch))"
 
-	// 3. "until Y"
-	goalUntil := ExtractPDDLGoal("What occurred until production release?", nodes, nil)
-	if !strings.Contains(goalUntil, "(happened_before") || !strings.Contains(goalUntil, "event_release_v2") {
-		t.Errorf("Until goal failed: %s", goalUntil)
+	if goal != expected {
+		t.Errorf("Expected goal %q, got %q", expected, goal)
 	}
 }
 
@@ -109,7 +111,7 @@ func TestPDDLAspectProjectionsAndValidation(t *testing.T) {
 	}
 	links := []memory.SemanticLink{
 		{SourceID: "event-a", TargetID: "event-b", Relationship: "happened_before"},
-		{SourceID: "user-alice", TargetID: "rule-format", Relationship: "is_preference", RuleContext: "user_preference"},
+		{SourceID: "user-alice", TargetID: "rule-format", Relationship: "is_preference", Modality: "deontic"},
 	}
 
 	// 1. AspectTemporal projection should only include event-a and event-b

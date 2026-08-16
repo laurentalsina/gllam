@@ -51,7 +51,8 @@ type SemanticNode struct {
 	TrustWeight   int    `json:"trust_weight"` // Epistemic trust weight (e.g. 900 for Jira Resolved/PR Merged, 100 for draft)
 	TaxonomyPath  string `json:"taxonomy_path"` // Materialized path (e.g. /Engineering/Infrastructure/Databases/Relational/Postgres)
 	IsCategory    bool   `json:"is_category"`   // Flag indicating if node represents a taxonomy category
-	CaveatSummary string `json:"caveat_summary,omitempty"` // Compacted historical edge caveat summary
+	CaveatSummary string    `json:"caveat_summary,omitempty"` // Compacted historical node caveat summary
+	CreatedFrom   string    `json:"created_from"`          // Reference to raw data that led to creation (e.g. filename + chunk number)
         CreatedAt     time.Time `json:"created_at"`
         UpdatedAt     time.Time `json:"updated_at"`
 }
@@ -61,7 +62,7 @@ type TaxonomyNode struct {
 	ID           string          `json:"id"`
 	Name         string          `json:"name"`
 	Path         string          `json:"path"`
-	IsCategory   bool            `json:"is_category"`
+	IsCategory   bool            `json:"is_category"`// Flag indicating if node represents a taxonomy category
 	ParentPath   string          `json:"parent_path,omitempty"`
 	Children     []*TaxonomyNode `json:"children,omitempty"`
 	DirectMemberCount int        `json:"direct_member_count,omitempty"`
@@ -69,35 +70,19 @@ type TaxonomyNode struct {
         UpdatedAt     time.Time      `json:"updated_at"`
 }
 
-
+// This covers Epistemic (thought/known by someone), Alethic (possible/impossible/necessary), and Deontic (obligations, permissions, prohibitions) modalities
 type SemanticLink struct {
     SourceID              string  `json:"source_id"`
     TargetID              string  `json:"target_id"`
     Relationship          string  `json:"relationship"`
-    Caveats               string  `json:"caveats"`
-    OriginID              string  `json:"origin__id"`              // node (id) for human/agent/system that provided information about the link
-    RuleContext           string  `json:"rule_context"`            // "user_preference" | "session" | "source" | "global"
-    ConstraintType        string  `json:"constraint_type"`         // "positive" | "negative"
-    RuleRationale         string  `json:"rule_rationale"`          // Justification / "because" clause
-    ResolutionRationale   string  `json:"resolution_rationale"`    // Explanation when resolving a contradiction
-    Modality              string  `json:"modality"`                // Epistemic, Alethic, Deontic 
+    Caveats               string  `json:"caveats"`                // certainty, applicability, justification...
+    Modality              string  `json:"modality"`
+    OriginID              string  `json:"origin_id"`              // node (id) for human/agent/system that provided information about the link
+    ResolutionRationale   string  `json:"resolution_rationale"`   // Explanation when resolving a contradiction
     CreatedFrom           string  `json:"created_from"`           // Reference to raw data that led to creation (e.g. filename + chunk number)
     CreatedAt             time.Time `json:"created_at"`
     UpdatedAt             time.Time `json:"updated_at"`
 }
-
-// this is not used yet, separating temporal information from semantic links
-// type SemanticTemporalLink struct {
-//     ValidFrom             string  `json:"valid_from"`              // Unix timestamp string OR "temporal_note"
-//     ValidUntil            *string `json:"valid_until"`             // Unix timestamp string OR "temporal_note" OR nil
-//     TemporalAnchorID      string  `json:"temporal_anchor_id"`     // Grounded node ID reference for relative timing
-//     TemporalRelation      string  `json:"temporal_relation"`     // Allen Interval Algebra: "before"|"after"|"equals"|...
-//     TemporalOffset        int64   `json:"temporal_offset"`       // Relative offset in temporal relationship
-//     TemporalGranularity   string  `json:"temporal_granularity"`   // "day" (snap 00:00:00) | "hour" | "exact" | "month"
-//     TemporalNote          string  `json:"temporal_note"`           // Qualitative phrase describing imprecise timestamp
-//     DurationTurns         int64   `json:"duration_turns"`          // -1 for infinite, N for turn-bounded rules
-//     RemainingTurns        int64   `json:"remaining_turns"`         // Remaining turns before auto-expiration
-// }
 
 type DocumentVersion struct {
 	ID            string `json:"id"`

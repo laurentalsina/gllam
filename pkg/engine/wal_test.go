@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/laurentalsina/gllam/pkg/memory"
 )
 
 
@@ -36,8 +38,11 @@ func TestWALCheckpointingAndReadOnlyHandleEnforcement(t *testing.T) {
 	for i := 0; i < 50; i++ {
 		nodeID := fmt.Sprintf("node-wal-%d", i)
 		nodeName := fmt.Sprintf("test-node-%d-%d", i, time.Now().UnixNano())
-		_, err = gllam.DB().ExecContext(ctx, "INSERT INTO semantic_nodes (id, name, type) VALUES (?, ?, ?)",
-			nodeID, nodeName, "entity")
+		err = gllam.UpsertNode(ctx, memory.SemanticNode{
+			ID:   nodeID,
+			Name: nodeName,
+			Type: "entity",
+		})
 		if err != nil {
 			t.Fatalf("Failed to insert node %s: %v", nodeID, err)
 		}

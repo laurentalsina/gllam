@@ -34,7 +34,7 @@
             "relationship": { "type": "string" },
             "caveats": { "type": "string" }
           },
-          "required": ["source_id", "target_id", "relationship"],
+          "required": ["source_id", "target_id", "relationship", "modality"],
           "additionalProperties": false
         }
       }

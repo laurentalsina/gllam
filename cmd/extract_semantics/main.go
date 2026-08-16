@@ -447,6 +447,11 @@ func main() {
 					if node.ID == "" {
 						continue
 					}
+					baseURI := *sourceURI
+					if episode.SourceURI != "" {
+						baseURI = episode.SourceURI
+					}
+					node.CreatedFrom = fmt.Sprintf("%s %s#chunk-%d", strings.TrimRight(baseURI, "/"), episode.ID, cIdx+1)
 					if err := gllam.UpsertNode(ctx, node); err == nil {
 						epNodes++
 					}
@@ -473,7 +478,7 @@ func main() {
 									*nodeID = existingID
 									return
 								}
-								_ = gllam.UpsertNode(ctx, memory.SemanticNode{ID: *nodeID, Name: *nodeID, Type: "inferred"})
+								_ = gllam.UpsertNode(ctx, memory.SemanticNode{ID: *nodeID, Name: *nodeID, Type: "inferred", CreatedFrom: link.CreatedFrom})
 							}
 							ensureNode(&link.SourceID)
 							ensureNode(&link.TargetID)

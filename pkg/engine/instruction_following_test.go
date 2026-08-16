@@ -47,35 +47,33 @@ func TestInstructionFollowingDataModelAndSourceNodes(t *testing.T) {
 		}
 	}
 
-	// 3. Create Links tied to OriginID, RuleContext, and ConstraintType
+	// 3. Create Links tied to Modality deontic
 	link1 := memory.SemanticLink{
-		SourceID:       "user-alice",
-		TargetID:       "rule-format-table",
-		Relationship:   "is_preference",
-		OriginID:       "user-alice",
-		RuleContext:    "user_preference",
-		ConstraintType: "positive",
+		SourceID:     "user-alice",
+		TargetID:     "rule-format-table",
+		Relationship: "is_preference",
+		Modality:     "deontic",
+		Caveats:      "positive user preference",
 	}
 	if err := gllam.AddEdge(ctx, link1); err != nil {
 		t.Fatalf("Failed to add link1: %v", err)
 	}
 
 	link2 := memory.SemanticLink{
-		SourceID:       "sys-github",
-		TargetID:       "constraint-no-internal-ip",
-		Relationship:   "has_constraint",
-		OriginID:       "sys-github",
-		RuleContext:    "global",
-		ConstraintType: "negative",
+		SourceID:     "sys-github",
+		TargetID:     "constraint-no-internal-ip",
+		Relationship: "has_constraint",
+		Modality:     "deontic",
+		Caveats:      "negative security constraint",
 	}
 	if err := gllam.AddEdge(ctx, link2); err != nil {
 		t.Fatalf("Failed to add link2: %v", err)
 	}
 
 	// 4. Retrieve links and verify fields
-	links, err := gllam.GetActiveLinksAtTime(ctx, 1500)
+	links, err := gllam.GetActiveConstraintsForSource(ctx, "user-alice", "global")
 	if err != nil {
-		t.Fatalf("GetActiveLinksAtTime failed: %v", err)
+		t.Fatalf("GetActiveConstraintsForSource failed: %v", err)
 	}
 
 	if len(links) < 2 {
@@ -87,26 +85,14 @@ func TestInstructionFollowingDataModelAndSourceNodes(t *testing.T) {
 	for _, l := range links {
 		if l.TargetID == "rule-format-table" {
 			foundLink1 = true
-			if l.OriginID != "user-alice" {
-				t.Errorf("Expected OriginID 'user-alice', got %q", l.OriginID)
-			}
-			if l.RuleContext != "user_preference" {
-				t.Errorf("Expected RuleContext 'user_preference', got %q", l.RuleContext)
-			}
-			if l.ConstraintType != "positive" {
-				t.Errorf("Expected ConstraintType 'positive', got %q", l.ConstraintType)
+			if l.Modality != "deontic" {
+				t.Errorf("Expected Modality 'deontic', got %q", l.Modality)
 			}
 		}
 		if l.TargetID == "constraint-no-internal-ip" {
 			foundLink2 = true
-			if l.OriginID != "sys-github" {
-				t.Errorf("Expected OriginID 'sys-github', got %q", l.OriginID)
-			}
-			if l.RuleContext != "global" {
-				t.Errorf("Expected RuleContext 'global', got %q", l.RuleContext)
-			}
-			if l.ConstraintType != "negative" {
-				t.Errorf("Expected ConstraintType 'negative', got %q", l.ConstraintType)
+			if l.Modality != "deontic" {
+				t.Errorf("Expected Modality 'deontic', got %q", l.Modality)
 			}
 		}
 	}
@@ -140,8 +126,7 @@ func TestGetActiveConstraintsForSourceAndRevocation(t *testing.T) {
 		SourceID:     "user-bob",
 		TargetID:     "rule-json",
 		Relationship: "is_preference",
-		OriginID:     "user-bob",
-		RuleContext:  "user_preference",
+		Modality:     "deontic",
 	})
 
 	// 1. Check active constraints for user-bob
@@ -162,8 +147,7 @@ func TestGetActiveConstraintsForSourceAndRevocation(t *testing.T) {
 		SourceID:     "user-bob",
 		TargetID:     "rule-yaml",
 		Relationship: "is_preference",
-		OriginID:     "user-bob",
-		RuleContext:  "user_preference",
+		Modality:     "deontic",
 	})
 
 	// 3. Verify rule-json is expired and rule-yaml is active
@@ -194,7 +178,7 @@ func TestPDDLRuleVerification(t *testing.T) {
 		{ID: "rule-format-table", Name: "Format Table", Type: memory.NodeTypeRule},
 	}
 	links := []memory.SemanticLink{
-		{SourceID: "user-alice", TargetID: "rule-format-table", Relationship: "is_preference", RuleContext: "user_preference"},
+		{SourceID: "user-alice", TargetID: "rule-format-table", Relationship: "is_preference", Modality: "deontic"},
 	}
 
 	goal := ExtractPDDLGoal("Did we follow the rule for table format?", nodes, links)
@@ -215,16 +199,18 @@ func TestPDDLRuleVerification(t *testing.T) {
 func TestNegativeConstraintRedaction(t *testing.T) {
 	links := []memory.SemanticLink{
 		{
-			SourceID:       "sys-security",
-			TargetID:       "constraint-no-internal-ip",
-			Relationship:   "has_constraint",
-			ConstraintType: "negative",
+			SourceID:     "sys-security",
+			TargetID:     "constraint-no-internal-ip",
+			Relationship: "has_constraint",
+			Modality:     "deontic",
+			Caveats:      "negative",
 		},
 		{
-			SourceID:       "sys-security",
-			TargetID:       "constraint-no-token",
-			Relationship:   "has_constraint",
-			ConstraintType: "negative",
+			SourceID:     "sys-security",
+			TargetID:     "constraint-no-token",
+			Relationship: "has_constraint",
+			Modality:     "deontic",
+			Caveats:      "negative",
 		},
 	}
 
@@ -262,20 +248,18 @@ func TestInstructionFollowingTurnConstraints(t *testing.T) {
 func TestRuleRationaleConfrontation(t *testing.T) {
 	links := []memory.SemanticLink{
 		{
-			SourceID:       "sys-security",
-			TargetID:       "constraint-no-token",
-			Relationship:   "has_constraint",
-			ConstraintType: "negative",
-			RuleContext:    "global",
-			RuleRationale:  "Security & Access Governance",
+			SourceID:     "sys-security",
+			TargetID:     "constraint-no-token",
+			Relationship: "has_constraint",
+			Modality:     "deontic",
+			Caveats:      "Security & Access Governance negative",
 		},
 		{
-			SourceID:       "user-bob",
-			TargetID:       "rule-verbose-logging",
-			Relationship:   "is_preference",
-			ConstraintType: "positive",
-			RuleContext:    "user_preference",
-			RuleRationale:  "API Endpoint Debugging",
+			SourceID:     "user-bob",
+			TargetID:     "rule-verbose-logging",
+			Relationship: "is_preference",
+			Modality:     "deontic",
+			Caveats:      "API Endpoint Debugging positive",
 		},
 	}
 
