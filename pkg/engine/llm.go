@@ -270,7 +270,7 @@ func (c *LLMClient) GenerateWithFormat(ctx context.Context, systemPrompt, userPr
 
 	for scanner.Scan() {
 		line := scanner.Text()
-		fmt.Println("RAW LINE:", line)
+		//fmt.Println("RAW LINE:", line)
 		if !strings.HasPrefix(line, "data: ") {
 			continue
 		}

@@ -400,6 +400,9 @@ func FormatSystemPrompt(ctx *memory.CompiledContext) string {
             if link.Caveats != "" {
                 sb.WriteString(fmt.Sprintf("  - Caveat: %s\n", link.Caveats))
             }
+            if link.OriginID != "" {
+                sb.WriteString(fmt.Sprintf("  - Origin: %s\n", link.OriginID))
+            }
         }
         sb.WriteString("\n")
     }

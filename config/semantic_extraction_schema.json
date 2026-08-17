@@ -24,7 +24,7 @@
         "type": "array",
         "items": {
           "type": "object",
-          "properties": {
+          "properties": 
             "modality": {
               "type": "string",
 	      "enum": ["epistemic", "alethic", "deontic"]
@@ -32,9 +32,10 @@
             "source_id": { "type": "string" },
             "target_id": { "type": "string" },
             "relationship": { "type": "string" },
-            "caveats": { "type": "string" }
+            "caveats": { "type": "string" },
+	    "origin_id": { "type": "string" }
           },
-          "required": ["source_id", "target_id", "relationship", "modality"],
+          "required": ["source_id", "target_id", "relationship", "origin_id", "modality"],
           "additionalProperties": false
         }
       }

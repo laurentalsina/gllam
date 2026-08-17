@@ -1,8 +1,10 @@
 {
   "chunk_size":2500,
   "chunk_overlap": 200,
-  "semantic_extraction": ["identify nodes: all nouns. Type can ve: human, entity, event, state, rule, constraint, contradiction, fallacy",
-                          "identify relationships. Modality: epistemic is what is known, alethic is what is contingent, deontic is rules & constraints",
+  "semantic_extraction": ["identify nodes: all nouns. Type can be: human, entity, event, state, rule, constraint, contradiction, fallacy",
+                          "identify relationships:",
+			  " - modality: \"epistemic\" is what is known, \"alethic\" is what is contingent, \"deontic\" is rules & constraints",
+			  " - origin_id: id of the node that provided the information about the relationship, (\"unknown\" if not known) ",
                           "make sure all nodes have relationships"],
   "semantic_extraction2": [
     "You are a semantic knowledge extractor for an agentic memory graph.",

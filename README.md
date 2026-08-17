@@ -102,7 +102,10 @@ go run ./cmd/gllam --embeddings-server http://localhost:8080 --recall "web serve
 go run ./cmd/gllam --embeddings-server http://localhost:8080
 
 # Benchmarks
-./bench/*.sh
+shell-scripts in subfolders of ./bench/
+see https://arxiv.org/html/2608.02613v1 for an intro on benchmarks
+focus now is BEAM and Memarena, GLLAM gets about 60% on both in its not-optimized current state
+
 ```
 
 ## Usage as a Library

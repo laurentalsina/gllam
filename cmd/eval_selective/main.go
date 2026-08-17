@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/laurentalsina/gllam/pkg/engine"
 	"github.com/laurentalsina/gllam/pkg/memory"
@@ -55,6 +56,33 @@ func clearSemanticTables(ctx context.Context, db *sql.DB) {
 	_, _ = db.ExecContext(ctx, "DELETE FROM semantic_links")
 	_, _ = db.ExecContext(ctx, "DELETE FROM semantic_nodes")
 	_, _ = db.ExecContext(ctx, "DELETE FROM semantic_embeddings")
+}
+
+func getCapitalizedTerms(query string) map[string]bool {
+	capitalized := make(map[string]bool)
+	var current strings.Builder
+	for _, r := range query {
+		if unicode.IsLetter(r) || unicode.IsNumber(r) {
+			current.WriteRune(r)
+		} else {
+			if current.Len() > 0 {
+				word := current.String()
+				first := rune(word[0])
+				if unicode.IsUpper(first) {
+					capitalized[strings.ToLower(word)] = true
+				}
+				current.Reset()
+			}
+		}
+	}
+	if current.Len() > 0 {
+		word := current.String()
+		first := rune(word[0])
+		if unicode.IsUpper(first) {
+			capitalized[strings.ToLower(word)] = true
+		}
+	}
+	return capitalized
 }
 
 func main() {
@@ -150,6 +178,9 @@ func main() {
 			}
 		}
 
+		// Identify capitalized terms for entity/name boosting
+		capTerms := getCapitalizedTerms(qa.Query)
+
 		// 3. Score utterances based on TF-IDF to prioritize rare terms like names and entities
 		uttScores := make(map[string]float64)
 		totalUtterances := float64(len(idx.Utterances))
@@ -164,8 +195,31 @@ func main() {
 			}
 			// Compute IDF
 			idf := math.Log(totalUtterances / df)
+			boost := 1.0
+			if capTerms[term] {
+				boost = 5.0 // Boost proper names/entities
+			}
 			for _, p := range postings {
-				uttScores[p.UtteranceID] += float64(p.Frequency) * idf
+				score := float64(p.Frequency) * idf * boost
+				
+				// Speaker matching boost
+				utt := idx.Utterances[p.UtteranceID]
+				speakerLower := strings.ToLower(utt.SpeakerID)
+				speakerParts := strings.Split(speakerLower, "_")
+				textLower := strings.ToLower(utt.Text)
+
+				isSpeaker := false
+				if len(speakerParts) > 0 && speakerParts[0] == term {
+					isSpeaker = true
+				} else if strings.HasPrefix(textLower, term+":") {
+					isSpeaker = true
+				}
+
+				if isSpeaker {
+					score *= 5.0 // High boost if this person is the active speaker
+				}
+				
+				uttScores[p.UtteranceID] += score
 			}
 		}
 
@@ -272,10 +326,13 @@ func main() {
 		} else {
 			prompt := engine.FormatSystemPrompt(compiled)
 			fmt.Printf("   ├─ Assembled prompt size: %d chars. Submitting to LLM...\n", len(prompt))
+			fmt.Printf("   ├─ Prompt:\n %s\n", prompt)
+
+			userQuery := fmt.Sprintf("Discussion Transcript:\n%s\n\nQuestion: %s", transcriptText, qa.Query)
 
 			var genErr error
 			for attempt := 1; attempt <= 3; attempt++ {
-				answer, genErr = llmClient.Generate(ctx, prompt, qa.Query)
+				answer, genErr = llmClient.Generate(ctx, prompt, userQuery)
 				if genErr == nil && strings.TrimSpace(answer) != "" {
 					break
 				}
