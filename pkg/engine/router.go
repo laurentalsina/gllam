@@ -411,7 +411,8 @@ func FormatSystemPrompt(ctx *memory.CompiledContext) string {
     if len(ctx.Episodic) > 0 {
         sb.WriteString("## Recent Episodes\n\n")
         for _, ep := range ctx.Episodic {
-            sb.WriteString(fmt.Sprintf("- [%s] %s\n", ep.CreatedAt.Format(time.RFC3339), ep.SummaryText))
+            cleanedSummary := cleanTranscriptSAYArtifacts(ep.SummaryText)
+            sb.WriteString(fmt.Sprintf("- [%s] %s\n", ep.CreatedAt.Format(time.RFC3339), cleanedSummary))
         }
         sb.WriteString("\n")
     }
@@ -532,4 +533,31 @@ func FormatUnsolvableDiagnostic(goalPredicate string, links []memory.SemanticLin
 	}
 
 	return fmt.Sprintf("⚠️ TIMELINE UNPROVABLE: Goal predicate %s could not be verified by the planning engine.", goalPredicate)
+}
+
+func cleanTranscriptSAYArtifacts(text string) string {
+	lines := strings.Split(text, "\n")
+	lastSpeaker := ""
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		lower := strings.ToLower(trimmed)
+		if strings.HasPrefix(lower, "say:") || strings.HasPrefix(lower, "say :") {
+			colonIdx := strings.Index(line, ":")
+			if colonIdx != -1 && lastSpeaker != "" {
+				lines[i] = lastSpeaker + ":" + line[colonIdx+1:]
+			}
+		} else {
+			colonIdx := strings.Index(line, ":")
+			if colonIdx != -1 {
+				potentialSpeaker := strings.TrimSpace(line[:colonIdx])
+				if !strings.Contains(potentialSpeaker, " ") {
+					lastSpeaker = potentialSpeaker
+				}
+			}
+		}
+	}
+	return strings.Join(lines, "\n")
 }

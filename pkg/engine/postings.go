@@ -106,7 +106,22 @@ func BuildInvertedIndex(corpusPath string) (*InvertedIndex, error) {
 
 		errJSON := json.Unmarshal(lineBytes, &session)
 		if errJSON == nil && session.SessionID != "" && len(session.Turns) > 0 {
+			lastSpeaker := ""
 			for idx, turn := range session.Turns {
+				speaker := turn.SpeakerID
+				cleanSpeaker := strings.TrimSpace(strings.ToLower(speaker))
+				if cleanSpeaker == "say" || strings.HasPrefix(cleanSpeaker, "say:") || strings.HasPrefix(cleanSpeaker, "say ") {
+					if lastSpeaker != "" {
+						speaker = lastSpeaker
+					} else {
+						speaker = "unknown"
+					}
+				} else {
+					if speaker != "" {
+						lastSpeaker = speaker
+					}
+				}
+
 				idxInLine := strings.Index(lineStr, turn.Text)
 				var startByte, endByte int64
 				if idxInLine != -1 {
@@ -125,7 +140,7 @@ func BuildInvertedIndex(corpusPath string) (*InvertedIndex, error) {
 				utt := CorpusUtterance{
 					ID:         utteranceID,
 					SessionID:  session.SessionID,
-					SpeakerID:  turn.SpeakerID,
+					SpeakerID:  speaker,
 					Text:       turn.Text,
 					SourceURI:  sourceURI,
 					LineNumber: lineNumber,

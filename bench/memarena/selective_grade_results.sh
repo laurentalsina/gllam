@@ -1,0 +1,1 @@
+CGO_ENABLED=1 CGO_CFLAGS="-I/home/laurent/vllm/.venv/lib/python3.13/site-packages/_rocm_sdk_devel/lib/rocm_sysdeps/include" go run ./cmd/grade_results/main.go --results ./d7_qa_results_selective.jsonl

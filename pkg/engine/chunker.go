@@ -4,6 +4,7 @@ import (
 	"math"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/laurentalsina/gllam/pkg/config"
 )
@@ -255,13 +256,19 @@ func snapToBoundary(runes []rune, pos, minPos int) int {
 	sub := string(runes[minPos:pos])
 
 	// 1. Try splitting at double newline (turn boundary)
-	if idx := strings.LastIndex(sub, "\n\n"); idx != -1 && minPos+idx+2 > minPos {
-		return minPos + idx + 2
+	if idx := strings.LastIndex(sub, "\n\n"); idx != -1 {
+		runeIdx := utf8.RuneCountInString(sub[:idx])
+		if minPos+runeIdx+2 > minPos {
+			return minPos + runeIdx + 2
+		}
 	}
 
 	// 2. Try splitting at single newline
-	if idx := strings.LastIndex(sub, "\n"); idx != -1 && minPos+idx+1 > minPos {
-		return minPos + idx + 1
+	if idx := strings.LastIndex(sub, "\n"); idx != -1 {
+		runeIdx := utf8.RuneCountInString(sub[:idx])
+		if minPos+runeIdx+1 > minPos {
+			return minPos + runeIdx + 1
+		}
 	}
 
 	// 3. Try splitting at sentence boundary (. ! ?) followed by space or newline

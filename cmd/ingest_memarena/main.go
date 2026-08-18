@@ -80,8 +80,22 @@ func main() {
 		}
 
 		var transcriptBuilder strings.Builder
+		lastSpeaker := ""
 		for _, turn := range s.Turns {
-			transcriptBuilder.WriteString(fmt.Sprintf("%s: %s\n", turn.SpeakerID, turn.Text))
+			speaker := turn.SpeakerID
+			cleanSpeaker := strings.TrimSpace(strings.ToLower(speaker))
+			if cleanSpeaker == "say" || strings.HasPrefix(cleanSpeaker, "say:") || strings.HasPrefix(cleanSpeaker, "say ") {
+				if lastSpeaker != "" {
+					speaker = lastSpeaker
+				} else {
+					speaker = "unknown"
+				}
+			} else {
+				if speaker != "" {
+					lastSpeaker = speaker
+				}
+			}
+			transcriptBuilder.WriteString(fmt.Sprintf("%s: %s\n", speaker, turn.Text))
 		}
 
 		absCorpusPath := *corpusPath

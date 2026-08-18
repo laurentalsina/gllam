@@ -13,7 +13,6 @@ import (
 	"sort"
 	"strings"
 	"time"
-	"unicode"
 
 	"github.com/laurentalsina/gllam/pkg/engine"
 	"github.com/laurentalsina/gllam/pkg/memory"
@@ -56,33 +55,6 @@ func clearSemanticTables(ctx context.Context, db *sql.DB) {
 	_, _ = db.ExecContext(ctx, "DELETE FROM semantic_links")
 	_, _ = db.ExecContext(ctx, "DELETE FROM semantic_nodes")
 	_, _ = db.ExecContext(ctx, "DELETE FROM semantic_embeddings")
-}
-
-func getCapitalizedTerms(query string) map[string]bool {
-	capitalized := make(map[string]bool)
-	var current strings.Builder
-	for _, r := range query {
-		if unicode.IsLetter(r) || unicode.IsNumber(r) {
-			current.WriteRune(r)
-		} else {
-			if current.Len() > 0 {
-				word := current.String()
-				first := rune(word[0])
-				if unicode.IsUpper(first) {
-					capitalized[strings.ToLower(word)] = true
-				}
-				current.Reset()
-			}
-		}
-	}
-	if current.Len() > 0 {
-		word := current.String()
-		first := rune(word[0])
-		if unicode.IsUpper(first) {
-			capitalized[strings.ToLower(word)] = true
-		}
-	}
-	return capitalized
 }
 
 func main() {
@@ -178,9 +150,6 @@ func main() {
 			}
 		}
 
-		// Identify capitalized terms for entity/name boosting
-		capTerms := getCapitalizedTerms(qa.Query)
-
 		// 3. Score utterances based on TF-IDF to prioritize rare terms like names and entities
 		uttScores := make(map[string]float64)
 		totalUtterances := float64(len(idx.Utterances))
@@ -195,31 +164,8 @@ func main() {
 			}
 			// Compute IDF
 			idf := math.Log(totalUtterances / df)
-			boost := 1.0
-			if capTerms[term] {
-				boost = 5.0 // Boost proper names/entities
-			}
 			for _, p := range postings {
-				score := float64(p.Frequency) * idf * boost
-				
-				// Speaker matching boost
-				utt := idx.Utterances[p.UtteranceID]
-				speakerLower := strings.ToLower(utt.SpeakerID)
-				speakerParts := strings.Split(speakerLower, "_")
-				textLower := strings.ToLower(utt.Text)
-
-				isSpeaker := false
-				if len(speakerParts) > 0 && speakerParts[0] == term {
-					isSpeaker = true
-				} else if strings.HasPrefix(textLower, term+":") {
-					isSpeaker = true
-				}
-
-				if isSpeaker {
-					score *= 5.0 // High boost if this person is the active speaker
-				}
-				
-				uttScores[p.UtteranceID] += score
+				uttScores[p.UtteranceID] += float64(p.Frequency) * idf
 			}
 		}
 
@@ -301,45 +247,69 @@ func main() {
 		for _, u := range expandedUtterances {
 			transcriptBuilder.WriteString(fmt.Sprintf("%s: %s\n", u.SpeakerID, u.Text))
 		}
-		transcriptText := transcriptBuilder.String()
+		transcriptText := cleanTranscriptSAYArtifacts(transcriptBuilder.String())
 
 		fmt.Printf("   ├─ Retrieved & expanded context size: %d turns (%d characters)\n", len(expandedUtterances), len(transcriptText))
-		fmt.Println("   ├─ Context Text:")
-		for _, u := range expandedUtterances {
-			fmt.Printf("   │    [%s] %s: %s\n", u.ID, u.SpeakerID, u.Text)
-		}
+		fmt.Print(transcriptText)
 
-		// 5. Extract semantics just-in-time
-		nodes, links, err := extractSemanticsForText(ctx, gllam, embedder, llmClient, transcriptText, gllam.SystemPrompts.SemanticExtraction, extractionJSONSchema)
-		if err != nil {
-			fmt.Printf("   ❌ Semantic extraction failed: %v\n", err)
-		} else {
-			fmt.Printf("   ├─ Extracted JIT: %d nodes, %d links\n", nodes, links)
-		}
+		// 5. Try Direct QA First Pass
+		fmt.Printf("   ├─ Attempting Direct QA first-pass...\n")
+		directSystemPrompt := `You are a helpful assistant. You will be provided with a conversation transcript and a question.
+Your task is to:
+1. First, analyze if the question has a temporal sequencing component (e.g. asking whether an event happened "before" or "after" another, or requesting a specific chronological order/sequence of events).
+   - If the question contains a temporal ordering/sequencing component, reply exactly "NOT_FOUND" and do not output anything else.
+2. If there is no temporal sequencing component, try to answer the question strictly using facts directly stated in the transcript.
+   - If the transcript contains the answer, write a concise 1-sentence answer.
+   - If the transcript does NOT contain the answer, reply exactly "NOT_FOUND". Do not explain or output anything else.`
 
-		// 6. Route and Assemble semantic context & answer query
-		compiled, err := gllam.RouteAndAssemble(ctx, qa.Query, nil)
+		fmt.Println("--- LLM Direct QA System Prompt ---")
+		fmt.Println(directSystemPrompt)
+		fmt.Println("--- LLM Direct QA User Prompt ---")
+		fmt.Printf("Transcript:\n%s\n\nQuestion: %s\n", transcriptText, qa.Query)
+		fmt.Println("----------------------------------")
+
+		directAnswer, err := tryDirectQA(ctx, llmClient, directSystemPrompt, transcriptText, qa.Query)
 		var answer string
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "   ❌ Error routing query: %v\n", err)
-			answer = "ERROR"
+		if err == nil && directAnswer != "NOT_FOUND" && directAnswer != "" {
+			answer = directAnswer
+			fmt.Printf("   ├─ ✅ First-pass Direct QA succeeded.\n")
 		} else {
-			prompt := engine.FormatSystemPrompt(compiled)
-			fmt.Printf("   ├─ Assembled prompt size: %d chars. Submitting to LLM...\n", len(prompt))
-			fmt.Printf("   ├─ Prompt:\n %s\n", prompt)
+			fmt.Printf("   ├─ ❌ Direct QA returned NOT_FOUND/error. Falling back to JIT semantic extraction...\n")
 
-			userQuery := fmt.Sprintf("Discussion Transcript:\n%s\n\nQuestion: %s", transcriptText, qa.Query)
-
-			var genErr error
-			for attempt := 1; attempt <= 3; attempt++ {
-				answer, genErr = llmClient.Generate(ctx, prompt, userQuery)
-				if genErr == nil && strings.TrimSpace(answer) != "" {
-					break
-				}
-				time.Sleep(time.Duration(attempt) * time.Second)
+			// 6. Extract semantics just-in-time
+			nodes, links, err := extractSemanticsForText(ctx, gllam, embedder, llmClient, transcriptText, gllam.SystemPrompts.SemanticExtraction, extractionJSONSchema)
+			if err != nil {
+				fmt.Printf("   ❌ Semantic extraction failed: %v\n", err)
+			} else {
+				fmt.Printf("   ├─ Extracted JIT: %d nodes, %d links\n", nodes, links)
 			}
-			if genErr != nil {
+
+			// 7. Route and Assemble semantic context & answer query
+			compiled, err := gllam.RouteAndAssemble(ctx, qa.Query, nil)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "   ❌ Error routing query: %v\n", err)
 				answer = "ERROR"
+			} else {
+				prompt := engine.FormatSystemPrompt(compiled)
+				userQuery := fmt.Sprintf("Discussion Transcript:\n%s\n\nQuestion: %s", transcriptText, qa.Query)
+
+				fmt.Println("--- LLM Final Q&A System Prompt ---")
+				fmt.Println(prompt)
+				fmt.Println("--- LLM Final Q&A User Prompt ---")
+				fmt.Println(userQuery)
+				fmt.Println("---------------------------------")
+
+				var genErr error
+				for attempt := 1; attempt <= 3; attempt++ {
+					answer, genErr = llmClient.Generate(ctx, prompt, userQuery)
+					if genErr == nil && strings.TrimSpace(answer) != "" {
+						break
+					}
+					time.Sleep(time.Duration(attempt) * time.Second)
+				}
+				if genErr != nil {
+					answer = "ERROR"
+				}
 			}
 		}
 
@@ -371,6 +341,12 @@ func extractSemanticsForText(ctx context.Context, gllam *engine.GllamEngine, emb
 		}
 
 		userPrompt := fmt.Sprintf("Transcript Chunk (%d/%d):\n%s\n\nExtract JSON:", cIdx+1, len(chunks), chunk.Text)
+
+		fmt.Println("--- LLM JIT Semantic Extraction System Prompt ---")
+		fmt.Println(systemPrompt)
+		fmt.Println("--- LLM JIT Semantic Extraction User Prompt ---")
+		fmt.Println(userPrompt)
+		fmt.Println("-------------------------------------------------")
 
 		response, err := llmClient.GenerateWithFormat(ctx, systemPrompt, userPrompt, extractionJSONSchema)
 		if err != nil {
@@ -456,4 +432,40 @@ func SanitizeLLMJSON(s string) string {
 		s = s[start : end+1]
 	}
 	return strings.TrimSpace(s)
+}
+
+func cleanTranscriptSAYArtifacts(text string) string {
+	lines := strings.Split(text, "\n")
+	lastSpeaker := ""
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		lower := strings.ToLower(trimmed)
+		if strings.HasPrefix(lower, "say:") || strings.HasPrefix(lower, "say :") {
+			colonIdx := strings.Index(line, ":")
+			if colonIdx != -1 && lastSpeaker != "" {
+				lines[i] = lastSpeaker + ":" + line[colonIdx+1:]
+			}
+		} else {
+			colonIdx := strings.Index(line, ":")
+			if colonIdx != -1 {
+				potentialSpeaker := strings.TrimSpace(line[:colonIdx])
+				if !strings.Contains(potentialSpeaker, " ") {
+					lastSpeaker = potentialSpeaker
+				}
+			}
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+func tryDirectQA(ctx context.Context, llmClient *engine.LLMClient, systemPrompt string, transcript string, query string) (string, error) {
+	userPrompt := fmt.Sprintf("Transcript:\n%s\n\nQuestion: %s", transcript, query)
+	answer, err := llmClient.Generate(ctx, systemPrompt, userPrompt)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(answer), nil
 }
