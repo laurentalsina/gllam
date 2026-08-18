@@ -438,7 +438,6 @@ func main() {
 		transcriptText := cleanTranscriptSAYArtifacts(transcriptBuilder.String())
 
 		fmt.Printf("   ├─ Retrieved & expanded context size: %d turns (%d characters)\n", len(expandedUtterances), len(transcriptText))
-		fmt.Print(transcriptText)
 
 		// 5. Try Direct QA First Pass
 		fmt.Printf("   ├─ Attempting Direct QA first-pass...\n")
@@ -464,7 +463,10 @@ func main() {
 				reason = "--bypass-semantic"
 			}
 			fmt.Printf("   ├─ ⚠️ Bypassing JIT semantic extraction (%s). Answering directly from transcript...\n", reason)
-			directPrompt := "You are a helpful assistant. Answer the question strictly using facts directly stated in the transcript."
+			directPrompt := gllam.SystemPrompts.SimpleTemporalRetrieval
+			if directPrompt == "" {
+				directPrompt = "You are a helpful assistant. Answer the question strictly using facts directly stated in the transcript. Pay absolute attention to the chronological sequence of lines in the transcript. Determine who speaks first and who speaks second, and trace the sequence of statements. Answer the temporal ordering question precisely and directly."
+			}
 			userPrompt := fmt.Sprintf("Transcript:\n%s\n\nQuestion: %s", transcriptText, qa.Query)
 			
 			fmt.Println("--- LLM Direct QA Bypassed Prompt ---")
@@ -516,6 +518,7 @@ func main() {
 			}
 		}
 
+		answer = stripThinkingTags(answer)
 		res := Result{
 			InstanceID:  qa.InstanceID,
 			Query:       qa.Query,
@@ -842,4 +845,17 @@ func matchesAnySpeaker(speakerID string, targets []string) bool {
 		}
 	}
 	return false
+}
+
+func stripThinkingTags(s string) string {
+	for {
+		start := strings.Index(s, "<thinking>")
+		end := strings.Index(s, "</thinking>")
+		if start != -1 && end != -1 && end > start {
+			s = s[:start] + s[end+11:]
+		} else {
+			break
+		}
+	}
+	return strings.TrimSpace(s)
 }

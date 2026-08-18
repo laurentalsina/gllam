@@ -45,6 +45,7 @@ type AgenticMemorySystemPrompts struct {
 	CustomDocumentTypeRules        map[string]CustomDocumentTypeRule      `json:"custom_document_type_rules,omitempty"`    // Dynamic custom document types with trust baselines and steering strategies
 	RepositoryContextDirectives    map[string]RepositoryContextDirective `json:"repository_context_directives,omitempty"` // Documentation repository-specific context extraction directives
 	DirectQAPrompt                 string                                 `json:"direct_qa_prompt"`
+	SimpleTemporalRetrieval        string                                 `json:"simple_temporal_retrieval"`
 	HistoricalContextPrompt        string                                 `json:"historical_context_prompt"`
 	SemanticExtractionPrompt       string                                 `json:"semantic_extraction_prompt"`
 	ProceduralGeneralizationPrompt string                                 `json:"procedural_generalization_prompt"`
@@ -56,8 +57,9 @@ func (p *AgenticMemorySystemPrompts) UnmarshalJSON(data []byte) error {
 	// Alias prevents recursive UnmarshalJSON calls when parsing raw fields
 	type Alias AgenticMemorySystemPrompts
 	var aux struct {
-		SemanticExtraction json.RawMessage `json:"semantic_extraction"`
-		DirectQAPrompt     json.RawMessage `json:"direct_qa_prompt"`
+		SemanticExtraction      json.RawMessage `json:"semantic_extraction"`
+		DirectQAPrompt          json.RawMessage `json:"direct_qa_prompt"`
+		SimpleTemporalRetrieval json.RawMessage `json:"simple_temporal_retrieval"`
 		*Alias
 	}
 	aux.Alias = (*Alias)(p)
@@ -90,6 +92,20 @@ func (p *AgenticMemorySystemPrompts) UnmarshalJSON(data []byte) error {
 				p.DirectQAPrompt = strings.TrimSpace(single)
 			} else {
 				return fmt.Errorf("direct_qa_prompt must be a string or array of strings")
+			}
+		}
+	}
+
+	if len(aux.SimpleTemporalRetrieval) > 0 {
+		var lines []string
+		if err := json.Unmarshal(aux.SimpleTemporalRetrieval, &lines); err == nil {
+			p.SimpleTemporalRetrieval = strings.TrimSpace(strings.Join(lines, "\n"))
+		} else {
+			var single string
+			if err := json.Unmarshal(aux.SimpleTemporalRetrieval, &single); err == nil {
+				p.SimpleTemporalRetrieval = strings.TrimSpace(single)
+			} else {
+				return fmt.Errorf("simple_temporal_retrieval must be a string or array of strings")
 			}
 		}
 	}
