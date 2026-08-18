@@ -110,11 +110,11 @@ Do not provide any explanations, just "PASS" or "FAIL".`
 			} else {
 				fmt.Printf("[%s] FAIL\n", res.InstanceID)
 			}
-			if *verbose {
-				fmt.Printf("   ├─ Query: %s\n", res.Query)
-				fmt.Printf("   ├─ Ground Truth: %s\n", res.GroundTruth)
-				fmt.Printf("   └─ Model Answer: %s\n\n", res.ModelAnswer)
-			}
+		}
+		if *verbose {
+			fmt.Printf("   ├─ Query: %s\n", res.Query)
+			fmt.Printf("   ├─ Ground Truth: %s\n", res.GroundTruth)
+			fmt.Printf("   └─ Model Answer: %s\n\n", res.ModelAnswer)
 		}
 	}
 

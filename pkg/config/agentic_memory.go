@@ -44,6 +44,7 @@ type AgenticMemorySystemPrompts struct {
 	IngestionSteeringDirectives    map[string]IngestionStrategy           `json:"ingestion_steering_directives,omitempty"` // Per-source type ingestion steering strategies
 	CustomDocumentTypeRules        map[string]CustomDocumentTypeRule      `json:"custom_document_type_rules,omitempty"`    // Dynamic custom document types with trust baselines and steering strategies
 	RepositoryContextDirectives    map[string]RepositoryContextDirective `json:"repository_context_directives,omitempty"` // Documentation repository-specific context extraction directives
+	DirectQAPrompt                 string                                 `json:"direct_qa_prompt"`
 	HistoricalContextPrompt        string                                 `json:"historical_context_prompt"`
 	SemanticExtractionPrompt       string                                 `json:"semantic_extraction_prompt"`
 	ProceduralGeneralizationPrompt string                                 `json:"procedural_generalization_prompt"`
@@ -56,6 +57,7 @@ func (p *AgenticMemorySystemPrompts) UnmarshalJSON(data []byte) error {
 	type Alias AgenticMemorySystemPrompts
 	var aux struct {
 		SemanticExtraction json.RawMessage `json:"semantic_extraction"`
+		DirectQAPrompt     json.RawMessage `json:"direct_qa_prompt"`
 		*Alias
 	}
 	aux.Alias = (*Alias)(p)
@@ -65,21 +67,31 @@ func (p *AgenticMemorySystemPrompts) UnmarshalJSON(data []byte) error {
 	}
 
 	if len(aux.SemanticExtraction) > 0 {
-		// 1. Attempt to parse as an array of string lines
 		var lines []string
 		if err := json.Unmarshal(aux.SemanticExtraction, &lines); err == nil {
 			p.SemanticExtraction = strings.TrimSpace(strings.Join(lines, "\n"))
-			return nil
+		} else {
+			var single string
+			if err := json.Unmarshal(aux.SemanticExtraction, &single); err == nil {
+				p.SemanticExtraction = strings.TrimSpace(single)
+			} else {
+				return fmt.Errorf("semantic_extraction must be a string or array of strings")
+			}
 		}
+	}
 
-		// 2. Fall back to parsing as a single string
-		var single string
-		if err := json.Unmarshal(aux.SemanticExtraction, &single); err == nil {
-			p.SemanticExtraction = strings.TrimSpace(single)
-			return nil
+	if len(aux.DirectQAPrompt) > 0 {
+		var lines []string
+		if err := json.Unmarshal(aux.DirectQAPrompt, &lines); err == nil {
+			p.DirectQAPrompt = strings.TrimSpace(strings.Join(lines, "\n"))
+		} else {
+			var single string
+			if err := json.Unmarshal(aux.DirectQAPrompt, &single); err == nil {
+				p.DirectQAPrompt = strings.TrimSpace(single)
+			} else {
+				return fmt.Errorf("direct_qa_prompt must be a string or array of strings")
+			}
 		}
-
-		return fmt.Errorf("semantic_extraction must be a string or array of strings")
 	}
 
 	return nil

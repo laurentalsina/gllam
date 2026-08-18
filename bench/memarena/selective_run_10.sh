@@ -1,1 +1,14 @@
-CGO_ENABLED=1 CGO_CFLAGS="-I/home/laurent/vllm/.venv/lib/python3.13/site-packages/_rocm_sdk_devel/lib/rocm_sysdeps/include"     go run ./cmd/eval_selective/main.go       --corpus ./bench/memarena/corpus_sessions.jsonl       --qa ./bench/memarena/d7_qa.jsonl       --out ./d7_qa_results_selective.jsonl       --dbpath ./bench/gllam_data_selective.db       --limit 10 --top-k 12
+clear;
+CGO_ENABLED=1 CGO_CFLAGS="-I/home/laurent/vllm/.venv/lib/python3.13/site-packages/_rocm_sdk_devel/lib/rocm_sysdeps/include" \
+   	go run ./cmd/eval_selective/main.go \
+  	--corpus ./bench/memarena/corpus_sessions.jsonl \
+  	--qa ./bench/memarena/d7_qa.jsonl \
+  	--out ./d7_qa_results_selective.jsonl \
+  	--dbpath ./bench/gllam_data_selective.db \
+  	--limit 10 \
+	--top-k 12 \
+        --bypass-temporal=true \
+        --use-utterances-vectors=true \
+	--use-terms-vectors=true \
+
+#--bypass-semantic true 

@@ -12,6 +12,8 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/laurentalsina/gllam/pkg/engine"
@@ -68,8 +70,14 @@ func main() {
 	schemaPath := flag.String("schema-file", getEnv("EXTRACTION_SCHEMA_PATH", "./config/semantic_extraction_schema.json"), "Path to JSON schema")
 	topKMatches := flag.Int("top-k", 2, "Number of top matching utterances to expand context for")
 	limit := flag.Int("limit", 0, "Limit number of queries (0 for all)")
+	bypassTemporal := flag.Bool("bypass-temporal", false, "Bypass JIT semantic extraction for temporal questions and answer directly from transcript")
+	bypassSemantic := flag.Bool("bypass-semantic", false, "Bypass JIT semantic extraction completely and answer directly from transcript")
+	useUtterancesVectors := flag.Bool("use-utterances-vectors", false, "Use turn-level vector embedding similarity search for paragraph/context retrieval")
+	useTermsVectors := flag.Bool("use-terms-vectors", false, "Use semantic query expansion via term vocabulary embeddings")
 
 	flag.Parse()
+
+	fmt.Printf("DEBUG: use-utterances-vectors=%v, use-terms-vectors=%v, bypass-temporal=%v, bypass-semantic=%v, top-k=%d\n", *useUtterancesVectors, *useTermsVectors, *bypassTemporal, *bypassSemantic, *topKMatches)
 
 	ctx := context.Background()
 
@@ -107,6 +115,20 @@ func main() {
 	}
 	fmt.Printf("Index built in %v. Utterances: %d, Terms: %d\n", time.Since(startIdx).Round(time.Millisecond), len(idx.Utterances), len(idx.Postings))
 
+	if *useUtterancesVectors {
+		if err := ensureUtteranceEmbeddingsIndexed(ctx, gllam, embedder, idx); err != nil {
+			fmt.Fprintf(os.Stderr, "Utterance vector indexing failed: %v\n", err)
+			os.Exit(1)
+		}
+	}
+
+	if *useTermsVectors {
+		if err := ensureTermEmbeddingsIndexed(ctx, gllam, embedder, idx); err != nil {
+			fmt.Fprintf(os.Stderr, "Term vector indexing failed: %v\n", err)
+			os.Exit(1)
+		}
+	}
+
 	qaFile, err := os.Open(*qaPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to open QA file: %v\n", err)
@@ -136,59 +158,225 @@ func main() {
 			continue
 		}
 
-		fmt.Printf("\nProcessing [%s]: %s\n", qa.InstanceID, qa.Query)
+		fmt.Println(strings.Repeat("=", 100))
+		fmt.Printf("Processing [%s]: %s\n", qa.InstanceID, qa.Query)
 
 		// 1. Clear semantic database tables for fresh query
 		clearSemanticTables(ctx, gllam.DB())
 
-		// 2. Tokenize query and filter stop words
-		queryTokens := engine.Tokenize(qa.Query)
-		var searchTerms []string
-		for _, tok := range queryTokens {
-			if !stopWords[tok] {
-				searchTerms = append(searchTerms, tok)
-			}
+		targetSpeakers := extractTargetSpeakers(qa.Query, idx)
+		if len(targetSpeakers) > 0 {
+			fmt.Printf("   ├─ Target speakers detected in question: %v\n", targetSpeakers)
 		}
 
-		// 3. Score utterances based on TF-IDF to prioritize rare terms like names and entities
-		uttScores := make(map[string]float64)
-		totalUtterances := float64(len(idx.Utterances))
-		for _, term := range searchTerms {
-			postings, ok := idx.Postings[term]
-			if !ok {
-				continue
-			}
-			df := float64(len(postings))
-			if df == 0 {
-				continue
-			}
-			// Compute IDF
-			idf := math.Log(totalUtterances / df)
-			for _, p := range postings {
-				uttScores[p.UtteranceID] += float64(p.Frequency) * idf
-			}
-		}
-
-		type scoreEntry struct {
-			id    string
-			score float64
-		}
-		var scoredList []scoreEntry
-		for id, sc := range uttScores {
-			scoredList = append(scoredList, scoreEntry{id: id, score: sc})
-		}
-		sort.Slice(scoredList, func(i, j int) bool {
-			return scoredList[i].score > scoredList[j].score
-		})
-
-		// 4. Retrieve top matches and expand context (2 before, 5 after)
+		// 2. Retrieve top matching utterances
 		var selectedUtteranceIDs []string
-		limit := *topKMatches
-		if len(scoredList) < limit {
-			limit = len(scoredList)
-		}
-		for i := 0; i < limit; i++ {
-			selectedUtteranceIDs = append(selectedUtteranceIDs, scoredList[i].id)
+		if *useUtterancesVectors {
+			fmt.Printf("   ├─ Retrieving top-%d matching paragraphs via Hybrid Search (TF-IDF + Vector RRF)...\n", *topKMatches)
+
+			// 2a. Run TF-IDF search to get ranked list (up to 100)
+			queryTokens := engine.Tokenize(qa.Query)
+			var searchTerms []string
+			for _, tok := range queryTokens {
+				if !stopWords[tok] {
+					searchTerms = append(searchTerms, tok)
+				}
+			}
+
+			if *useTermsVectors {
+				fmt.Printf("   ├─ Expanding query vocabulary via term embeddings...\n")
+				var expandedTerms []string
+				for _, term := range searchTerms {
+					tEmb, err := embedder.Embed(ctx, term)
+					if err != nil {
+						continue
+					}
+					similar, err := gllam.SearchSimilarTerms(ctx, tEmb, 4)
+					if err == nil {
+						for _, sim := range similar {
+							expandedTerms = append(expandedTerms, sim.Term)
+						}
+					}
+				}
+				termSet := make(map[string]bool)
+				for _, t := range searchTerms {
+					termSet[t] = true
+				}
+				for _, t := range expandedTerms {
+					if !termSet[t] {
+						termSet[t] = true
+						searchTerms = append(searchTerms, t)
+					}
+				}
+				fmt.Printf("   ├─ Expanded search terms: %v\n", searchTerms)
+			}
+
+			uttScores := make(map[string]float64)
+			totalUtterances := float64(len(idx.Utterances))
+			for _, term := range searchTerms {
+				postings, ok := idx.Postings[term]
+				if !ok {
+					continue
+				}
+				df := float64(len(postings))
+				if df == 0 {
+					continue
+				}
+				idf := math.Log(totalUtterances / df)
+				for _, p := range postings {
+					uttScores[p.UtteranceID] += float64(p.Frequency) * idf
+				}
+			}
+
+			type scoreEntry struct {
+				id    string
+				score float64
+			}
+			var tfidfList []scoreEntry
+			for id, sc := range uttScores {
+				tfidfList = append(tfidfList, scoreEntry{id: id, score: sc})
+			}
+			sort.Slice(tfidfList, func(i, j int) bool {
+				return tfidfList[i].score > tfidfList[j].score
+			})
+
+			// 2b. Run Vector search to get ranked list (up to 100)
+			qEmb, err := embedder.Embed(ctx, qa.Query)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "   ❌ Failed to embed query: %v\n", err)
+				os.Exit(1)
+			}
+			vecMatches, err := gllam.SearchSimilarUtterances(ctx, qEmb, 100)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "   ❌ Vector search failed: %v\n", err)
+				os.Exit(1)
+			}
+
+			// 2c. Reciprocal Rank Fusion (RRF)
+			rrfScores := make(map[string]float64)
+			const kRRF = 60.0
+
+			for rank, entry := range tfidfList {
+				if rank >= 100 {
+					break
+				}
+				rrfScores[entry.id] += 1.0 / (kRRF + float64(rank+1))
+			}
+
+			for rank, entry := range vecMatches {
+				rrfScores[entry.UtteranceID] += 1.0 / (kRRF + float64(rank+1))
+			}
+
+			// Apply speaker focus boost on RRF scores
+			if len(targetSpeakers) > 0 {
+				for id, score := range rrfScores {
+					u, ok := idx.Utterances[id]
+					if ok && matchesAnySpeaker(u.SpeakerID, targetSpeakers) {
+						rrfScores[id] = score * 10.0
+					}
+				}
+			}
+
+			type rrfEntry struct {
+				id    string
+				score float64
+			}
+			var rrfList []rrfEntry
+			for id, sc := range rrfScores {
+				rrfList = append(rrfList, rrfEntry{id: id, score: sc})
+			}
+			sort.Slice(rrfList, func(i, j int) bool {
+				return rrfList[i].score > rrfList[j].score
+			})
+
+			limit := *topKMatches
+			if len(rrfList) < limit {
+				limit = len(rrfList)
+			}
+			for i := 0; i < limit; i++ {
+				selectedUtteranceIDs = append(selectedUtteranceIDs, rrfList[i].id)
+			}
+		} else {
+			// Tokenize query and filter stop words
+			queryTokens := engine.Tokenize(qa.Query)
+			var searchTerms []string
+			for _, tok := range queryTokens {
+				if !stopWords[tok] {
+					searchTerms = append(searchTerms, tok)
+				}
+			}
+
+			if *useTermsVectors {
+				fmt.Printf("   ├─ Expanding query vocabulary via term embeddings...\n")
+				var expandedTerms []string
+				for _, term := range searchTerms {
+					tEmb, err := embedder.Embed(ctx, term)
+					if err != nil {
+						continue
+					}
+					similar, err := gllam.SearchSimilarTerms(ctx, tEmb, 4)
+					if err == nil {
+						for _, sim := range similar {
+							expandedTerms = append(expandedTerms, sim.Term)
+						}
+					}
+				}
+				termSet := make(map[string]bool)
+				for _, t := range searchTerms {
+					termSet[t] = true
+				}
+				for _, t := range expandedTerms {
+					if !termSet[t] {
+						termSet[t] = true
+						searchTerms = append(searchTerms, t)
+					}
+				}
+				fmt.Printf("   ├─ Expanded search terms: %v\n", searchTerms)
+			}
+
+			// Score utterances based on TF-IDF to prioritize rare terms like names and entities
+			uttScores := make(map[string]float64)
+			totalUtterances := float64(len(idx.Utterances))
+			for _, term := range searchTerms {
+				postings, ok := idx.Postings[term]
+				if !ok {
+					continue
+				}
+				df := float64(len(postings))
+				if df == 0 {
+					continue
+				}
+				// Compute IDF
+				idf := math.Log(totalUtterances / df)
+				for _, p := range postings {
+					score := float64(p.Frequency) * idf
+					u, ok := idx.Utterances[p.UtteranceID]
+					if ok && matchesAnySpeaker(u.SpeakerID, targetSpeakers) {
+						score *= 10.0
+					}
+					uttScores[p.UtteranceID] += score
+				}
+			}
+
+			type scoreEntry struct {
+				id    string
+				score float64
+			}
+			var scoredList []scoreEntry
+			for id, sc := range uttScores {
+				scoredList = append(scoredList, scoreEntry{id: id, score: sc})
+			}
+			sort.Slice(scoredList, func(i, j int) bool {
+				return scoredList[i].score > scoredList[j].score
+			})
+
+			limit := *topKMatches
+			if len(scoredList) < limit {
+				limit = len(scoredList)
+			}
+			for i := 0; i < limit; i++ {
+				selectedUtteranceIDs = append(selectedUtteranceIDs, scoredList[i].id)
+			}
 		}
 
 		// Gather context expanded utterances
@@ -254,13 +442,7 @@ func main() {
 
 		// 5. Try Direct QA First Pass
 		fmt.Printf("   ├─ Attempting Direct QA first-pass...\n")
-		directSystemPrompt := `You are a helpful assistant. You will be provided with a conversation transcript and a question.
-Your task is to:
-1. First, analyze if the question has a temporal sequencing component (e.g. asking whether an event happened "before" or "after" another, or requesting a specific chronological order/sequence of events).
-   - If the question contains a temporal ordering/sequencing component, reply exactly "NOT_FOUND" and do not output anything else.
-2. If there is no temporal sequencing component, try to answer the question strictly using facts directly stated in the transcript.
-   - If the transcript contains the answer, write a concise 1-sentence answer.
-   - If the transcript does NOT contain the answer, reply exactly "NOT_FOUND". Do not explain or output anything else.`
+		directSystemPrompt := gllam.SystemPrompts.DirectQAPrompt
 
 		fmt.Println("--- LLM Direct QA System Prompt ---")
 		fmt.Println(directSystemPrompt)
@@ -270,11 +452,32 @@ Your task is to:
 
 		directAnswer, err := tryDirectQA(ctx, llmClient, directSystemPrompt, transcriptText, qa.Query)
 		var answer string
-		if err == nil && directAnswer != "NOT_FOUND" && directAnswer != "" {
+		isTemporal := strings.HasPrefix(strings.ToUpper(directAnswer), "TEMPORAL")
+		isNotFound := strings.ToUpper(directAnswer) == "ANSWER_NOT_FOUND"
+
+		if err == nil && !isTemporal && !isNotFound && directAnswer != "" {
 			answer = directAnswer
 			fmt.Printf("   ├─ ✅ First-pass Direct QA succeeded.\n")
+		} else if *bypassSemantic || (isTemporal && *bypassTemporal) {
+			reason := "TEMPORAL with --bypass-temporal"
+			if *bypassSemantic {
+				reason = "--bypass-semantic"
+			}
+			fmt.Printf("   ├─ ⚠️ Bypassing JIT semantic extraction (%s). Answering directly from transcript...\n", reason)
+			directPrompt := "You are a helpful assistant. Answer the question strictly using facts directly stated in the transcript."
+			userPrompt := fmt.Sprintf("Transcript:\n%s\n\nQuestion: %s", transcriptText, qa.Query)
+			
+			fmt.Println("--- LLM Direct QA Bypassed Prompt ---")
+			fmt.Println(directPrompt)
+			fmt.Printf("User:\n%s\n", userPrompt)
+			fmt.Println("------------------------------------")
+			
+			answer, err = llmClient.Generate(ctx, directPrompt, userPrompt)
+			if err != nil {
+				answer = "ERROR"
+			}
 		} else {
-			fmt.Printf("   ├─ ❌ Direct QA returned NOT_FOUND/error. Falling back to JIT semantic extraction...\n")
+			fmt.Printf("   ├─ ❌ Direct QA returned %s. Falling back to JIT semantic extraction...\n", directAnswer)
 
 			// 6. Extract semantics just-in-time
 			nodes, links, err := extractSemanticsForText(ctx, gllam, embedder, llmClient, transcriptText, gllam.SystemPrompts.SemanticExtraction, extractionJSONSchema)
@@ -350,16 +553,25 @@ func extractSemanticsForText(ctx context.Context, gllam *engine.GllamEngine, emb
 
 		response, err := llmClient.GenerateWithFormat(ctx, systemPrompt, userPrompt, extractionJSONSchema)
 		if err != nil {
+			fmt.Printf("   ❌ LLM GenerateWithFormat error: %v\n", err)
 			return 0, 0, err
 		}
 
-		response = SanitizeLLMJSON(response)
+		sanitized := SanitizeLLMJSON(response)
 		var extraction struct {
 			Nodes []memory.SemanticNode `json:"nodes"`
 			Links []memory.SemanticLink `json:"links"`
 		}
-		if err := json.Unmarshal([]byte(response), &extraction); err != nil {
+		if err := json.Unmarshal([]byte(sanitized), &extraction); err != nil {
+			fmt.Printf("   ❌ Failed to parse JSON from LLM: %v\n", err)
+			fmt.Printf("   [RAW RESPONSE]:\n%s\n", response)
+			fmt.Printf("   [SANITIZED RESPONSE]:\n%s\n", sanitized)
 			continue
+		}
+
+		fmt.Printf("   ├─ Chunk %d/%d: Extracted %d nodes, %d links from this chunk.\n", cIdx+1, len(chunks), len(extraction.Nodes), len(extraction.Links))
+		if len(extraction.Nodes) == 0 && len(extraction.Links) == 0 {
+			fmt.Printf("   [RAW RESPONSE]:\n%s\n", response)
 		}
 
 		// Ingest into SQLite
@@ -468,4 +680,166 @@ func tryDirectQA(ctx context.Context, llmClient *engine.LLMClient, systemPrompt 
 		return "", err
 	}
 	return strings.TrimSpace(answer), nil
+}
+
+func ensureUtteranceEmbeddingsIndexed(ctx context.Context, gllam *engine.GllamEngine, embedder engine.Embedder, idx *engine.InvertedIndex) error {
+	var count int
+	err := gllam.DBRO().QueryRowContext(ctx, "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='utterance_embeddings'").Scan(&count)
+	if err != nil || count == 0 {
+		return fmt.Errorf("utterance_embeddings table does not exist or schema not initialized: %v", err)
+	}
+
+	err = gllam.DBRO().QueryRowContext(ctx, "SELECT count(*) FROM utterance_embeddings").Scan(&count)
+	if err != nil {
+		return err
+	}
+	if count > 0 {
+		fmt.Printf("   ├─ Found %d utterance embeddings pre-indexed in DB.\n", count)
+		return nil
+	}
+
+	fmt.Printf("   ├─ ⚙️ Embedding and indexing %d utterances into DB (one-time setup)...\n", len(idx.Utterances))
+	
+	type task struct {
+		id   string
+		text string
+	}
+	
+	tasks := make(chan task, len(idx.Utterances))
+	for id, u := range idx.Utterances {
+		tasks <- task{id: id, text: u.Text}
+	}
+	close(tasks)
+
+	numWorkers := 40
+	var wg sync.WaitGroup
+	var progress int64
+	var mu sync.Mutex
+
+	for i := 0; i < numWorkers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for t := range tasks {
+				vec, err := embedder.Embed(ctx, t.text)
+				if err != nil {
+					continue
+				}
+				mu.Lock()
+				_ = gllam.IndexUtteranceVector(ctx, t.id, vec)
+				mu.Unlock()
+
+				curr := atomic.AddInt64(&progress, 1)
+				if curr%1000 == 0 {
+					fmt.Printf("      -> Embedded %d/%d utterances...\n", curr, len(idx.Utterances))
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	fmt.Printf("   ├─ Finished indexing %d utterance embeddings!\n", progress)
+	return nil
+}
+
+func ensureTermEmbeddingsIndexed(ctx context.Context, gllam *engine.GllamEngine, embedder engine.Embedder, idx *engine.InvertedIndex) error {
+	var count int
+	err := gllam.DBRO().QueryRowContext(ctx, "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='term_embeddings'").Scan(&count)
+	if err != nil || count == 0 {
+		return fmt.Errorf("term_embeddings table does not exist or schema not initialized: %v", err)
+	}
+
+	err = gllam.DBRO().QueryRowContext(ctx, "SELECT count(*) FROM term_embeddings").Scan(&count)
+	if err != nil {
+		return err
+	}
+	if count > 0 {
+		fmt.Printf("   ├─ Found %d vocabulary term embeddings pre-indexed in DB.\n", count)
+		return nil
+	}
+
+	fmt.Printf("   ├─ ⚙️ Embedding and indexing %d unique vocabulary terms into DB (one-time setup)...\n", len(idx.Postings))
+	
+	var termsList []string
+	for term := range idx.Postings {
+		termsList = append(termsList, term)
+	}
+
+	type task struct {
+		term string
+	}
+	
+	tasks := make(chan task, len(termsList))
+	for _, term := range termsList {
+		tasks <- task{term: term}
+	}
+	close(tasks)
+
+	numWorkers := 40
+	var wg sync.WaitGroup
+	var progress int64
+	var mu sync.Mutex
+
+	for i := 0; i < numWorkers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for t := range tasks {
+				vec, err := embedder.Embed(ctx, t.term)
+				if err != nil {
+					continue
+				}
+				mu.Lock()
+				_ = gllam.IndexTermVector(ctx, t.term, vec)
+				mu.Unlock()
+
+				curr := atomic.AddInt64(&progress, 1)
+				if curr%2000 == 0 {
+					fmt.Printf("      -> Embedded %d/%d terms...\n", curr, len(termsList))
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	fmt.Printf("   ├─ Finished indexing %d term embeddings!\n", progress)
+	return nil
+}
+
+func extractTargetSpeakers(query string, idx *engine.InvertedIndex) []string {
+	speakers := make(map[string]bool)
+	for _, u := range idx.Utterances {
+		name := strings.ToLower(u.SpeakerID)
+		if name == "" || name == "unknown" || name == "system" {
+			continue
+		}
+		parts := strings.Split(name, "_")
+		for _, part := range parts {
+			trimmed := strings.TrimSpace(part)
+			if len(trimmed) > 2 {
+				speakers[trimmed] = true
+			}
+		}
+		speakers[name] = true
+	}
+
+	lowerQuery := strings.ToLower(query)
+	var found []string
+	for name := range speakers {
+		if strings.Contains(lowerQuery, name) {
+			found = append(found, name)
+		}
+	}
+	return found
+}
+
+func matchesAnySpeaker(speakerID string, targets []string) bool {
+	if len(targets) == 0 {
+		return false
+	}
+	lowerSpeaker := strings.ToLower(speakerID)
+	for _, t := range targets {
+		if strings.Contains(lowerSpeaker, t) {
+			return true
+		}
+	}
+	return false
 }

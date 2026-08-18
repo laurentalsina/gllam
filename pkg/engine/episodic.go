@@ -147,3 +147,111 @@ func (e *GllamEngine) SearchSimilarEpisodes(ctx context.Context, queryText strin
 
     return episodes, rows.Err()
 }
+
+// IndexUtteranceVector stores a pre-computed float32 vector embedding for an utterance.
+func (e *GllamEngine) IndexUtteranceVector(ctx context.Context, uttID string, vec []float32) error {
+	vecBytes, err := serializeEmbedding(vec)
+	if err != nil {
+		return fmt.Errorf("failed to serialize embedding: %w", err)
+	}
+
+	_, err = e.db.ExecContext(ctx, "INSERT OR REPLACE INTO utterance_embeddings (utterance_id, embedding) VALUES (?, vec_f32(?))", uttID, vecBytes)
+	if err != nil {
+		return fmt.Errorf("failed to store utterance embedding %s: %w", uttID, err)
+	}
+	return nil
+}
+
+// SearchSimilarUtterances finds utterance IDs with similar embeddings to the query embedding.
+func (e *GllamEngine) SearchSimilarUtterances(ctx context.Context, queryEmbedding []float32, limit int) ([]struct {
+	UtteranceID string
+	Distance    float32
+}, error) {
+	query := `
+        SELECT utterance_id, distance
+        FROM utterance_embeddings
+        WHERE embedding MATCH vec_f32(?)
+        ORDER BY distance ASC
+        LIMIT ?`
+
+	embBytes, err := serializeEmbedding(queryEmbedding)
+	if err != nil {
+		return nil, fmt.Errorf("failed to serialize embedding: %w", err)
+	}
+
+	rows, err := e.dbRO.QueryContext(ctx, query, embBytes, limit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to search similar utterances: %w", err)
+	}
+	defer rows.Close()
+
+	var results []struct {
+		UtteranceID string
+		Distance    float32
+	}
+	for rows.Next() {
+		var res struct {
+			UtteranceID string
+			Distance    float32
+		}
+		if err := rows.Scan(&res.UtteranceID, &res.Distance); err != nil {
+			return nil, err
+		}
+		results = append(results, res)
+	}
+	return results, rows.Err()
+}
+
+// IndexTermVector stores a pre-computed float32 vector embedding for a vocabulary term.
+func (e *GllamEngine) IndexTermVector(ctx context.Context, term string, vec []float32) error {
+	vecBytes, err := serializeEmbedding(vec)
+	if err != nil {
+		return fmt.Errorf("failed to serialize embedding: %w", err)
+	}
+
+	_, err = e.db.ExecContext(ctx, "INSERT OR REPLACE INTO term_embeddings (term, embedding) VALUES (?, vec_f32(?))", term, vecBytes)
+	if err != nil {
+		return fmt.Errorf("failed to store term embedding %s: %w", term, err)
+	}
+	return nil
+}
+
+// SearchSimilarTerms finds vocabulary terms with similar embeddings to the query embedding.
+func (e *GllamEngine) SearchSimilarTerms(ctx context.Context, queryEmbedding []float32, limit int) ([]struct {
+	Term     string
+	Distance float32
+}, error) {
+	query := `
+        SELECT term, distance
+        FROM term_embeddings
+        WHERE embedding MATCH vec_f32(?)
+        ORDER BY distance ASC
+        LIMIT ?`
+
+	embBytes, err := serializeEmbedding(queryEmbedding)
+	if err != nil {
+		return nil, fmt.Errorf("failed to serialize embedding: %w", err)
+	}
+
+	rows, err := e.dbRO.QueryContext(ctx, query, embBytes, limit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to search similar terms: %w", err)
+	}
+	defer rows.Close()
+
+	var results []struct {
+		Term     string
+		Distance float32
+	}
+	for rows.Next() {
+		var res struct {
+			Term     string
+			Distance float32
+		}
+		if err := rows.Scan(&res.Term, &res.Distance); err != nil {
+			return nil, err
+		}
+		results = append(results, res)
+	}
+	return results, rows.Err()
+}

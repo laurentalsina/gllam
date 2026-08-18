@@ -131,6 +131,18 @@ CREATE VIRTUAL TABLE IF NOT EXISTS episodic_embeddings USING vec0(
     embedding float[1024]
 );
 
+-- 8b. UTTERANCE EMBEDDINGS (sqlite-vec virtual table for turn-level semantic search)
+CREATE VIRTUAL TABLE IF NOT EXISTS utterance_embeddings USING vec0(
+    +utterance_id TEXT,
+    embedding float[1024]
+);
+
+-- 8c. TERM EMBEDDINGS (sqlite-vec virtual table for vocabulary term-level semantic search)
+CREATE VIRTUAL TABLE IF NOT EXISTS term_embeddings USING vec0(
+    +term TEXT,
+    embedding float[1024]
+);
+
 -- 9. SYSTEM METADATA (Engine configuration, vector embedding model versions)
 CREATE TABLE IF NOT EXISTS system_metadata (
     key TEXT PRIMARY KEY,
