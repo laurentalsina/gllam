@@ -5,10 +5,10 @@ CGO_ENABLED=1 CGO_CFLAGS="-I/home/laurent/vllm/.venv/lib/python3.13/site-package
   	--qa ./bench/memarena/d7_qa.jsonl \
   	--out ./d7_qa_results_selective.jsonl \
   	--dbpath ./bench/gllam_data_selective.db \
-  	--limit 10 \
-	--top-k 12 \
+	--top-k 13 \
         --bypass-temporal=true \
+        --bypass-semantic=true \
         --use-utterances-vectors=true \
 	--use-terms-vectors=true \
 
-#--bypass-semantic true 
+#  	--limit 10 \

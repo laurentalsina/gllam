@@ -103,8 +103,10 @@ go run ./cmd/gllam --embeddings-server http://localhost:8080
 
 # Benchmarks
 shell-scripts in subfolders of ./bench/
-see https://arxiv.org/html/2608.02613v1 for an intro on benchmarks
-focus now is BEAM and Memarena, GLLAM gets about 60% on both in its not-optimized current state
+see https://arxiv.org/html/2608.02613v1 for the memarena "personal-memory" paper
+same for BEAM: https://arxiv.org/abs/2510.27246 also a conversation corpus
+
+GLLAM gets about 60% on both in its current state, which compares well with state of the art
 
 ```
 
