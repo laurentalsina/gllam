@@ -18,3 +18,4 @@ raw_embed.json
 # bench output
 bench/pddl_domains/
 bench/memarena/extraction_snapshot_*
+d7_qa_results_selective.jsonl
