@@ -24,7 +24,7 @@
         "type": "array",
         "items": {
           "type": "object",
-          "properties": 
+          "properties": {
             "modality": {
               "type": "string",
 	      "enum": ["epistemic", "alethic", "deontic"]

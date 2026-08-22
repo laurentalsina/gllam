@@ -41,15 +41,15 @@
                         "Your task is to:",
                         "1. Analyze if the question has a temporal sequencing component (e.g. asking whether an event happened \"before\" or \"after\" another, or requesting a specific chronological order/sequence of events).",
                          "   - If the question contains a temporal ordering/sequencing component, reply exactly \"TEMPORAL\" followed by a brief reason.",
-                         "2. If there is no temporal sequencing component, answer the question strictly using facts directly stated in the transcript.",
+                        "2. If there is no temporal sequencing component, answer the question strictly using facts directly stated in the transcript.",
                          "   - If the transcript contains the answer, write a concise but complete 1-sentence answer that mentions all directly relevant details, but stays below about 60 words max.",
                          "   - If the transcript does NOT contain the answer, reply exactly \"ANSWER_NOT_FOUND\".",
                          "   - Only provide a straight answer, do not elaborate reasoning within the response."
                          ],
   "simple_temporal_retrieval": ["You will be provided with a conversation transcript and a question.",
                                 "First, inside <thinking>...</thinking> tags, perform a step-by-step chronological analysis of the dialogue sequence.",
-				"Trace and note which line or quote relevant to the question came in what order and who said it.",
-	                        "Answer the question strictly using facts directly stated in the transcript.",
+ 				"Trace and note which line or quote relevant to the question came in what order and who said it.",
+ 	                        "Answer the question strictly using facts directly stated in the transcript.",
                                 "If the transcript does NOT allow answering, reply exactly \"ANSWER_NOT_FOUND\".",
                                 "Then, outside the thinking tags, write your final direct and concise answer."
                                ],
@@ -93,8 +93,6 @@
       "context_template": "Git Repo: {{repo}}\nBranch: {{branch}}\nPR: #{{pr_id}}"
     }
   },
-
-
   "trust_weight_prompt": "EVALUATION RULESET FOR SOURCE TRUST WEIGHTING (W in [10, 1000]):\n1. Formal resolved ticketing systems (e.g. Jira Resolved, GitHub Merged PRs, Git commits) carry baseline weight 800.\n2. Approved architecture and design documents carry baseline weight 700.\n3. Open tickets, Slack channels, and incident logs carry baseline weight 500.\n4. Unstructured meeting notes, support tickets, and email threads carry baseline weight 400.\n5. Drafts and personal scratchpads carry baseline weight 200.\n6. Individual source reliability heuristics adjust scores per source/person (e.g. Alice +150, Dave -150).\n7. Penalize incoherent or high-entropy gibberish text (-250).",
   "source_reliability_prompt": "INDIVIDUAL SOURCE RELIABILITY HEURISTICS:\nEvaluate individual source track records based on past documentation completeness. Specific sources/individuals who consistently deliver verified, complete implementations receive positive trust adjustments (+100 to +200). Sources with histories of incomplete drafts, unverified claims, or abandoned proposals receive negative trust adjustments (-100 to -200).",
   "source_reliability_heuristics": {
@@ -103,20 +101,24 @@
     "bob_contractor": -100,
     "dave_drafts": -150
   },
-
-
-
   "historical_context_prompt": "CORPUS HISTORICAL & DOMAIN CONTEXT:\nThe target document corpus contains multi-session transcripts, enterprise ticketing exports, and architectural specifications spanning system evolution. When evaluating temporal ordering or conflicting claims, prioritize verified post-migration architecture state over historical pre-migration discussion notes.",
   "semantic_extraction_prompt": "SEMANTIC EXTRACTION DIRECTIVES:\nExtract grounded entities, caveated relationships, Allen temporal interval relations, turn-bound constraints, and epistemic origin nodes. Maintain strict entity ID fidelity.",
   "procedural_generalization_prompt": "PROCEDURAL KNOWLEDGE GENERALIZATION DIRECTIVES:\nIdentify repeated operational workflows and terminal command sequences across episodes. Abstract them into reusable procedural recipes with explicit trigger contexts and feedback rules.",
   "salience_query_prompt": "SALIENCE SCORING DIRECTIVES:\nPrioritize focal entities mentioned directly in the user query, their 1-hop semantic neighbors, and active temporal bounds relevant to the query window.",
   "custom_category_prompts": {
-    "enterprise_domain": "ENTERPRISE SPECIFIC OVERRIDE:\nJira Project PROD and GitHub repo main branch take absolute precedence over legacy Confluence exports."
+    "contradiction_resolution": "## Contradiction Resolution Guidelines\n- If there is conflicting or contradictory information in the context, you MUST explicitly state that contradictory information exists.\n- Clearly mention both conflicting sides of the statement from the context.\n- Ask the user to clarify which statement is correct.",
+    "knowledge_update": "## Knowledge Update Guidelines\n- Prioritize the latest/most recent updates or changes in plans, goals, or values. Provide the newest value as the active fact.",
+    "event_ordering": "## Event Ordering Guidelines\n- List the events in their exact chronological order of occurrence. List them sequentially (e.g. 1st, 2nd, 3rd...).",
+    "summarization": "## Summarization Guidelines\n- Summarize how plans, decisions, budgets, and preferences evolved chronologically over time.",
+    "abstention": "## Abstention Guidelines\n- If the context does not contain the answer, reply exactly: 'Based on the provided context, this is not mentioned.' Do not assume or extrapolate.",
+    "instruction_following": "## Instruction Following Guidelines\n- Pay strict attention to any style preferences, rules, formatting constraints, or instructions mentioned in the context and follow them in detail.",
+    "preference_following": "## Preference Following Guidelines\n- Pay strict attention to any style preferences, rules, formatting constraints, or instructions mentioned in the context and follow them in detail."
   },
   "response_guidelines": [
-    "## Concise Response Format Guidelines",
-    "- Provide ONLY the direct, 1-sentence answer matching the question. DO NOT add extra background history, unprompted timeline commentary, or secondary events beyond what was asked.",
+    "## Response Guidelines",
     "- Rely ONLY on facts and quotes explicitly stated in the provided GLLAM Context.",
-    "- If the context does not contain the answer, state 'Based on the provided context, this is not mentioned.' DO NOT invent or extrapolate facts."
+    "- If the context does not contain the answer, state 'Based on the provided context, this is not mentioned.' DO NOT invent or extrapolate facts.",
+    "- Be detailed and explanatory in your response: explain the reasons behind your answers, break down problems into sequential steps, and demonstrate your thorough understanding of the topics.",
+    "- Pay absolute attention to any user preferences, style guidelines, rules, formatting instructions, or constraints mentioned in the conversation history, and satisfy them in your response. For example, if a prior turn indicates you should explain genre characteristics, themes, or use a specific format, you MUST do so."
   ]
 }

@@ -21,18 +21,36 @@ import (
 )
 
 type QAInstance struct {
-	InstanceID  string `json:"instance_id"`
-	Query       string `json:"query"`
-	GroundTruth struct {
-		Answer string `json:"answer"`
-	} `json:"ground_truth"`
+	InstanceID     string      `json:"instance_id"`
+	ConversationID string      `json:"conversation_id"`
+	Category       string      `json:"category"`
+	Query          string      `json:"query"`
+	GroundTruth    interface{} `json:"ground_truth"`
+	Rubric         []string    `json:"rubric"`
 }
 
 type Result struct {
-	InstanceID  string `json:"instance_id"`
-	Query       string `json:"query"`
-	ModelAnswer string `json:"model_answer"`
-	GroundTruth string `json:"ground_truth"`
+	InstanceID   string   `json:"instance_id"`
+	Category     string   `json:"category"`
+	Query        string   `json:"query"`
+	ModelAnswer  string   `json:"model_answer"`
+	GroundTruth  string   `json:"ground_truth"`
+	Rubric       []string `json:"rubric"`
+}
+
+func getGroundTruthAnswer(gt interface{}) string {
+	if gt == nil {
+		return ""
+	}
+	if s, ok := gt.(string); ok {
+		return s
+	}
+	if m, ok := gt.(map[string]interface{}); ok {
+		if ans, ok := m["answer"].(string); ok {
+			return ans
+		}
+	}
+	return ""
 }
 
 func getEnv(key, fallback string) string {
@@ -70,6 +88,7 @@ func main() {
 	schemaPath := flag.String("schema-file", getEnv("EXTRACTION_SCHEMA_PATH", "./config/semantic_extraction_schema.json"), "Path to JSON schema")
 	topKMatches := flag.Int("top-k", 2, "Number of top matching utterances to expand context for")
 	limit := flag.Int("limit", 0, "Limit number of queries (0 for all)")
+	categories := flag.String("categories", "", "Comma-separated list of categories to evaluate (all, preference_following, temporal_reasoning, event_ordering, knowledge_update, summarization, instruction_following, information_extraction, contradiction_resolution, multi_session_reasoning, abstention)")
 	bypassTemporal := flag.Bool("bypass-temporal", false, "Bypass JIT semantic extraction for temporal questions and answer directly from transcript")
 	bypassSemantic := flag.Bool("bypass-semantic", false, "Bypass JIT semantic extraction completely and answer directly from transcript")
 	useUtterancesVectors := flag.Bool("use-utterances-vectors", false, "Use turn-level vector embedding similarity search for paragraph/context retrieval")
@@ -104,6 +123,12 @@ func main() {
 	if err := gllam.InitSchema(); err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to initialize schema: %v\n", err)
 		os.Exit(1)
+	}
+
+	plannerPath := os.Getenv("GLLAM_PLANNER_EXECUTABLE_PATH")
+	if plannerPath != "" {
+		gllam.SetPlannerExecutablePath(plannerPath)
+		fmt.Printf("   ├─ External PDDL Planner set to: %s\n", plannerPath)
 	}
 
 	fmt.Println("Building postings index from corpus...")
@@ -156,6 +181,21 @@ func main() {
 		var qa QAInstance
 		if err := json.Unmarshal(line, &qa); err != nil {
 			continue
+		}
+
+		if *categories != "" {
+			matched := false
+			allowedCats := strings.Split(*categories, ",")
+			for _, cat := range allowedCats {
+				catTrimmed := strings.TrimSpace(cat)
+				if catTrimmed == "all" || catTrimmed == qa.Category {
+					matched = true
+					break
+				}
+			}
+			if !matched {
+				continue
+			}
 		}
 
 		fmt.Println(strings.Repeat("=", 100))
@@ -497,7 +537,12 @@ func main() {
 				fmt.Printf("   ├─ ❌ Direct QA returned %s. Falling back to JIT semantic extraction...\n", directAnswer)
 
 				// 6. Extract semantics just-in-time
-				nodes, links, err := extractSemanticsForText(ctx, gllam, embedder, llmClient, transcriptText, gllam.SystemPrompts.SemanticExtraction, extractionJSONSchema)
+				extractionPrompt := gllam.SystemPrompts.SemanticExtraction
+				if isTemporal && gllam.SystemPrompts.SemanticExtractionTemporal != "" {
+					extractionPrompt = gllam.SystemPrompts.SemanticExtractionTemporal
+					fmt.Println("   ├─ Using alternate temporal-ready extraction prompts for JIT extraction.")
+				}
+				nodes, links, err := extractSemanticsForText(ctx, gllam, embedder, llmClient, transcriptText, extractionPrompt, extractionJSONSchema)
 				if err != nil {
 					fmt.Printf("   ❌ Semantic extraction failed: %v\n", err)
 				} else {
@@ -511,6 +556,12 @@ func main() {
 					answer = "ERROR"
 				} else {
 					prompt := engine.FormatSystemPrompt(compiled)
+					if gllam.SystemPrompts != nil && gllam.SystemPrompts.CustomCategoryPrompts != nil {
+						if catPrompt, ok := gllam.SystemPrompts.CustomCategoryPrompts[qa.Category]; ok && catPrompt != "" {
+							prompt = prompt + "\n\n" + catPrompt
+							fmt.Printf("   ├─ Appended category-specific guidelines for: %s\n", qa.Category)
+						}
+					}
 					userQuery := fmt.Sprintf("Discussion Transcript:\n%s\n\nQuestion: %s", transcriptText, qa.Query)
 
 					fmt.Println("--- LLM Final Q&A System Prompt ---")
@@ -545,9 +596,11 @@ func main() {
 
 		res := Result{
 			InstanceID:  qa.InstanceID,
+			Category:    qa.Category,
 			Query:       qa.Query,
 			ModelAnswer: answer,
-			GroundTruth: qa.GroundTruth.Answer,
+			GroundTruth: getGroundTruthAnswer(qa.GroundTruth),
+			Rubric:      qa.Rubric,
 		}
 
 		resBytes, _ := json.Marshal(res)

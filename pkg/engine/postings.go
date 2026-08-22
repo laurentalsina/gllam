@@ -94,7 +94,7 @@ func BuildInvertedIndex(corpusPath string) (*InvertedIndex, error) {
 		lineBytes := []byte(lineStr)
 		lineLen := int64(len(lineBytes))
 
-		// Try parsing as structured session JSON
+		// Try parsing as structured session JSON (MemArena format)
 		var session struct {
 			SessionID string `json:"session_id"`
 			Turns     []struct {
@@ -104,7 +104,19 @@ func BuildInvertedIndex(corpusPath string) (*InvertedIndex, error) {
 			} `json:"turns"`
 		}
 
+		// Try parsing as BEAM conversation JSON format
+		var beamConv struct {
+			ConversationID string `json:"conversation_id"`
+			Chat           [][]struct {
+				ID      int    `json:"id"`
+				Role    string `json:"role"`
+				Content string `json:"content"`
+			} `json:"chat"`
+		}
+
 		errJSON := json.Unmarshal(lineBytes, &session)
+		errBeam := json.Unmarshal(lineBytes, &beamConv)
+
 		if errJSON == nil && session.SessionID != "" && len(session.Turns) > 0 {
 			lastSpeaker := ""
 			for idx, turn := range session.Turns {
@@ -150,6 +162,38 @@ func BuildInvertedIndex(corpusPath string) (*InvertedIndex, error) {
 				index.Utterances[utteranceID] = utt
 				index.Sessions[session.SessionID] = append(index.Sessions[session.SessionID], utteranceID)
 				index.addUtteranceToPostings(utt)
+			}
+		} else if errBeam == nil && beamConv.ConversationID != "" && len(beamConv.Chat) > 0 {
+			for sIdx, chatSession := range beamConv.Chat {
+				sessionID := fmt.Sprintf("beam-100k-%s-session%d", beamConv.ConversationID, sIdx)
+				for mIdx, msg := range chatSession {
+					utteranceID := fmt.Sprintf("%s_t%d", sessionID, mIdx)
+					speakerID := fmt.Sprintf("%s (id %d)", msg.Role, msg.ID)
+
+					idxInLine := strings.Index(lineStr, msg.Content)
+					var startByte, endByte int64
+					if idxInLine != -1 {
+						startByte = lineOffset + int64(idxInLine)
+						endByte = startByte + int64(len(msg.Content))
+					} else {
+						startByte = lineOffset
+						endByte = lineOffset + lineLen
+					}
+
+					utt := CorpusUtterance{
+						ID:         utteranceID,
+						SessionID:  sessionID,
+						SpeakerID:  speakerID,
+						Text:       msg.Content,
+						SourceURI:  sourceURI,
+						LineNumber: lineNumber,
+						StartByte:  startByte,
+						EndByte:    endByte,
+					}
+					index.Utterances[utteranceID] = utt
+					index.Sessions[sessionID] = append(index.Sessions[sessionID], utteranceID)
+					index.addUtteranceToPostings(utt)
+				}
 			}
 		} else {
 			// Fallback to plain text line

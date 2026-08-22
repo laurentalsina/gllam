@@ -62,6 +62,7 @@ func main() {
 	resumeExtraction := flag.Bool("resume", true, "Skip sessions that have already been extracted")
 	trialMode := flag.Bool("trial", false, "Trial run on 1 chunk without database modifications")
 	trialChunk := flag.Int("trial-chunk", 1, "Chunk index (1-based) to use in trial mode")
+	useTemporal := flag.Bool("temporal", false, "Use temporal-ready extraction prompts instead of default")
 	flag.Parse()
 
         var extractionJSONSchema map[string]interface{}
@@ -225,6 +226,14 @@ func main() {
 	}
 
         systemPrompt := gllam.SystemPrompts.SemanticExtraction
+        if *useTemporal {
+                if gllam.SystemPrompts.SemanticExtractionTemporal != "" {
+                        systemPrompt = gllam.SystemPrompts.SemanticExtractionTemporal
+                        fmt.Println("ℹ️ Using alternate temporal-ready extraction prompts.")
+                } else {
+                        fmt.Println("⚠️ Temporal extraction prompt requested but empty/not loaded. Falling back to default.")
+                }
+        }
 
 	var dbMutex sync.Mutex
 	var grandTotalNodes int64
@@ -356,7 +365,7 @@ func main() {
 
 			chunks := engine.ChunkTranscript(episode.SummaryText, gllam.SystemPrompts.ChunkSize, gllam.SystemPrompts.ChunkOverlap)
 			dbMutex.Lock()
-			fmt.Printf("[%s] [%d/%d] Processing episode %s (%d chars, %d chunks)...\n", time.Now().Format("2006.01.02 15:04:05"), index+1, len(episodes), episode.ID, len(episode.SummaryText), len(chunks))
+			fmt.Printf("[%s] [%d/%d] Start processing episode %s (%d chars, %d chunks)...\n", time.Now().Format("2006.01.02 15:04:05"), index+1, len(episodes), episode.ID, len(episode.SummaryText), len(chunks))
 			dbMutex.Unlock()
 
 			var epNodes int64
@@ -369,18 +378,42 @@ func main() {
 				}
 
 				userPrompt := fmt.Sprintf("Conversation Episode [%d / %d] (Session ID: %s | Created At: %s):\nTranscript Chunk (%d/%d):\n%s\n\nExtract JSON:", index+1, len(episodes), episode.ID, episode.CreatedAt.Format(time.RFC3339), cIdx+1, len(chunks), chunk.Text)
+				var extraction ExtractionResponse
 				var response string
 				var err error
 				llmStart := time.Now()
 
 				for attempt := 1; attempt <= 5; attempt++ {
 					response, err = extractWithSchema(userPrompt)
-					if err == nil && strings.TrimSpace(response) != "" {
+					if err != nil {
+						sleepSec := 1 << attempt
+						if sleepSec > 15 {
+							sleepSec = 15
+						}
+						time.Sleep(time.Duration(sleepSec) * time.Second)
+						continue
+					}
+
+					sanitizedResponse := SanitizeLLMJSON(response)
+					err = json.Unmarshal([]byte(sanitizedResponse), &extraction)
+					if err == nil {
+						response = sanitizedResponse
+						dbMutex.Lock()
+						fmt.Printf("[%s] ✅ Successfully extracted %s chunk %d (%d nodes, %d links)\n", time.Now().Format("2006.01.02 15:04:05"), episode.ID, cIdx+1, len(extraction.Nodes), len(extraction.Links))
+						fmt.Printf("--- EXTRACTED JSON START ---\n%s\n--- EXTRACTED JSON END ---\n", response)
+						dbMutex.Unlock()
 						break
 					}
+
+					// If unmarshaling failed, we log and retry the generation
+					dbMutex.Lock()
+					fmt.Printf("[%s] ⚠️ JSON unmarshal failed for %s chunk %d (attempt %d/5): %v\n", time.Now().Format("2006.01.02 15:04:05"), episode.ID, cIdx+1, attempt, err)
+					fmt.Printf("--- RAW RESPONSE ATTEMPT %d START ---\n%s\n--- RAW RESPONSE ATTEMPT %d END ---\n", attempt, response, attempt)
+					dbMutex.Unlock()
+
 					sleepSec := 1 << attempt
-					if sleepSec > 30 {
-						sleepSec = 30
+					if sleepSec > 15 {
+						sleepSec = 15
 					}
 					time.Sleep(time.Duration(sleepSec) * time.Second)
 				}
@@ -388,17 +421,7 @@ func main() {
 
 				if err != nil {
 					dbMutex.Lock()
-					fmt.Printf("[%s] ❌ LLM extraction failed for %s chunk %d: %v\n", time.Now().Format("2006.01.02 15:04:05"), episode.ID, cIdx+1, err)
-					dbMutex.Unlock()
-					continue
-				}
-
-				response = SanitizeLLMJSON(response)
-
-				var extraction ExtractionResponse
-				if err := json.Unmarshal([]byte(response), &extraction); err != nil {
-					dbMutex.Lock()
-					fmt.Printf("[%s] ⚠️ JSON unmarshal error for %s chunk %d: %v\n", time.Now().Format("2006.01.02 15:04:05"), episode.ID, cIdx+1, err)
+					fmt.Printf("[%s] ❌ LLM extraction/parsing failed for %s chunk %d after 5 attempts: %v\n", time.Now().Format("2006.01.02 15:04:05"), episode.ID, cIdx+1, err)
 					dbMutex.Unlock()
 					continue
 				}
@@ -408,6 +431,11 @@ func main() {
 					id  string
 					vec []float32
 				}
+				convPrefix := ""
+				if idx := strings.Index(episode.ID, "-session"); idx != -1 {
+					convPrefix = episode.ID[:idx] + "-"
+				}
+
 				var nodeVecs []nodeVector
 				var vecMutex sync.Mutex
 				embedStart := time.Now()
@@ -426,7 +454,11 @@ func main() {
 							defer func() { <-embSem }()
 							if vec, err := embedder.Embed(ctx, n.Name); err == nil && len(vec) > 0 {
 								vecMutex.Lock()
-								nodeVecs = append(nodeVecs, nodeVector{id: n.ID, vec: vec})
+								nodeID := n.ID
+								if convPrefix != "" && !strings.HasPrefix(nodeID, convPrefix) {
+									nodeID = convPrefix + nodeID
+								}
+								nodeVecs = append(nodeVecs, nodeVector{id: nodeID, vec: vec})
 								vecMutex.Unlock()
 							}
 						}(node)
@@ -447,6 +479,9 @@ func main() {
 					if node.ID == "" {
 						continue
 					}
+					if convPrefix != "" && !strings.HasPrefix(node.ID, convPrefix) {
+						node.ID = convPrefix + node.ID
+					}
 					baseURI := *sourceURI
 					if episode.SourceURI != "" {
 						baseURI = episode.SourceURI
@@ -461,6 +496,17 @@ func main() {
 					if link.SourceID == "" || link.TargetID == "" || link.Relationship == "" {
 						continue
 					}
+					if convPrefix != "" {
+						if !strings.HasPrefix(link.SourceID, convPrefix) {
+							link.SourceID = convPrefix + link.SourceID
+						}
+						if !strings.HasPrefix(link.TargetID, convPrefix) {
+							link.TargetID = convPrefix + link.TargetID
+						}
+						if link.OriginID != "" && link.OriginID != "unknown" && !strings.HasPrefix(link.OriginID, convPrefix) {
+							link.OriginID = convPrefix + link.OriginID
+						}
+					}
 					baseURI := *sourceURI
 					if episode.SourceURI != "" {
 						baseURI = episode.SourceURI
@@ -472,6 +518,9 @@ func main() {
 							ensureNode := func(nodeID *string) {
 								if *nodeID == "" {
 									return
+								}
+								if convPrefix != "" && !strings.HasPrefix(*nodeID, convPrefix) {
+									*nodeID = convPrefix + *nodeID
 								}
 								var existingID string
 								if errNode := gllam.DB().QueryRowContext(ctx, "SELECT id FROM semantic_nodes WHERE id = ? OR name = ?", *nodeID, *nodeID).Scan(&existingID); errNode == nil {

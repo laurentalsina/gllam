@@ -35,6 +35,7 @@ type AgenticMemorySystemPrompts struct {
 	ChunkSize                      int                                    `json:"chunk_size"`
 	ChunkOverlap                   int                                    `json:"chunk_overlap"` 
 	SemanticExtraction             string                                 `json:"semantic_extraction"` // Stored as array of strings, but loaded as a concatenated String
+	SemanticExtractionTemporal     string                                 `json:"semantic_extraction_temporal"` // Alternate temporal extraction prompt
 	AllowUserGrilling              bool                                   `json:"allow_user_grilling"` // Set false in non-interactive benchmark evaluation (e.g. BEAM)
 	TrustWeightPrompt              string                                 `json:"trust_weight_prompt"`
 	SourceReliabilityPrompt        string                                 `json:"source_reliability_prompt"`
@@ -51,15 +52,18 @@ type AgenticMemorySystemPrompts struct {
 	ProceduralGeneralizationPrompt string                                 `json:"procedural_generalization_prompt"`
 	SalienceQueryPrompt            string                                 `json:"salience_query_prompt"`
 	CustomCategoryPrompts          map[string]string                      `json:"custom_category_prompts,omitempty"`
+	ResponseGuidelines             string                                 `json:"response_guidelines"`
 }
 
 func (p *AgenticMemorySystemPrompts) UnmarshalJSON(data []byte) error {
 	// Alias prevents recursive UnmarshalJSON calls when parsing raw fields
 	type Alias AgenticMemorySystemPrompts
 	var aux struct {
-		SemanticExtraction      json.RawMessage `json:"semantic_extraction"`
+		SemanticExtraction         json.RawMessage `json:"semantic_extraction"`
+		SemanticExtractionTemporal json.RawMessage `json:"semantic_extraction_temporal"`
 		DirectQAPrompt          json.RawMessage `json:"direct_qa_prompt"`
 		SimpleTemporalRetrieval json.RawMessage `json:"simple_temporal_retrieval"`
+		ResponseGuidelines      json.RawMessage `json:"response_guidelines"`
 		*Alias
 	}
 	aux.Alias = (*Alias)(p)
@@ -78,6 +82,20 @@ func (p *AgenticMemorySystemPrompts) UnmarshalJSON(data []byte) error {
 				p.SemanticExtraction = strings.TrimSpace(single)
 			} else {
 				return fmt.Errorf("semantic_extraction must be a string or array of strings")
+			}
+		}
+	}
+
+	if len(aux.SemanticExtractionTemporal) > 0 {
+		var lines []string
+		if err := json.Unmarshal(aux.SemanticExtractionTemporal, &lines); err == nil {
+			p.SemanticExtractionTemporal = strings.TrimSpace(strings.Join(lines, "\n"))
+		} else {
+			var single string
+			if err := json.Unmarshal(aux.SemanticExtractionTemporal, &single); err == nil {
+				p.SemanticExtractionTemporal = strings.TrimSpace(single)
+			} else {
+				return fmt.Errorf("semantic_extraction_temporal must be a string or array of strings")
 			}
 		}
 	}
@@ -106,6 +124,20 @@ func (p *AgenticMemorySystemPrompts) UnmarshalJSON(data []byte) error {
 				p.SimpleTemporalRetrieval = strings.TrimSpace(single)
 			} else {
 				return fmt.Errorf("simple_temporal_retrieval must be a string or array of strings")
+			}
+		}
+	}
+
+	if len(aux.ResponseGuidelines) > 0 {
+		var lines []string
+		if err := json.Unmarshal(aux.ResponseGuidelines, &lines); err == nil {
+			p.ResponseGuidelines = strings.TrimSpace(strings.Join(lines, "\n"))
+		} else {
+			var single string
+			if err := json.Unmarshal(aux.ResponseGuidelines, &single); err == nil {
+				p.ResponseGuidelines = strings.TrimSpace(single)
+			} else {
+				return fmt.Errorf("response_guidelines must be a string or array of strings")
 			}
 		}
 	}
@@ -206,6 +238,10 @@ Identify repeated operational workflows and terminal command sequences across ep
 Prioritize focal entities mentioned directly in the user query, their 1-hop semantic neighbors, and active temporal bounds relevant to the query window.`,
 
 		CustomCategoryPrompts: make(map[string]string),
+		ResponseGuidelines: `## Concise Response Format Guidelines
+- Provide ONLY the direct, 1-sentence answer matching the question. DO NOT add extra background history, unprompted timeline commentary, or secondary events beyond what was asked.
+- Rely ONLY on facts and quotes explicitly stated in the provided GLLAM Context.
+- If the context does not contain the answer, state 'Based on the provided context, this is not mentioned.' DO NOT invent or extrapolate facts.`,
 	}
 }
 

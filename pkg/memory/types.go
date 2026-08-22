@@ -124,12 +124,13 @@ type DocumentLineage struct {
 
 
 type CompiledContext struct {
-	Procedural    []ProceduralKnowledge
-	SemanticNodes []SemanticNode
-	SemanticLinks []SemanticLink
-	Episodic      []EpisodicSummary
-	Lineage       []DocumentLineage
-	PlannerOutput string
+	Procedural         []ProceduralKnowledge
+	SemanticNodes      []SemanticNode
+	SemanticLinks      []SemanticLink
+	Episodic           []EpisodicSummary
+	Lineage            []DocumentLineage
+	PlannerOutput      string
+	ResponseGuidelines string
 }
 
 

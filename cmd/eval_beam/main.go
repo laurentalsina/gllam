@@ -30,21 +30,41 @@ type BEAMResult struct {
 	Rubric       []string `json:"rubric"`
 }
 
+func getEnv(key, fallback string) string {
+	if val, ok := os.LookupEnv(key); ok {
+		return val
+	}
+	return fallback
+}
+
 func main() {
-	dbPath := flag.String("db", "./gllam_data.db", "Path to SQLite database")
+	dbPath := flag.String("db", getEnv("DATABASE_PATH", "./gllam_data.db"), "Path to SQLite database")
 	qaPath := flag.String("qa", "/home/laurent/Projects/agentic_benchmarks/beam_100k_qa.jsonl", "Path to beam qa jsonl")
 	outPath := flag.String("out", "./beam_100k_results.jsonl", "Output path")
 	limit := flag.Int("limit", 0, "Limit number of queries (0 for all)")
+	textServer := flag.String("text-server", getEnv("TEXT_SERVER", "http://127.0.0.1:8888"), "LLM text server endpoint")
+	embeddingServer := flag.String("embeddings-server", getEnv("EMBEDDINGS_SERVER", "http://127.0.0.1:8800"), "Embeddings server endpoint")
+	promptsPath := flag.String("prompts-config", getEnv("PROMPTS_CONFIG", "config/agentic_memory.json"), "Path to agentic memory config and prompts")
 	flag.Parse()
 
 	ctx := context.Background()
-	embedder := engine.NewLlamaEmbedder("http://127.0.0.1:8800")
+	embedder := engine.NewLlamaEmbedder(*embeddingServer)
 	gllam, err := engine.NewGllamEngine(*dbPath, embedder)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to initialize engine: %v\n", err)
 		os.Exit(1)
 	}
 	defer gllam.Close()
+
+	if err := gllam.LoadSystemPromptsConfig(*promptsPath); err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to load system prompts config: %v\n", err)
+		os.Exit(1)
+	}
+
+	plannerPath := getEnv("GLLAM_PLANNER_EXECUTABLE_PATH", "")
+	if plannerPath != "" {
+		gllam.SetPlannerExecutablePath(plannerPath)
+	}
 
 	file, err := os.Open(*qaPath)
 	if err != nil {
@@ -78,7 +98,7 @@ func main() {
 
 		fmt.Printf("Evaluating [%s] Category: %s\n", qa.InstanceID, qa.Category)
 		
-		llmClient := engine.NewLLMClient("http://100.96.179.19:8888")
+		llmClient := engine.NewLLMClient(*textServer)
 		
 		// Optional: prepend conversation ID to query to help disambiguate cross-conversation leakage
 		// though vector search should naturally prioritize exact semantic matches.

@@ -67,6 +67,16 @@ func (e *GllamEngine) RouteAndAssemble(ctx context.Context, userPrompt string, e
         }
     }
 
+    // Extract namespace prefix if present (e.g. [Conversation 14 context] -> "beam-100k-14-")
+    var prefixFilter string
+    if strings.HasPrefix(userPrompt, "[Conversation ") {
+        endIdx := strings.Index(userPrompt, " context]")
+        if endIdx > 14 {
+            convID := userPrompt[14:endIdx]
+            prefixFilter = fmt.Sprintf("beam-100k-%s-", convID)
+        }
+    }
+
     // Retrieve semantic links and nodes via Dual-Channel RRF Hybrid Retrieval
     if len(entities) > 0 || userPrompt != "" {
         needleResults, err := e.RetrieveHybridNeedle(ctx, userPrompt, entities, "", 50)
@@ -75,8 +85,14 @@ func (e *GllamEngine) RouteAndAssemble(ctx context.Context, userPrompt string, e
             linkMap := make(map[string]memory.SemanticLink)
 
             for _, nr := range needleResults {
+                if prefixFilter != "" && !strings.HasPrefix(nr.Node.ID, prefixFilter) {
+                    continue
+                }
                 nodeMap[nr.Node.ID] = nr.Node
                 for _, l := range nr.Links {
+                    if prefixFilter != "" && (!strings.HasPrefix(l.SourceID, prefixFilter) || !strings.HasPrefix(l.TargetID, prefixFilter)) {
+                        continue
+                    }
                     key := fmt.Sprintf("%s-%s-%s", l.SourceID, l.TargetID, l.Relationship)
                     linkMap[key] = l
                 }
@@ -142,16 +158,28 @@ func (e *GllamEngine) RouteAndAssemble(ctx context.Context, userPrompt string, e
     // Append relevant episodic summaries
     var episodes []memory.EpisodicSummary
     if e.embedder != nil {
-        eps, err := e.SearchSimilarEpisodes(ctx, userPrompt, 10)
+        eps, err := e.SearchSimilarEpisodes(ctx, userPrompt, 5)
         if err == nil {
-            episodes = eps
+            for _, ep := range eps {
+                if prefixFilter != "" && !strings.HasPrefix(ep.ID, prefixFilter) && !strings.HasPrefix(ep.SessionID, prefixFilter) {
+                    continue
+                }
+                episodes = append(episodes, ep)
+            }
         }
     } else {
-        eps, err := e.GetRecentEpisodes(ctx, 10)
+        eps, err := e.GetRecentEpisodes(ctx, 5)
         if err == nil {
-            episodes = eps
+            for _, ep := range eps {
+                if prefixFilter != "" && !strings.HasPrefix(ep.ID, prefixFilter) && !strings.HasPrefix(ep.SessionID, prefixFilter) {
+                    continue
+                }
+                episodes = append(episodes, ep)
+            }
         }
-    }    // FTS5 / Keyword Corpus Back-Search Fallback (PLAN_missing_entity_corpus_fallback_and_trap_detection)
+    }
+
+    // FTS5 / Keyword Corpus Back-Search Fallback (PLAN_missing_entity_corpus_fallback_and_trap_detection)
     if len(ctxResult.SemanticNodes) < 25 || len(episodes) < 5 {
         words := strings.Fields(userPrompt)
         stopWords := map[string]bool{
@@ -165,8 +193,16 @@ func (e *GllamEngine) RouteAndAssemble(ctx context.Context, userPrompt string, e
             if len(w) < 3 || stopWords[w] {
                 continue
             }
-            query := `SELECT id, session_id, summary_text, created_at FROM episodic_summaries WHERE summary_text LIKE ? ORDER BY created_at DESC LIMIT 5`
-            rows, err := e.dbRO.QueryContext(ctx, query, "%"+w+"%")
+            var query string
+            var args []interface{}
+            if prefixFilter != "" {
+                query = `SELECT id, session_id, summary_text, created_at FROM episodic_summaries WHERE summary_text LIKE ? AND id LIKE ? ORDER BY created_at DESC LIMIT 5`
+                args = []interface{}{"%"+w+"%", prefixFilter+"%"}
+            } else {
+                query = `SELECT id, session_id, summary_text, created_at FROM episodic_summaries WHERE summary_text LIKE ? ORDER BY created_at DESC LIMIT 5`
+                args = []interface{}{"%"+w+"%"}
+            }
+            rows, err := e.dbRO.QueryContext(ctx, query, args...)
             if err == nil {
                 for rows.Next() {
                     var ep memory.EpisodicSummary
@@ -258,7 +294,7 @@ func (e *GllamEngine) RouteAndAssemble(ctx context.Context, userPrompt string, e
         } else {
             // 5. Invoke the dual-tier planning engine
             planner := NewNativePlanner()
-            _, err := planner.Solve(ctx, domainStr, problemStr)
+            plan, err := planner.Solve(ctx, domainStr, problemStr)
             if err != nil {
                 if e.PlannerExecutablePath != "" {
                     extPlanner := NewFastDownwardPlanner(e.PlannerExecutablePath)
@@ -271,7 +307,15 @@ func (e *GllamEngine) RouteAndAssemble(ctx context.Context, userPrompt string, e
                             ctxResult.PlannerOutput = fmt.Sprintf("%s\nExtracted Goal: %s", diag, goalPredicate)
                         }
                     } else {
-                        ctxResult.PlannerOutput = fmt.Sprintf("%sPlanning Engine triggered via External PDDL Planner [%s aspect]. Plan length: %d actions.", cycleNotice, aspect, len(extPlan))
+                        var steps []string
+                        for idx, act := range extPlan {
+                            if len(act.Parameters) > 0 {
+                                steps = append(steps, fmt.Sprintf("   %d. %s: %s", idx+1, act.Name, strings.Join(act.Parameters, " -> ")))
+                            } else {
+                                steps = append(steps, fmt.Sprintf("   %d. %s", idx+1, act.Name))
+                            }
+                        }
+                        ctxResult.PlannerOutput = fmt.Sprintf("%sPlanning Engine triggered via External PDDL Planner [%s aspect]. Plan length: %d actions.\nProven Sequence:\n%s", cycleNotice, aspect, len(extPlan), strings.Join(steps, "\n"))
                     }
                 } else {
                     if cycleRes.HasCycle {
@@ -282,7 +326,15 @@ func (e *GllamEngine) RouteAndAssemble(ctx context.Context, userPrompt string, e
                     }
                 }
             } else {
-                ctxResult.PlannerOutput = fmt.Sprintf("%sPlanning Engine triggered [%s aspect]. Sequence mathematically verified.", cycleNotice, aspect)
+                var steps []string
+                for idx, act := range plan {
+                    if len(act.Parameters) > 0 {
+                        steps = append(steps, fmt.Sprintf("   %d. %s: %s", idx+1, act.Name, strings.Join(act.Parameters, " -> ")))
+                    } else {
+                        steps = append(steps, fmt.Sprintf("   %d. %s", idx+1, act.Name))
+                    }
+                }
+                ctxResult.PlannerOutput = fmt.Sprintf("%sPlanning Engine triggered [%s aspect]. Sequence mathematically verified.\nProven Sequence:\n%s", cycleNotice, aspect, strings.Join(steps, "\n"))
             }
         }
 
@@ -331,6 +383,9 @@ func (e *GllamEngine) RouteAndAssemble(ctx context.Context, userPrompt string, e
         if err == nil && len(lineageRecords) > 0 {
             ctxResult.Lineage = lineageRecords
         }
+    if e.SystemPrompts != nil {
+        ctxResult.ResponseGuidelines = e.SystemPrompts.ResponseGuidelines
+    }
     }
 
     return ctxResult, nil
@@ -343,10 +398,13 @@ func FormatSystemPrompt(ctx *memory.CompiledContext) string {
     var sb strings.Builder
 
     sb.WriteString("# GLLAM System Context & Guidelines\n\n")
-    sb.WriteString("## Concise Response Format Guidelines\n")
-    sb.WriteString("- Provide ONLY the direct, 1-sentence answer matching the question. DO NOT add extra background history, unprompted timeline commentary, or secondary events beyond what was asked.\n")
-    sb.WriteString("- Rely ONLY on facts and quotes explicitly stated in the provided GLLAM Context.\n")
-    sb.WriteString("- If the context does not contain the answer, state 'Based on the provided context, this is not mentioned.' DO NOT invent or extrapolate facts.\n\n")
+    if ctx.ResponseGuidelines != "" {
+        sb.WriteString(ctx.ResponseGuidelines + "\n\n")
+    } else {
+        sb.WriteString("## Response Guidelines\n")
+        sb.WriteString("- Rely ONLY on facts and quotes explicitly stated in the provided GLLAM Context.\n")
+        sb.WriteString("- If the context does not contain the answer, state 'Based on the provided context, this is not mentioned.' DO NOT invent or extrapolate facts.\n\n")
+    }
     sb.WriteString("## Temporal Reasoning Guidelines\n")
     sb.WriteString("- Speech Act vs Reported Event Order: When a question asks whether a speaker 'did / mentioned' X before or after Y, follow the sequential order of dialogue turns in the transcripts (uttered_before / turn order), unless the prompt explicitly asks about physical external event dates.\n")
     sb.WriteString("- Avoid self-contradictions: Do not claim an event happened in the past before a conversation while concluding it happened after.\n\n")
@@ -407,12 +465,23 @@ func FormatSystemPrompt(ctx *memory.CompiledContext) string {
         sb.WriteString("\n")
     }
 
-    // Episodic summaries
+    // Episodic summaries (with dynamic budget capping under 120k characters to prevent 131,072 limit errors)
+    maxBudget := 120000
     if len(ctx.Episodic) > 0 {
         sb.WriteString("## Recent Episodes\n\n")
         for _, ep := range ctx.Episodic {
             cleanedSummary := cleanTranscriptSAYArtifacts(ep.SummaryText)
-            sb.WriteString(fmt.Sprintf("- [%s] %s\n", ep.CreatedAt.Format(time.RFC3339), cleanedSummary))
+            formattedEpisode := fmt.Sprintf("- [%s] %s\n", ep.CreatedAt.Format(time.RFC3339), cleanedSummary)
+            if sb.Len() + len(formattedEpisode) > maxBudget {
+                remainingSpace := maxBudget - sb.Len()
+                if remainingSpace > 150 {
+                    sb.WriteString(fmt.Sprintf("- [%s] %s... [TRUNCATED DUE TO CONTEXT BUDGET LIMIT]\n", ep.CreatedAt.Format(time.RFC3339), cleanedSummary[:remainingSpace-150]))
+                } else {
+                    sb.WriteString("... [ADDITIONAL EPISODES TRUNCATED DUE TO CONTEXT BUDGET LIMIT]\n")
+                }
+                break
+            }
+            sb.WriteString(formattedEpisode)
         }
         sb.WriteString("\n")
     }

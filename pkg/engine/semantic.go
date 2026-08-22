@@ -52,9 +52,15 @@ func (e *GllamEngine) UpsertNode(ctx context.Context, node memory.SemanticNode) 
         INSERT INTO semantic_nodes (id, name, type, context_prompt, trust_weight, taxonomy_path, is_category, caveat_summary, created_from, created_at, updated_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET 
-            name = excluded.name, 
+            name = CASE 
+                WHEN (lower(excluded.name) LIKE 'user%' OR lower(excluded.name) LIKE 'assistant%') AND NOT (lower(semantic_nodes.name) LIKE 'user%' OR lower(semantic_nodes.name) LIKE 'assistant%') AND semantic_nodes.name != '' THEN semantic_nodes.name
+                ELSE excluded.name
+            END, 
             type = excluded.type, 
-            context_prompt = excluded.context_prompt, 
+            context_prompt = CASE 
+                WHEN excluded.context_prompt != '' AND excluded.context_prompt IS NOT NULL THEN excluded.context_prompt
+                ELSE semantic_nodes.context_prompt
+            END, 
             trust_weight = excluded.trust_weight,
             taxonomy_path = CASE WHEN excluded.taxonomy_path != '/' AND excluded.taxonomy_path != '' THEN excluded.taxonomy_path ELSE semantic_nodes.taxonomy_path END,
             is_category = CASE WHEN excluded.is_category != 0 THEN excluded.is_category ELSE semantic_nodes.is_category END,

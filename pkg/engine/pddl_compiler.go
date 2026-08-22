@@ -198,19 +198,19 @@ func CompileGraphToPDDLAspect(nodes []memory.SemanticNode, links []memory.Semant
 
 	if !hasExplicitActions {
 		domain.WriteString(`  (:action sequence_events
-    :parameters (?e1 - event ?e2 - event)
+    :parameters (?e1 - object ?e2 - object)
     :precondition (and (happened_before ?e1 ?e2))
     :effect (and (verified_sequence ?e1 ?e2) (happened_after ?e2 ?e1))
   )
 
   (:action verify_transitive_sequence
-    :parameters (?e1 - event ?e2 - event ?e3 - event)
+    :parameters (?e1 - object ?e2 - object ?e3 - object)
     :precondition (and (happened_before ?e1 ?e2) (happened_before ?e2 ?e3))
     :effect (and (happened_before ?e1 ?e3) (verified_sequence ?e1 ?e3) (happened_after ?e3 ?e1))
   )
 
   (:action verify_after
-    :parameters (?e1 - event ?e2 - event)
+    :parameters (?e1 - object ?e2 - object)
     :precondition (and (happened_before ?e2 ?e1))
     :effect (and (happened_after ?e1 ?e2))
   )
@@ -222,7 +222,7 @@ func CompileGraphToPDDLAspect(nodes []memory.SemanticNode, links []memory.Semant
   )
 
   (:action transition_state
-    :parameters (?e - event ?s1 - state ?s2 - state)
+    :parameters (?e - object ?s1 - object ?s2 - object)
     :precondition (and (has_state ?e ?s1) (causes ?e ?s2))
     :effect (and (not (has_state ?e ?s1)) (has_state ?e ?s2))
   )
