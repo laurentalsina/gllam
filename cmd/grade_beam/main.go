@@ -70,11 +70,10 @@ func main() {
 		systemPrompt := `You are an expert evaluator for an agentic AI memory benchmark. 
 You will be provided with a Question, a Ground Truth answer, a Grading Rubric, and the Model Answer.
 Your task is to determine if the Model Answer is correct based on the Ground Truth and Rubric.
-If the Model Answer satisfies the rubric requirements, reply with exactly "CORRECT".
-If it fails to satisfy the rubric or contradicts the ground truth, reply with exactly "INCORRECT".
-Do not provide any explanations, just "CORRECT" or "INCORRECT".`
+First, analyze the model's response against the rubric and explain why it is correct or incorrect.
+Then, conclude your evaluation with a final line starting with "Verdict: " followed by either "CORRECT" or "INCORRECT".`
 
-		userPrompt := fmt.Sprintf("Question: %s\nGround Truth: %s\nRubric:\n- %s\n\nModel Answer: %s\n\nVerdict:", res.Query, res.GroundTruth, rubricText, res.ModelAnswer)
+		userPrompt := fmt.Sprintf("Question: %s\nGround Truth: %s\nRubric:\n- %s\n\nModel Answer: %s\n\nEvaluation:", res.Query, res.GroundTruth, rubricText, res.ModelAnswer)
 
 		verdict, err := llmClient.Generate(ctx, systemPrompt, userPrompt)
 		if err != nil {
@@ -84,13 +83,31 @@ Do not provide any explanations, just "CORRECT" or "INCORRECT".`
 		}
 
 		verdict = strings.TrimSpace(verdict)
-		// Clean up the verdict (sometimes models say "Verdict: CORRECT" instead of just "CORRECT")
-		if strings.Contains(strings.ToUpper(verdict), "CORRECT") && !strings.Contains(strings.ToUpper(verdict), "INCORRECT") {
+		isCorrect := false
+		lines := strings.Split(verdict, "\n")
+		var explanationLines []string
+		for _, line := range lines {
+			trimmedLine := strings.TrimSpace(line)
+			if strings.HasPrefix(strings.ToUpper(trimmedLine), "VERDICT:") {
+				if strings.Contains(strings.ToUpper(trimmedLine), "CORRECT") && !strings.Contains(strings.ToUpper(trimmedLine), "INCORRECT") {
+					isCorrect = true
+				}
+			} else {
+				explanationLines = append(explanationLines, line)
+			}
+		}
+
+		explanationText := strings.TrimSpace(strings.Join(explanationLines, "\n"))
+
+		if isCorrect {
 			correct++
 			stats.correct++
 			fmt.Printf("[%s] CORRECT\n", res.InstanceID)
 		} else {
-			fmt.Printf("[%s] INCORRECT (Verdict: %s)\n", res.InstanceID, verdict)
+			fmt.Printf("[%s] INCORRECT\n", res.InstanceID)
+		}
+		if explanationText != "" {
+			fmt.Printf("   ├─ Explanation:\n%s\n\n", "      "+strings.ReplaceAll(explanationText, "\n", "\n      "))
 		}
 		categoryStats[res.Category] = stats
 	}

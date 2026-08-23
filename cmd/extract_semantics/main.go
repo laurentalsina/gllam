@@ -67,13 +67,18 @@ func main() {
 
         var extractionJSONSchema map[string]interface{}
         if *schemaPath != "" {
-                data, err := os.ReadFile(*schemaPath)
-        if err != nil {
-                fmt.Fprintf(os.Stderr, "⚠️ Failed to read schema file %s: %v. Running without schema constraint.\n", *schemaPath, err)
-        } else {
-                if err := json.Unmarshal(data, &extractionJSONSchema); err != nil {
-                        fmt.Fprintf(os.Stderr, "❌ Failed to parse schema JSON %s: %v\n", *schemaPath, err)
-                        os.Exit(1)
+                targetSchema := *schemaPath
+                if *useTemporal {
+                        targetSchema = "./config/semantic_extraction_temporal_schema.json"
+                        fmt.Printf("ℹ️ Overriding extraction schema with temporal: %s\n", targetSchema)
+                }
+                data, err := os.ReadFile(targetSchema)
+                if err != nil {
+                        fmt.Fprintf(os.Stderr, "⚠️ Failed to read schema file %s: %v. Running without schema constraint.\n", targetSchema, err)
+                } else {
+                        if err := json.Unmarshal(data, &extractionJSONSchema); err != nil {
+                                fmt.Fprintf(os.Stderr, "❌ Failed to parse schema JSON %s: %v\n", targetSchema, err)
+                                os.Exit(1)
                         }
                 }
         }

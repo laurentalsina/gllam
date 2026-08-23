@@ -48,7 +48,18 @@ CREATE INDEX IF NOT EXISTS idx_semantic_nodes_id ON semantic_nodes(id);
 CREATE INDEX IF NOT EXISTS idx_semantic_nodes_taxonomy_path ON semantic_nodes(taxonomy_path);
 CREATE INDEX IF NOT EXISTS idx_semantic_nodes_is_category ON semantic_nodes(is_category);
 
--- 4. SEMANTIC LINKS (Caveat-qualified relationships with grounded uncertainty support)
+-- 4a. SEMANTIC TEMPORAL ATTRIBUTES
+CREATE TABLE IF NOT EXISTS semantic_temporal_links (
+    id TEXT PRIMARY KEY,
+    valid_from TEXT,                -- Unix timestamp string OR qualitative date/time
+    valid_until TEXT,               -- Unix timestamp string OR qualitative date/time
+    temporal_anchor_id TEXT,        -- Grounded node ID reference for relative timing
+    temporal_relation TEXT,         -- "before" | "after" | "during" | "co_occurs" | "causes"
+    temporal_note TEXT,             -- Qualitative phrase describing imprecise timestamp / duration
+    FOREIGN KEY (temporal_anchor_id) REFERENCES semantic_nodes(id) ON DELETE SET NULL
+);
+
+-- 4b. SEMANTIC LINKS (Caveat-qualified relationships with grounded uncertainty support)
 CREATE TABLE IF NOT EXISTS semantic_links (
     source_id TEXT NOT NULL,
     target_id TEXT NOT NULL,
@@ -60,10 +71,12 @@ CREATE TABLE IF NOT EXISTS semantic_links (
     created_from TEXT,                    -- Reference to raw data that led to the creation of the link
     created_at TEXT NOT NULL,             -- RFC3339 timestamp
     updated_at TEXT NOT NULL,             -- RFC3339 timestamp
+    temporal_link_id TEXT,
     PRIMARY KEY (source_id, target_id, relationship),
     FOREIGN KEY (source_id) REFERENCES semantic_nodes(id),
     FOREIGN KEY (target_id) REFERENCES semantic_nodes(id),
-    FOREIGN KEY (origin_id) REFERENCES semantic_nodes(id)
+    FOREIGN KEY (origin_id) REFERENCES semantic_nodes(id),
+    FOREIGN KEY (temporal_link_id) REFERENCES semantic_temporal_links(id) ON DELETE SET NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_semantic_links_target ON semantic_links(target_id);

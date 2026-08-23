@@ -550,11 +550,22 @@ func main() {
 
 				// 6. Extract semantics just-in-time
 				extractionPrompt := gllam.SystemPrompts.SemanticExtraction
+				schemaToUse := extractionJSONSchema
 				if isTemporal && gllam.SystemPrompts.SemanticExtractionTemporal != "" {
 					extractionPrompt = gllam.SystemPrompts.SemanticExtractionTemporal
 					fmt.Println("   ├─ Using alternate temporal-ready extraction prompts for JIT extraction.")
+
+					temporalSchemaPath := "./config/semantic_extraction_temporal_schema.json"
+					tempData, err := os.ReadFile(temporalSchemaPath)
+					if err == nil {
+						var tempSchema map[string]interface{}
+						if uErr := json.Unmarshal(tempData, &tempSchema); uErr == nil {
+							schemaToUse = tempSchema
+							fmt.Println("   ├─ Loaded temporal schema for JSON validation.")
+						}
+					}
 				}
-				nodes, links, err := extractSemanticsForText(ctx, gllam, embedder, llmClient, transcriptText, extractionPrompt, extractionJSONSchema)
+				nodes, links, err := extractSemanticsForText(ctx, gllam, embedder, llmClient, transcriptText, extractionPrompt, schemaToUse)
 				if err != nil {
 					fmt.Printf("   ❌ Semantic extraction failed: %v\n", err)
 				} else {
@@ -977,7 +988,7 @@ func pruneIrrelevantChunks(ctx context.Context, llmClient *engine.LLMClient, tex
 		if !engine.ValidateTranscriptSemanticCoherence(chunk.Text) {
 			continue
 		}
-		systemPrompt := "You are a helpful assistant. Determine if a given transcript chunk contains any information (facts, preferences, constraints, timeline clues, or context) that will help answer the user's question. Respond with exactly YES or NO. Do not add any other words."
+		systemPrompt := "You are a helpful assistant. Determine if a given transcript chunk contains ANY information, clues, dates, or mentions of the entities/events referred to in the user's question. The question may be a multi-step or multi-hop comparison, so a chunk is relevant if it mentions even ONE of the events, topics, or dates referred to in the question. The first word of your response must strictly be YES or NO, you can add a brief explanation of the why after."
 		userPrompt := fmt.Sprintf("Question: %q\n\nTranscript Chunk:\n%s\n\nDoes this chunk contain information that helps answer the question? (YES/NO):", query, chunk.Text)
 		
 		var answer string
@@ -991,11 +1002,11 @@ func pruneIrrelevantChunks(ctx context.Context, llmClient *engine.LLMClient, tex
 		}
 		
 		cleaned := strings.TrimSpace(strings.ToUpper(answer))
-		if strings.Contains(cleaned, "YES") {
+		if strings.HasPrefix(cleaned, "YES") {
 			keptChunks = append(keptChunks, chunk.Text)
-			fmt.Printf("   ├─ [Pruner] Kept chunk (%d characters) -> YES\n", len(chunk.Text))
+			fmt.Printf("   ├─ [Pruner] Kept chunk (%d characters) -> %s\n", len(chunk.Text), strings.ReplaceAll(answer, "\r", ""))
 		} else {
-			fmt.Printf("   ├─ [Pruner] Discarded chunk (%d characters) -> NO\n", len(chunk.Text))
+			fmt.Printf("   ├─ [Pruner] Discarded chunk (%d characters) -> %s\n", len(chunk.Text), strings.ReplaceAll(answer, "\r", ""))
 		}
 	}
 	return strings.Join(keptChunks, "\n\n")

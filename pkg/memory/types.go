@@ -70,6 +70,15 @@ type TaxonomyNode struct {
         UpdatedAt     time.Time      `json:"updated_at"`
 }
 
+type SemanticTemporalAttributes struct {
+	ID               string `json:"id,omitempty"`
+	ValidFrom        string `json:"valid_from,omitempty"`
+	ValidUntil       string `json:"valid_until,omitempty"`
+	TemporalAnchorID string `json:"temporal_anchor_id,omitempty"`
+	TemporalRelation string `json:"temporal_relation,omitempty"`
+	TemporalNote     string `json:"temporal_note,omitempty"`
+}
+
 // This covers Epistemic (thought/known by someone), Alethic (possible/impossible/necessary), and Deontic (obligations, permissions, prohibitions) modalities
 type SemanticLink struct {
     SourceID              string  `json:"source_id"`
@@ -82,6 +91,8 @@ type SemanticLink struct {
     CreatedFrom           string  `json:"created_from"`           // Reference to raw data that led to creation (e.g. filename + chunk number)
     CreatedAt             time.Time `json:"created_at"`
     UpdatedAt             time.Time `json:"updated_at"`
+    TemporalLinkID        string                      `json:"temporal_link_id,omitempty"`
+    Temporal              *SemanticTemporalAttributes `json:"temporal,omitempty"`
 }
 
 type DocumentVersion struct {

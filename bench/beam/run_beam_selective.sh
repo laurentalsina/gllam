@@ -72,6 +72,13 @@ while [[ "$#" -gt 0 ]]; do
     esac
 done
 
+# Auto-disable bypass-semantic if temporal categories are targeted
+if [[ "$CATEGORIES" == *"temporal_reasoning"* || "$CATEGORIES" == *"event_ordering"* ]]; then
+    if [ "$BYPASS_SEMANTIC" = "true" ]; then
+        BYPASS_SEMANTIC="false"
+    fi
+fi
+
 echo "======================================================="
 echo "🚀 Starting BEAM 100k Dynamic Selective Benchmark"
 echo "   ├─ DB: $DB_PATH"
