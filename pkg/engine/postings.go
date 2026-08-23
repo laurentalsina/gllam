@@ -233,6 +233,12 @@ func (index *InvertedIndex) addUtteranceToPostings(utt CorpusUtterance) {
 		termPositions[token] = append(termPositions[token], pos)
 	}
 
+	// Index adjacent bigrams (phrases like "cover letter", "zoom call", etc.)
+	for i := 0; i < len(tokens)-1; i++ {
+		bigram := tokens[i] + " " + tokens[i+1]
+		termPositions[bigram] = append(termPositions[bigram], i)
+	}
+
 	for term, positions := range termPositions {
 		posting := Posting{
 			UtteranceID: utt.ID,
