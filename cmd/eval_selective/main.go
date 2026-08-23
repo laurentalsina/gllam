@@ -71,6 +71,18 @@ var stopWords = map[string]bool{
 	"she": true, "they": true, "we": true, "me": true, "him": true, "her": true, "us": true, "them": true,
 }
 
+var nonExpandableTerms = map[string]bool{
+    "you": true, "i": true, "he": true, "she": true, "they": true, "we": true, "me": true,
+    "him": true, "her": true, "us": true, "them": true, "myself": true, "your": true, "my": true,
+    "our": true, "their": true, "any": true, "some": true, "there": true, "here": true,
+    "this": true, "that": true, "these": true, "those": true,
+    "many": true, "both": true, "either": true, "about": true, "for": true, "to": true,
+    "with": true, "and": true, "or": true, "of": true, "it": true, "as": true, "an": true,
+    "a": true, "the": true, "who": true, "what": true, "where": true, "how": true, "why": true,
+    "which": true, "do": true, "does": true, "done": true,
+    "key": true, "points": true, "conversation": true,
+}
+
 func clearSemanticTables(ctx context.Context, db *sql.DB) {
 	_, _ = db.ExecContext(ctx, "DELETE FROM semantic_links")
 	_, _ = db.ExecContext(ctx, "DELETE FROM semantic_nodes")
@@ -229,6 +241,9 @@ func main() {
 				fmt.Printf("   ├─ Expanding query vocabulary via term embeddings...\n")
 				var expandedTerms []string
 				for _, term := range searchTerms {
+					if nonExpandableTerms[term] {
+						continue
+					}
 					tEmb, err := embedder.Embed(ctx, term)
 					if err != nil {
 						continue
@@ -348,6 +363,9 @@ func main() {
 				fmt.Printf("   ├─ Expanding query vocabulary via term embeddings...\n")
 				var expandedTerms []string
 				for _, term := range searchTerms {
+					if nonExpandableTerms[term] {
+						continue
+					}
 					tEmb, err := embedder.Embed(ctx, term)
 					if err != nil {
 						continue
