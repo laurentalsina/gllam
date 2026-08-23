@@ -26,6 +26,7 @@ type ChatCompletionRequest struct {
 	Temperature    float32                `json:"temperature"`
 	Stream         bool                   `json:"stream"`
 	MaxTokens      int                    `json:"max_tokens,omitempty"`
+	CachePrompt    bool                   `json:"cache_prompt,omitempty"`
 }
 
 type ChatStreamResponse struct {
@@ -164,6 +165,7 @@ func (c *LLMClient) GenerateWithFormat(ctx context.Context, systemPrompt, userPr
 			Temperature:    0.1,
 			Stream:         false,
 			MaxTokens:      16384,
+			CachePrompt:    true,
 		}
 
 		payload, err := json.Marshal(reqBody)
@@ -220,6 +222,7 @@ func (c *LLMClient) GenerateWithFormat(ctx context.Context, systemPrompt, userPr
 		Temperature: 0.1,
 		Stream:      true,
 		MaxTokens:   16384,
+		CachePrompt: true,
 	}
 
 	body, err := json.Marshal(reqBody)
