@@ -89,6 +89,8 @@ func main() {
 	topKMatches := flag.Int("top-k", 2, "Number of top matching utterances to expand context for")
 	limit := flag.Int("limit", 0, "Limit number of queries (0 for all)")
 	categories := flag.String("categories", "", "Comma-separated list of categories to evaluate (all, preference_following, temporal_reasoning, event_ordering, knowledge_update, summarization, instruction_following, information_extraction, contradiction_resolution, multi_session_reasoning, abstention)")
+	debug := flag.Bool("debug", false, "Print verbose debugging information about JIT processing steps")
+	pruneClueChunks := flag.Bool("prune-clue-chunks", false, "Prune irrelevant transcript chunks using a fast LLM YES/NO classifier pass")
 	bypassTemporal := flag.Bool("bypass-temporal", false, "Bypass JIT semantic extraction for temporal questions and answer directly from transcript")
 	bypassSemantic := flag.Bool("bypass-semantic", false, "Bypass JIT semantic extraction completely and answer directly from transcript")
 	useUtterancesVectors := flag.Bool("use-utterances-vectors", false, "Use turn-level vector embedding similarity search for paragraph/context retrieval")
@@ -493,17 +495,25 @@ func main() {
 			}
 			transcriptText := cleanTranscriptSAYArtifacts(transcriptBuilder.String())
 
+			if *pruneClueChunks {
+				fmt.Printf("   ├─ Pruning irrelevant chunks from transcript using LLM YES/NO checks...\n")
+				transcriptText = pruneIrrelevantChunks(ctx, llmClient, transcriptText, qa.Query, gllam.SystemPrompts.ChunkSize, gllam.SystemPrompts.ChunkOverlap)
+				fmt.Printf("   ├─ Transcript size after pruning: %d characters\n", len(transcriptText))
+			}
+
 			fmt.Printf("   ├─ Retrieved & expanded context size: %d turns (%d characters)\n", len(expandedUtterances), len(transcriptText))
 
 			// 5. Try Direct QA First Pass
 			fmt.Printf("   ├─ Attempting Direct QA first-pass...\n")
 			directSystemPrompt := gllam.SystemPrompts.DirectQAPrompt
 
-			fmt.Println("--- LLM Direct QA System Prompt ---")
-			fmt.Println(directSystemPrompt)
-			fmt.Println("--- LLM Direct QA User Prompt ---")
-			fmt.Printf("Transcript:\n%s\n\nQuestion: %s\n", transcriptText, qa.Query)
-			fmt.Println("----------------------------------")
+			if *debug {
+				fmt.Println("--- LLM Direct QA System Prompt ---")
+				fmt.Println(directSystemPrompt)
+				fmt.Println("--- LLM Direct QA User Prompt ---")
+				fmt.Printf("Transcript:\n%s\n\nQuestion: %s\n", transcriptText, qa.Query)
+				fmt.Println("----------------------------------")
+			}
 
 			directAnswer, err := tryDirectQA(ctx, llmClient, directSystemPrompt, transcriptText, qa.Query)
 			isTemporal := strings.HasPrefix(strings.ToUpper(directAnswer), "TEMPORAL")
@@ -524,10 +534,12 @@ func main() {
 				}
 				userPrompt := fmt.Sprintf("Transcript:\n%s\n\nQuestion: %s", transcriptText, qa.Query)
 
-				fmt.Println("--- LLM Direct QA Bypassed Prompt ---")
-				fmt.Println(directPrompt)
-				fmt.Printf("User:\n%s\n", userPrompt)
-				fmt.Println("------------------------------------")
+				if *debug {
+					fmt.Println("--- LLM Direct QA Bypassed Prompt ---")
+					fmt.Println(directPrompt)
+					fmt.Printf("User:\n%s\n", userPrompt)
+					fmt.Println("------------------------------------")
+				}
 
 				answer, err = llmClient.Generate(ctx, directPrompt, userPrompt)
 				if err != nil {
@@ -564,11 +576,13 @@ func main() {
 					}
 					userQuery := fmt.Sprintf("Discussion Transcript:\n%s\n\nQuestion: %s", transcriptText, qa.Query)
 
-					fmt.Println("--- LLM Final Q&A System Prompt ---")
-					fmt.Println(prompt)
-					fmt.Println("--- LLM Final Q&A User Prompt ---")
-					fmt.Println(userQuery)
-					fmt.Println("---------------------------------")
+					if *debug {
+						fmt.Println("--- LLM Final Q&A System Prompt ---")
+						fmt.Println(prompt)
+						fmt.Println("--- LLM Final Q&A User Prompt ---")
+						fmt.Println(userQuery)
+						fmt.Println("---------------------------------")
+					}
 
 					var genErr error
 					for attempt := 1; attempt <= 3; attempt++ {
@@ -644,8 +658,10 @@ func extractSemanticsForText(ctx context.Context, gllam *engine.GllamEngine, emb
 		}
 		if err := json.Unmarshal([]byte(sanitized), &extraction); err != nil {
 			fmt.Printf("   ❌ Failed to parse JSON from LLM: %v\n", err)
-			fmt.Printf("   [RAW RESPONSE]:\n%s\n", response)
-			fmt.Printf("   [SANITIZED RESPONSE]:\n%s\n", sanitized)
+			logFile := "./bench/beam/beam_selective_extraction_error.log"
+			logContent := fmt.Sprintf("=== ERROR AT %s ===\nError: %v\n[RAW RESPONSE]:\n%s\n[SANITIZED RESPONSE]:\n%s\n=================================\n\n", time.Now().Format(time.RFC3339), err, response, sanitized)
+			_ = os.WriteFile(logFile, []byte(logContent), 0644)
+			fmt.Printf("   ├─ Logged malformed JSON payload to %s\n", logFile)
 			continue
 		}
 
@@ -952,4 +968,35 @@ func isNotFoundResponse(answer string) bool {
 		return true
 	}
 	return false
+}
+
+func pruneIrrelevantChunks(ctx context.Context, llmClient *engine.LLMClient, text string, query string, chunkSize, chunkOverlap int) string {
+	chunks := engine.ChunkTranscript(text, chunkSize, chunkOverlap)
+	var keptChunks []string
+	for _, chunk := range chunks {
+		if !engine.ValidateTranscriptSemanticCoherence(chunk.Text) {
+			continue
+		}
+		systemPrompt := "You are a helpful assistant. Determine if a given transcript chunk contains any information (facts, preferences, constraints, timeline clues, or context) that will help answer the user's question. Respond with exactly YES or NO. Do not add any other words."
+		userPrompt := fmt.Sprintf("Question: %q\n\nTranscript Chunk:\n%s\n\nDoes this chunk contain information that helps answer the question? (YES/NO):", query, chunk.Text)
+		
+		var answer string
+		var err error
+		for attempt := 1; attempt <= 3; attempt++ {
+			answer, err = llmClient.Generate(ctx, systemPrompt, userPrompt)
+			if err == nil && strings.TrimSpace(answer) != "" {
+				break
+			}
+			time.Sleep(time.Duration(attempt) * time.Second)
+		}
+		
+		cleaned := strings.TrimSpace(strings.ToUpper(answer))
+		if strings.Contains(cleaned, "YES") {
+			keptChunks = append(keptChunks, chunk.Text)
+			fmt.Printf("   ├─ [Pruner] Kept chunk (%d characters) -> YES\n", len(chunk.Text))
+		} else {
+			fmt.Printf("   ├─ [Pruner] Discarded chunk (%d characters) -> NO\n", len(chunk.Text))
+		}
+	}
+	return strings.Join(keptChunks, "\n\n")
 }

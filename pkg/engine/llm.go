@@ -202,7 +202,12 @@ func (c *LLMClient) GenerateWithFormat(ctx context.Context, systemPrompt, userPr
 			return "", fmt.Errorf("no completion choices returned")
 		}
 
-		return chatResp.Choices[0].Message.Content, nil
+		content := chatResp.Choices[0].Message.Content
+		if strings.TrimSpace(content) == "" {
+			return "", fmt.Errorf("llm server returned an empty completion content choice (possibly blocked by content filter or context limit)")
+		}
+
+		return content, nil
 	}
 
 	// Default: Streaming generation with automatic non-streaming fallback

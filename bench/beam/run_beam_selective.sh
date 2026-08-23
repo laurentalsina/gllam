@@ -20,6 +20,11 @@ GRADE_OUT="./bench/beam/beam_final_grade_selective.txt"
 
 # Parse command line arguments
 CATEGORIES=""
+DEBUG_FLAG="false"
+BYPASS_SEMANTIC="true"
+BYPASS_TEMPORAL="false"
+PRUNE_CLUE_CHUNKS="false"
+
 while [[ "$#" -gt 0 ]]; do
     case $1 in
         --cover)
@@ -30,9 +35,37 @@ while [[ "$#" -gt 0 ]]; do
             fi
             shift 2
             ;;
+        --debug)
+            DEBUG_FLAG="true"
+            shift 1
+            ;;
+        --bypass-semantic)
+            BYPASS_SEMANTIC="$2"
+            shift 2
+            ;;
+        --bypass-semantic=*)
+            BYPASS_SEMANTIC="${1#*=}"
+            shift 1
+            ;;
+        --bypass-temporal)
+            BYPASS_TEMPORAL="$2"
+            shift 2
+            ;;
+        --bypass-temporal=*)
+            BYPASS_TEMPORAL="${1#*=}"
+            shift 1
+            ;;
+        --prune-clue-chunks)
+            PRUNE_CLUE_CHUNKS="$2"
+            shift 2
+            ;;
+        --prune-clue-chunks=*)
+            PRUNE_CLUE_CHUNKS="${1#*=}"
+            shift 1
+            ;;
         *)
             echo "Unknown parameter: $1"
-            echo "Usage: $0 [--cover <category_name>] [--cover <category_name2>] ..."
+            echo "Usage: $0 [--cover <category_name>] [--debug] [--bypass-semantic <true|false>] [--bypass-temporal <true|false>] [--prune-clue-chunks <true|false>]"
             echo "Available categories: all, preference_following, temporal_reasoning, event_ordering, knowledge_update, summarization, instruction_following, information_extraction, contradiction_resolution, multi_session_reasoning, abstention"
             exit 1
             ;;
@@ -45,6 +78,10 @@ echo "   ├─ DB: $DB_PATH"
 echo "   ├─ Text Server: $TEXT_SERVER"
 echo "   ├─ Embeddings Server: $EMBEDDINGS_SERVER"
 echo "   ├─ Planner: $GLLAM_PLANNER_EXECUTABLE_PATH"
+echo "   ├─ Debug Mode: $DEBUG_FLAG"
+echo "   ├─ Bypass Semantic: $BYPASS_SEMANTIC"
+echo "   ├─ Bypass Temporal: $BYPASS_TEMPORAL"
+echo "   ├─ Prune Clue Chunks: $PRUNE_CLUE_CHUNKS"
 if [ ! -z "$CATEGORIES" ]; then
 echo "   ├─ Target Categories: $CATEGORIES"
 fi
@@ -61,9 +98,12 @@ go run ./cmd/eval_selective/main.go \
   --top-k 10 \
   --use-utterances-vectors=true \
   --use-terms-vectors=true \
-  --bypass-semantic=true \
   --prompts-config config/beam_prompts.json \
-  --categories "$CATEGORIES"
+  --categories "$CATEGORIES" \
+  --debug="$DEBUG_FLAG" \
+  --bypass-semantic="$BYPASS_SEMANTIC" \
+  --bypass-temporal="$BYPASS_TEMPORAL" \
+  --prune-clue-chunks="$PRUNE_CLUE_CHUNKS"
 
 # Grade Results
 echo -e "\n📊 Grading Results..."
