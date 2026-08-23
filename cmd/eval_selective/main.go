@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -109,8 +110,37 @@ func main() {
 	useTermsVectors := flag.Bool("use-terms-vectors", false, "Use semantic query expansion via term vocabulary embeddings")
 
 	flag.Parse()
+	_ = debug
 
-	fmt.Printf("DEBUG: use-utterances-vectors=%v, use-terms-vectors=%v, bypass-temporal=%v, bypass-semantic=%v, top-k=%d\n", *useUtterancesVectors, *useTermsVectors, *bypassTemporal, *bypassSemantic, *topKMatches)
+	runTimestamp := time.Now().Format("20060102_150405")
+	runLogDir := fmt.Sprintf("./bench/beam/run_log_%s", runTimestamp)
+	if err := os.MkdirAll(runLogDir, 0755); err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to create run log directory: %v\n", err)
+		os.Exit(1)
+	}
+
+	mainLogPath := filepath.Join(runLogDir, "eval_selective.log")
+	mainLogFile, err := os.OpenFile(mainLogPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to open main log file: %v\n", err)
+		os.Exit(1)
+	}
+	defer mainLogFile.Close()
+
+	logMain := func(format string, args ...interface{}) {
+		msg := fmt.Sprintf(format, args...)
+		fmt.Print(msg)
+		_, _ = mainLogFile.WriteString(msg)
+	}
+
+	writeDetailLog := func(instanceID, purpose, content string) string {
+		filename := fmt.Sprintf("%s_%s_%s.log", instanceID, runTimestamp, purpose)
+		path := filepath.Join(runLogDir, filename)
+		_ = os.WriteFile(path, []byte(content), 0644)
+		return path
+	}
+
+	logMain("DEBUG: use-utterances-vectors=%v, use-terms-vectors=%v, bypass-temporal=%v, bypass-semantic=%v, top-k=%d\n", *useUtterancesVectors, *useTermsVectors, *bypassTemporal, *bypassSemantic, *topKMatches)
 
 	ctx := context.Background()
 
@@ -131,7 +161,7 @@ func main() {
 	defer gllam.Close()
 
 	if err := gllam.LoadSystemPromptsConfig(*promptsPath); err != nil {
-		fmt.Printf("⚠️ Could not load prompts config from %s: %v\n", *promptsPath, err)
+		logMain("⚠️ Could not load prompts config from %s: %v\n", *promptsPath, err)
 	}
 
 	if err := gllam.InitSchema(); err != nil {
@@ -142,17 +172,17 @@ func main() {
 	plannerPath := os.Getenv("GLLAM_PLANNER_EXECUTABLE_PATH")
 	if plannerPath != "" {
 		gllam.SetPlannerExecutablePath(plannerPath)
-		fmt.Printf("   ├─ External PDDL Planner set to: %s\n", plannerPath)
+		logMain("   ├─ External PDDL Planner set to: %s\n", plannerPath)
 	}
 
-	fmt.Println("Building postings index from corpus...")
+	logMain("Building postings index from corpus...\n")
 	startIdx := time.Now()
 	idx, err := engine.BuildInvertedIndex(*corpusPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to build postings index: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Printf("Index built in %v. Utterances: %d, Terms: %d\n", time.Since(startIdx).Round(time.Millisecond), len(idx.Utterances), len(idx.Postings))
+	logMain("Index built in %v. Utterances: %d, Terms: %d\n", time.Since(startIdx).Round(time.Millisecond), len(idx.Utterances), len(idx.Postings))
 
 	if *useUtterancesVectors {
 		if err := ensureUtteranceEmbeddingsIndexed(ctx, gllam, embedder, idx); err != nil {
@@ -212,21 +242,21 @@ func main() {
 			}
 		}
 
-		fmt.Println(strings.Repeat("=", 100))
-		fmt.Printf("Processing [%s]: %s\n", qa.InstanceID, qa.Query)
+		logMain("%s\n", strings.Repeat("=", 100))
+		logMain("Processing [%s]: %s\n", qa.InstanceID, qa.Query)
 
 		// 1. Clear semantic database tables for fresh query
 		clearSemanticTables(ctx, gllam.DB())
 
 		targetSpeakers := extractTargetSpeakers(qa.Query, idx)
 		if len(targetSpeakers) > 0 {
-			fmt.Printf("   ├─ Target speakers detected in question: %v\n", targetSpeakers)
+			logMain("   ├─ Target speakers detected in question: %v\n", targetSpeakers)
 		}
 
 		// 2. Retrieve top matching utterances
 		var allCandidates []string
 		if *useUtterancesVectors {
-			fmt.Printf("   ├─ Retrieving top-%d matching paragraphs via Hybrid Search (TF-IDF + Vector RRF)...\n", *topKMatches)
+			logMain("   ├─ Retrieving top-%d matching paragraphs via Hybrid Search (TF-IDF + Vector RRF)...\n", *topKMatches)
 
 			// 2a. Run TF-IDF search to get ranked list (up to 100)
 			queryTokens := engine.Tokenize(qa.Query)
@@ -238,7 +268,7 @@ func main() {
 			}
 
 			if *useTermsVectors {
-				fmt.Printf("   ├─ Expanding query vocabulary via term embeddings...\n")
+				logMain("   ├─ Expanding query vocabulary via term embeddings...\n")
 				var expandedTerms []string
 				for _, term := range searchTerms {
 					if nonExpandableTerms[term] {
@@ -265,7 +295,7 @@ func main() {
 						searchTerms = append(searchTerms, t)
 					}
 				}
-				fmt.Printf("   ├─ Expanded search terms: %v\n", searchTerms)
+				logMain("   ├─ Expanded search terms: %v\n", searchTerms)
 			}
 
 			uttScores := make(map[string]float64)
@@ -360,7 +390,7 @@ func main() {
 			}
 
 			if *useTermsVectors {
-				fmt.Printf("   ├─ Expanding query vocabulary via term embeddings...\n")
+				logMain("   ├─ Expanding query vocabulary via term embeddings...\n")
 				var expandedTerms []string
 				for _, term := range searchTerms {
 					if nonExpandableTerms[term] {
@@ -387,7 +417,7 @@ func main() {
 						searchTerms = append(searchTerms, t)
 					}
 				}
-				fmt.Printf("   ├─ Expanded search terms: %v\n", searchTerms)
+				logMain("   ├─ Expanded search terms: %v\n", searchTerms)
 			}
 
 			// Score utterances based on TF-IDF to prioritize rare terms like names and entities
@@ -453,7 +483,7 @@ func main() {
 			}
 
 			if pass > 0 {
-				fmt.Printf("   ├─ 🔄 Pass %d: Retrying with next set of %d utterances (rank %d to %d)...\n", pass+1, len(selectedUtteranceIDs), startIndex+1, endIndex)
+				logMain("   ├─ 🔄 Pass %d: Retrying with next set of %d utterances (rank %d to %d)...\n", pass+1, len(selectedUtteranceIDs), startIndex+1, endIndex)
 			}
 
 			// Gather context expanded utterances
@@ -514,64 +544,60 @@ func main() {
 			transcriptText := cleanTranscriptSAYArtifacts(transcriptBuilder.String())
 
 			if *pruneClueChunks {
-				fmt.Printf("   ├─ Pruning irrelevant chunks from transcript using LLM YES/NO checks...\n")
+				logMain("   ├─ Pruning irrelevant chunks from transcript using LLM YES/NO checks...\n")
 				transcriptText = pruneIrrelevantChunks(ctx, llmClient, transcriptText, qa.Query, gllam.SystemPrompts.ChunkSize, gllam.SystemPrompts.ChunkOverlap)
-				fmt.Printf("   ├─ Transcript size after pruning: %d characters\n", len(transcriptText))
+				logMain("   ├─ Transcript size after pruning: %d characters\n", len(transcriptText))
 			}
 
-			fmt.Printf("   ├─ Retrieved & expanded context size: %d turns (%d characters)\n", len(expandedUtterances), len(transcriptText))
+			logMain("   ├─ Retrieved & expanded context size: %d turns (%d characters)\n", len(expandedUtterances), len(transcriptText))
 
 			// 5. Try Direct QA First Pass
-			fmt.Printf("   ├─ Attempting Direct QA first-pass...\n")
+			logMain("   ├─ Attempting Direct QA first-pass...\n")
 			directSystemPrompt := gllam.SystemPrompts.DirectQAPrompt
 
-			if *debug {
-				fmt.Println("--- LLM Direct QA System Prompt ---")
-				fmt.Println(directSystemPrompt)
-				fmt.Println("--- LLM Direct QA User Prompt ---")
-				fmt.Printf("Transcript:\n%s\n\nQuestion: %s\n", transcriptText, qa.Query)
-				fmt.Println("----------------------------------")
-			}
-
 			directAnswer, err := tryDirectQA(ctx, llmClient, directSystemPrompt, transcriptText, qa.Query)
+			
+			// Log Direct QA details
+			directQAContent := fmt.Sprintf("=== DIRECT QA SYSTEM PROMPT ===\n%s\n\n=== DIRECT QA USER PROMPT ===\nTranscript:\n%s\n\nQuestion: %s\n\n=== RESPONSE ===\n%s\n", directSystemPrompt, transcriptText, qa.Query, directAnswer)
+			directQAPath := writeDetailLog(qa.InstanceID, "direct_qa", directQAContent)
+			logMain("   ├─ Logged Direct QA details to %s\n", directQAPath)
+
 			isTemporal := strings.HasPrefix(strings.ToUpper(directAnswer), "TEMPORAL")
 			isNotFound := strings.ToUpper(directAnswer) == "ANSWER_NOT_FOUND"
 
 			if err == nil && !isTemporal && !isNotFound && directAnswer != "" {
 				answer = directAnswer
-				fmt.Printf("   ├─ ✅ First-pass Direct QA succeeded.\n")
+				logMain("   ├─ ✅ First-pass Direct QA succeeded.\n")
 			} else if *bypassSemantic || (isTemporal && *bypassTemporal) {
 				reason := "TEMPORAL with --bypass-temporal"
 				if *bypassSemantic {
 					reason = "--bypass-semantic"
 				}
-				fmt.Printf("   ├─ ⚠️ Bypassing JIT semantic extraction (%s). Answering directly from transcript...\n", reason)
+				logMain("   ├─ ⚠️ Bypassing JIT semantic extraction (%s). Answering directly from transcript...\n", reason)
 				directPrompt := gllam.SystemPrompts.SimpleTemporalRetrieval
 				if directPrompt == "" {
 					directPrompt = "You are a helpful assistant. Answer the question strictly using facts directly stated in the transcript. Pay absolute attention to the chronological sequence of lines in the transcript. Determine who speaks first and who speaks second, and trace the sequence of statements. Answer the temporal ordering question precisely and directly."
 				}
 				userPrompt := fmt.Sprintf("Transcript:\n%s\n\nQuestion: %s", transcriptText, qa.Query)
 
-				if *debug {
-					fmt.Println("--- LLM Direct QA Bypassed Prompt ---")
-					fmt.Println(directPrompt)
-					fmt.Printf("User:\n%s\n", userPrompt)
-					fmt.Println("------------------------------------")
-				}
-
 				answer, err = llmClient.Generate(ctx, directPrompt, userPrompt)
 				if err != nil {
 					answer = "ERROR"
 				}
+
+				// Log Direct QA Bypass details
+				bypassContent := fmt.Sprintf("=== DIRECT QA BYPASS SYSTEM PROMPT ===\n%s\n\n=== DIRECT QA BYPASS USER PROMPT ===\n%s\n\n=== RESPONSE ===\n%s\n", directPrompt, userPrompt, answer)
+				bypassPath := writeDetailLog(qa.InstanceID, "direct_qa_bypass", bypassContent)
+				logMain("   ├─ Logged Direct QA Bypass details to %s\n", bypassPath)
 			} else {
-				fmt.Printf("   ├─ ❌ Direct QA returned %s. Falling back to JIT semantic extraction...\n", directAnswer)
+				logMain("   ├─ ❌ Direct QA returned %s. Falling back to JIT semantic extraction...\n", directAnswer)
 
 				// 6. Extract semantics just-in-time
 				extractionPrompt := gllam.SystemPrompts.SemanticExtraction
 				schemaToUse := extractionJSONSchema
 				if isTemporal && gllam.SystemPrompts.SemanticExtractionTemporal != "" {
 					extractionPrompt = gllam.SystemPrompts.SemanticExtractionTemporal
-					fmt.Println("   ├─ Using alternate temporal-ready extraction prompts for JIT extraction.")
+					logMain("   ├─ Using alternate temporal-ready extraction prompts for JIT extraction.\n")
 
 					temporalSchemaPath := "./config/semantic_extraction_temporal_schema.json"
 					tempData, err := os.ReadFile(temporalSchemaPath)
@@ -579,39 +605,32 @@ func main() {
 						var tempSchema map[string]interface{}
 						if uErr := json.Unmarshal(tempData, &tempSchema); uErr == nil {
 							schemaToUse = tempSchema
-							fmt.Println("   ├─ Loaded temporal schema for JSON validation.")
+							logMain("   ├─ Loaded temporal schema for JSON validation.\n")
 						}
 					}
 				}
-				nodes, links, err := extractSemanticsForText(ctx, gllam, embedder, llmClient, transcriptText, extractionPrompt, schemaToUse)
+				nodes, links, err := extractSemanticsForText(ctx, gllam, embedder, llmClient, transcriptText, extractionPrompt, schemaToUse, runLogDir, runTimestamp, qa.InstanceID)
 				if err != nil {
-					fmt.Printf("   ❌ Semantic extraction failed: %v\n", err)
+					logMain("   ❌ Semantic extraction failed: %v\n", err)
 				} else {
-					fmt.Printf("   ├─ Extracted JIT: %d nodes, %d links\n", nodes, links)
+					logMain("   ├─ Extracted JIT: %d nodes, %d links\n", nodes, links)
+					logMain("   ├─ Logged JIT extraction details to %s/%s_%s_jit_extraction.log\n", runLogDir, qa.InstanceID, runTimestamp)
 				}
 
 				// 7. Route and Assemble semantic context & answer query
 				compiled, err := gllam.RouteAndAssemble(ctx, qa.Query, nil)
 				if err != nil {
-					fmt.Fprintf(os.Stderr, "   ❌ Error routing query: %v\n", err)
+					logMain("   ❌ Error routing query: %v\n", err)
 					answer = "ERROR"
 				} else {
 					prompt := engine.FormatSystemPrompt(compiled)
 					if gllam.SystemPrompts != nil && gllam.SystemPrompts.CustomCategoryPrompts != nil {
 						if catPrompt, ok := gllam.SystemPrompts.CustomCategoryPrompts[qa.Category]; ok && catPrompt != "" {
 							prompt = prompt + "\n\n" + catPrompt
-							fmt.Printf("   ├─ Appended category-specific guidelines for: %s\n", qa.Category)
+							logMain("   ├─ Appended category-specific guidelines for: %s\n", qa.Category)
 						}
 					}
 					userQuery := fmt.Sprintf("Discussion Transcript:\n%s\n\nQuestion: %s", transcriptText, qa.Query)
-
-					if *debug {
-						fmt.Println("--- LLM Final Q&A System Prompt ---")
-						fmt.Println(prompt)
-						fmt.Println("--- LLM Final Q&A User Prompt ---")
-						fmt.Println(userQuery)
-						fmt.Println("---------------------------------")
-					}
 
 					var genErr error
 					for attempt := 1; attempt <= 3; attempt++ {
@@ -624,6 +643,11 @@ func main() {
 					if genErr != nil {
 						answer = "ERROR"
 					}
+
+					// Log Final QA details
+					finalQAContent := fmt.Sprintf("=== COMPILED CONTEXT ===\n%+v\n\n=== FINAL QA SYSTEM PROMPT ===\n%s\n\n=== FINAL QA USER PROMPT ===\n%s\n\n=== RESPONSE ===\n%s\n", compiled, prompt, userQuery, answer)
+					finalQAPath := writeDetailLog(qa.InstanceID, "final_qa", finalQAContent)
+					logMain("   ├─ Logged Final QA details to %s\n", finalQAPath)
 				}
 			}
 
@@ -632,7 +656,7 @@ func main() {
 				answer = cleanedAnswer
 				break
 			} else {
-				fmt.Printf("   ├─ ❌ LLM returned 'not found' response in this pass: %q\n", cleanedAnswer)
+				logMain("   ├─ ❌ LLM returned 'not found' response in this pass: %q\n", cleanedAnswer)
 				answer = cleanedAnswer
 			}
 		}
@@ -650,15 +674,17 @@ func main() {
 		outFile.Write(resBytes)
 		outFile.WriteString("\n")
 
-		count++
-		fmt.Printf("   └─ Answer: %s\n", strings.ReplaceAll(strings.Split(answer, "\n")[0], "\r", ""))
+		logMain("   └─ Answer: %s\n", strings.ReplaceAll(strings.Split(answer, "\n")[0], "\r", ""))
 	}
 
-	fmt.Printf("\nCompleted %d evaluations. Results saved to %s\n", count, *outPath)
+	logMain("\nCompleted %d evaluations. Results saved to %s\n", count, *outPath)
 }
 
-func extractSemanticsForText(ctx context.Context, gllam *engine.GllamEngine, embedder engine.Embedder, llmClient *engine.LLMClient, text string, systemPrompt string, extractionJSONSchema map[string]interface{}) (int, int, error) {
+func extractSemanticsForText(ctx context.Context, gllam *engine.GllamEngine, embedder engine.Embedder, llmClient *engine.LLMClient, text string, systemPrompt string, extractionJSONSchema map[string]interface{}, runLogDir, runTimestamp, instanceID string) (int, int, error) {
 	chunks := engine.ChunkTranscript(text, gllam.SystemPrompts.ChunkSize, gllam.SystemPrompts.ChunkOverlap)
+
+	var logBuilder strings.Builder
+	logBuilder.WriteString(fmt.Sprintf("=== JIT EXTRACTION FOR INSTANCE %s ===\n\n", instanceID))
 
 	var nodesCount, linksCount int
 	for cIdx, chunk := range chunks {
@@ -668,35 +694,30 @@ func extractSemanticsForText(ctx context.Context, gllam *engine.GllamEngine, emb
 
 		userPrompt := fmt.Sprintf("Transcript Chunk (%d/%d):\n%s\n\nExtract JSON:", cIdx+1, len(chunks), chunk.Text)
 
-		fmt.Println("--- LLM JIT Semantic Extraction System Prompt ---")
-		fmt.Println(systemPrompt)
-		fmt.Println("--- LLM JIT Semantic Extraction User Prompt ---")
-		fmt.Println(userPrompt)
-		fmt.Println("-------------------------------------------------")
-
 		response, err := llmClient.GenerateWithFormat(ctx, systemPrompt, userPrompt, extractionJSONSchema)
 		if err != nil {
-			fmt.Printf("   ❌ LLM GenerateWithFormat error: %v\n", err)
+			logBuilder.WriteString(fmt.Sprintf("Chunk %d/%d Error: %v\n\n", cIdx+1, len(chunks), err))
 			return 0, 0, err
 		}
 
 		sanitized := SanitizeLLMJSON(response)
+
+		logBuilder.WriteString(fmt.Sprintf("--- CHUNK %d/%d ---\n", cIdx+1, len(chunks)))
+		logBuilder.WriteString(fmt.Sprintf("System Prompt:\n%s\n\n", systemPrompt))
+		logBuilder.WriteString(fmt.Sprintf("User Prompt:\n%s\n\n", userPrompt))
+		logBuilder.WriteString(fmt.Sprintf("Raw Response:\n%s\n\n", response))
+		logBuilder.WriteString(fmt.Sprintf("Sanitized Response:\n%s\n\n", sanitized))
+
 		var extraction struct {
 			Nodes []memory.SemanticNode `json:"nodes"`
 			Links []memory.SemanticLink `json:"links"`
 		}
 		if err := json.Unmarshal([]byte(sanitized), &extraction); err != nil {
-			fmt.Printf("   ❌ Failed to parse JSON from LLM: %v\n", err)
+			logBuilder.WriteString(fmt.Sprintf("JSON Parsing Error: %v\n\n", err))
 			logFile := "./bench/beam/beam_selective_extraction_error.log"
 			logContent := fmt.Sprintf("=== ERROR AT %s ===\nError: %v\n[RAW RESPONSE]:\n%s\n[SANITIZED RESPONSE]:\n%s\n=================================\n\n", time.Now().Format(time.RFC3339), err, response, sanitized)
 			_ = os.WriteFile(logFile, []byte(logContent), 0644)
-			fmt.Printf("   ├─ Logged malformed JSON payload to %s\n", logFile)
 			continue
-		}
-
-		fmt.Printf("   ├─ Chunk %d/%d: Extracted %d nodes, %d links from this chunk.\n", cIdx+1, len(chunks), len(extraction.Nodes), len(extraction.Links))
-		if len(extraction.Nodes) == 0 && len(extraction.Links) == 0 {
-			fmt.Printf("   [RAW RESPONSE]:\n%s\n", response)
 		}
 
 		// Ingest into SQLite
@@ -742,6 +763,11 @@ func extractSemanticsForText(ctx context.Context, gllam *engine.GllamEngine, emb
 		}
 
 		_, _ = gllam.DB().ExecContext(ctx, "COMMIT")
+	}
+
+	if len(chunks) > 0 {
+		detailPath := filepath.Join(runLogDir, fmt.Sprintf("%s_%s_jit_extraction.log", instanceID, runTimestamp))
+		_ = os.WriteFile(detailPath, []byte(logBuilder.String()), 0644)
 	}
 
 	return nodesCount, linksCount, nil
