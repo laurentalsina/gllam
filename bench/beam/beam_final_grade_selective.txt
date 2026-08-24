@@ -1,17 +1,6 @@
-Starting BEAM grading...
-[8_temporal_reasoning_0] INCORRECT (Verdict: INCORRECT)
-[2_temporal_reasoning_0] CORRECT
-[17_temporal_reasoning_0] CORRECT
-[5_temporal_reasoning_1] INCORRECT (Verdict: INCORRECT)
-[10_temporal_reasoning_0] CORRECT
-[13_temporal_reasoning_1] CORRECT
-[3_temporal_reasoning_1] INCORRECT (Verdict: INCORRECT)
-
---- Final BEAM Score ---
-Total Attempted: 7
-Generation Errors/Timeouts: 0
-Correct: 4
-Overall Accuracy: 57.14%
-
---- Accuracy by Category ---
-temporal_reasoning             : 4/7 (57.14%)
+# github.com/asg017/sqlite-vec-go-bindings/cgo
+In file included from ../../go-work/pkg/mod/github.com/asg017/sqlite-vec-go-bindings@v0.1.6/cgo/lib.go:5:
+./sqlite-vec.h:7:10: fatal error: sqlite3.h: No such file or directory
+    7 | #include "sqlite3.h"
+      |          ^~~~~~~~~~~
+compilation terminated.

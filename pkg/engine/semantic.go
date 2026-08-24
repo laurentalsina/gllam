@@ -217,6 +217,17 @@ func (e *GllamEngine) AddEdge(ctx context.Context, link memory.SemanticLink) err
 		var anchorID sql.NullString
 		if link.Temporal.TemporalAnchorID != "" {
 			anchorID = sql.NullString{String: link.Temporal.TemporalAnchorID, Valid: true}
+			// Ensure anchor node exists in semantic_nodes to satisfy foreign key constraint
+			var exists int
+			_ = e.db.QueryRowContext(ctx, "SELECT 1 FROM semantic_nodes WHERE id = ?", link.Temporal.TemporalAnchorID).Scan(&exists)
+			if exists == 0 {
+				_ = e.UpsertNode(ctx, memory.SemanticNode{
+					ID:          link.Temporal.TemporalAnchorID,
+					Name:        link.Temporal.TemporalAnchorID,
+					Type:        "event",
+					CreatedFrom: "anchor_inference",
+				})
+			}
 		}
 
 		_, tErr := e.db.ExecContext(ctx, insertTempQuery,
@@ -240,8 +251,19 @@ func (e *GllamEngine) AddEdge(ctx context.Context, link memory.SemanticLink) err
             temporal_link_id = excluded.temporal_link_id`
 
     var origSource, resRationaleVal sql.NullString
-    if link.OriginID != "" && !strings.EqualFold(link.OriginID, "null") && !strings.EqualFold(link.OriginID, "none") && !strings.EqualFold(link.OriginID, "nil") {
+    if link.OriginID != "" && !strings.EqualFold(link.OriginID, "null") && !strings.EqualFold(link.OriginID, "none") && !strings.EqualFold(link.OriginID, "nil") && !strings.EqualFold(link.OriginID, "unknown") {
         origSource = sql.NullString{String: link.OriginID, Valid: true}
+		// Ensure origin node exists in semantic_nodes to satisfy foreign key constraint
+		var exists int
+		_ = e.db.QueryRowContext(ctx, "SELECT 1 FROM semantic_nodes WHERE id = ?", link.OriginID).Scan(&exists)
+		if exists == 0 {
+			_ = e.UpsertNode(ctx, memory.SemanticNode{
+				ID:          link.OriginID,
+				Name:        link.OriginID,
+				Type:        "human",
+				CreatedFrom: "origin_inference",
+			})
+		}
     }
     if link.ResolutionRationale != "" {
         resRationaleVal = sql.NullString{String: link.ResolutionRationale, Valid: true}

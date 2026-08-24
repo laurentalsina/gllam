@@ -15,8 +15,11 @@ DB_PATH="./bench/gllam_data_selective_beam.db"
 
 BEAM_CORPUS="/home/laurent/Projects/agentic_benchmarks/beam_100k_conversations.jsonl"
 BEAM_QA="/home/laurent/Projects/agentic_benchmarks/beam_100k_qa_sample50.jsonl"
-OUT_RESULTS="./bench/beam/beam_100k_results_selective.jsonl"
-GRADE_OUT="./bench/beam/beam_final_grade_selective.txt"
+RUN_TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
+RUN_LOG_DIR="./bench/beam/run_log_${RUN_TIMESTAMP}"
+mkdir -p "$RUN_LOG_DIR"
+OUT_RESULTS="${RUN_LOG_DIR}/beam_100k_results_selective.jsonl"
+GRADE_OUT="${RUN_LOG_DIR}/beam_final_grade_selective.txt"
 
 # Parse command line arguments
 CATEGORIES=""
@@ -24,6 +27,7 @@ DEBUG_FLAG="false"
 BYPASS_SEMANTIC="true"
 BYPASS_TEMPORAL="false"
 PRUNE_CLUE_CHUNKS="false"
+DECOMPOSE_QUERY="false"
 
 while [[ "$#" -gt 0 ]]; do
     case $1 in
@@ -63,9 +67,17 @@ while [[ "$#" -gt 0 ]]; do
             PRUNE_CLUE_CHUNKS="${1#*=}"
             shift 1
             ;;
+        --decompose-query)
+            DECOMPOSE_QUERY="$2"
+            shift 2
+            ;;
+        --decompose-query=*)
+            DECOMPOSE_QUERY="${1#*=}"
+            shift 1
+            ;;
         *)
             echo "Unknown parameter: $1"
-            echo "Usage: $0 [--cover <category_name>] [--debug] [--bypass-semantic <true|false>] [--bypass-temporal <true|false>] [--prune-clue-chunks <true|false>]"
+            echo "Usage: $0 [--cover <category_name>] [--debug] [--bypass-semantic <true|false>] [--bypass-temporal <true|false>] [--prune-clue-chunks <true|false>] [--decompose-query <true|false>]"
             echo "Available categories: all, preference_following, temporal_reasoning, event_ordering, knowledge_update, summarization, instruction_following, information_extraction, contradiction_resolution, multi_session_reasoning, abstention"
             exit 1
             ;;
@@ -89,6 +101,7 @@ echo "   ├─ Debug Mode: $DEBUG_FLAG"
 echo "   ├─ Bypass Semantic: $BYPASS_SEMANTIC"
 echo "   ├─ Bypass Temporal: $BYPASS_TEMPORAL"
 echo "   ├─ Prune Clue Chunks: $PRUNE_CLUE_CHUNKS"
+echo "   ├─ Decompose Query: $DECOMPOSE_QUERY"
 if [ ! -z "$CATEGORIES" ]; then
 echo "   ├─ Target Categories: $CATEGORIES"
 fi
@@ -110,7 +123,9 @@ go run ./cmd/eval_selective/main.go \
   --debug="$DEBUG_FLAG" \
   --bypass-semantic="$BYPASS_SEMANTIC" \
   --bypass-temporal="$BYPASS_TEMPORAL" \
-  --prune-clue-chunks="$PRUNE_CLUE_CHUNKS"
+  --prune-clue-chunks="$PRUNE_CLUE_CHUNKS" \
+  --decompose-query="$DECOMPOSE_QUERY" \
+  --run-timestamp "$RUN_TIMESTAMP"
 
 # Grade Results
 echo -e "\n📊 Grading Results..."

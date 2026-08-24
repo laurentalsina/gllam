@@ -109,11 +109,17 @@ func main() {
 	bypassSemantic := flag.Bool("bypass-semantic", false, "Bypass JIT semantic extraction completely and answer directly from transcript")
 	useUtterancesVectors := flag.Bool("use-utterances-vectors", false, "Use turn-level vector embedding similarity search for paragraph/context retrieval")
 	useTermsVectors := flag.Bool("use-terms-vectors", false, "Use semantic query expansion via term vocabulary embeddings")
+	decomposeQueryFlag := flag.Bool("decompose-query", false, "Decompose complex questions into sub-queries for multi-hop retrieval")
+	runTimestampFlag := flag.String("run-timestamp", "", "Override run timestamp for log directory naming")
 
 	flag.Parse()
 	_ = debug
+	_ = decomposeQueryFlag
 
 	runTimestamp := time.Now().Format("20060102_150405")
+	if *runTimestampFlag != "" {
+		runTimestamp = *runTimestampFlag
+	}
 	runLogDir := fmt.Sprintf("./bench/beam/run_log_%s", runTimestamp)
 	if err := os.MkdirAll(runLogDir, 0755); err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to create run log directory: %v\n", err)
@@ -253,240 +259,33 @@ func main() {
 		}
 
 		// 2. Retrieve top matching utterances
-		var allCandidates []string
-		if *useUtterancesVectors {
-			logMain("   ├─ Retrieving top-%d matching paragraphs via Hybrid Search (TF-IDF + Vector RRF)...\n", *topKMatches)
-
-			// 2a. Run TF-IDF search to get ranked list (up to 100)
-			queryTokens := engine.Tokenize(qa.Query)
-			var searchTerms []string
-			seenTerms := make(map[string]bool)
-			for _, tok := range queryTokens {
-				if !stopWords[tok] && !seenTerms[tok] {
-					seenTerms[tok] = true
-					searchTerms = append(searchTerms, tok)
-				}
-			}
-
-			// Add adjacent non-stopword bigrams (e.g. "cover letter", "zoom call")
-			for i := 0; i < len(queryTokens)-1; i++ {
-				tok1 := queryTokens[i]
-				tok2 := queryTokens[i+1]
-				if !stopWords[tok1] && !stopWords[tok2] {
-					bigram := tok1 + " " + tok2
-					if !seenTerms[bigram] {
-						seenTerms[bigram] = true
-						searchTerms = append(searchTerms, bigram)
-					}
-				}
-			}
-
-			if *useTermsVectors {
-				logMain("   ├─ Expanding query vocabulary via term embeddings...\n")
-				var expandedTerms []string
-				for _, term := range searchTerms {
-					if nonExpandableTerms[term] {
-						continue
-					}
-					tEmb, err := embedder.Embed(ctx, term)
-					if err != nil {
-						continue
-					}
-					similar, err := gllam.SearchSimilarTerms(ctx, tEmb, 4)
-					if err == nil {
-						for _, sim := range similar {
-							expandedTerms = append(expandedTerms, sim.Term)
-						}
-					}
-				}
-				termSet := make(map[string]bool)
-				for _, t := range searchTerms {
-					termSet[t] = true
-				}
-				for _, t := range expandedTerms {
-					if !termSet[t] {
-						termSet[t] = true
-						searchTerms = append(searchTerms, t)
-					}
-				}
-				logMain("   ├─ Expanded search terms: %v\n", searchTerms)
-			}
-
-			uttScores := make(map[string]float64)
-			totalUtterances := float64(len(idx.Utterances))
-			for _, term := range searchTerms {
-				postings, ok := idx.Postings[term]
-				if !ok {
-					continue
-				}
-				df := float64(len(postings))
-				if df == 0 {
-					continue
-				}
-				idf := math.Log(totalUtterances / df)
-				for _, p := range postings {
-					uttScores[p.UtteranceID] += float64(p.Frequency) * idf
-				}
-			}
-
-			type scoreEntry struct {
-				id    string
-				score float64
-			}
-			var tfidfList []scoreEntry
-			for id, sc := range uttScores {
-				tfidfList = append(tfidfList, scoreEntry{id: id, score: sc})
-			}
-			sort.Slice(tfidfList, func(i, j int) bool {
-				return tfidfList[i].score > tfidfList[j].score
-			})
-
-			// 2b. Run Vector search to get ranked list (up to 100)
-			qEmb, err := embedder.Embed(ctx, qa.Query)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "   ❌ Failed to embed query: %v\n", err)
-				os.Exit(1)
-			}
-			vecMatches, err := gllam.SearchSimilarUtterances(ctx, qEmb, 100)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "   ❌ Vector search failed: %v\n", err)
-				os.Exit(1)
-			}
-
-			// 2c. Reciprocal Rank Fusion (RRF)
-			rrfScores := make(map[string]float64)
-			const kRRF = 60.0
-
-			for rank, entry := range tfidfList {
-				if rank >= 100 {
-					break
-				}
-				rrfScores[entry.id] += 1.0 / (kRRF + float64(rank+1))
-			}
-
-			for rank, entry := range vecMatches {
-				rrfScores[entry.UtteranceID] += 1.0 / (kRRF + float64(rank+1))
-			}
-
-			// Apply speaker focus boost on RRF scores
-			if len(targetSpeakers) > 0 {
-				for id, score := range rrfScores {
-					u, ok := idx.Utterances[id]
-					if ok && matchesAnySpeaker(u.SpeakerID, targetSpeakers) {
-						rrfScores[id] = score * 10.0
-					}
-				}
-			}
-
-			type rrfEntry struct {
-				id    string
-				score float64
-			}
-			var rrfList []rrfEntry
-			for id, sc := range rrfScores {
-				rrfList = append(rrfList, rrfEntry{id: id, score: sc})
-			}
-			sort.Slice(rrfList, func(i, j int) bool {
-				return rrfList[i].score > rrfList[j].score
-			})
-
-			for _, entry := range rrfList {
-				allCandidates = append(allCandidates, entry.id)
-			}
+		var subQueries []string
+		if *decomposeQueryFlag {
+			subQueries = decomposeQuery(ctx, llmClient, qa.Query)
+			logMain("   ├─ Decomposed query into sub-queries: %v\n", subQueries)
+			detailLog.WriteString("================================================================================\n")
+			detailLog.WriteString("=== QUERY DECOMPOSITION ===\n")
+			detailLog.WriteString("================================================================================\n")
+			detailLog.WriteString(fmt.Sprintf("Decomposed Queries:\n- %s\n\n", strings.Join(subQueries, "\n- ")))
 		} else {
-			// Tokenize query and filter stop words
-			queryTokens := engine.Tokenize(qa.Query)
-			var searchTerms []string
-			seenTerms := make(map[string]bool)
-			for _, tok := range queryTokens {
-				if !stopWords[tok] && !seenTerms[tok] {
-					seenTerms[tok] = true
-					searchTerms = append(searchTerms, tok)
-				}
-			}
+			subQueries = []string{qa.Query}
+		}
 
-			// Add adjacent non-stopword bigrams (e.g. "cover letter", "zoom call")
-			for i := 0; i < len(queryTokens)-1; i++ {
-				tok1 := queryTokens[i]
-				tok2 := queryTokens[i+1]
-				if !stopWords[tok1] && !stopWords[tok2] {
-					bigram := tok1 + " " + tok2
-					if !seenTerms[bigram] {
-						seenTerms[bigram] = true
-						searchTerms = append(searchTerms, bigram)
-					}
-				}
-			}
+		var allCandidates []string
+		seenCand := make(map[string]bool)
 
-			if *useTermsVectors {
-				logMain("   ├─ Expanding query vocabulary via term embeddings...\n")
-				var expandedTerms []string
-				for _, term := range searchTerms {
-					if nonExpandableTerms[term] {
-						continue
-					}
-					tEmb, err := embedder.Embed(ctx, term)
-					if err != nil {
-						continue
-					}
-					similar, err := gllam.SearchSimilarTerms(ctx, tEmb, 4)
-					if err == nil {
-						for _, sim := range similar {
-							expandedTerms = append(expandedTerms, sim.Term)
-						}
-					}
-				}
-				termSet := make(map[string]bool)
-				for _, t := range searchTerms {
-					termSet[t] = true
-				}
-				for _, t := range expandedTerms {
-					if !termSet[t] {
-						termSet[t] = true
-						searchTerms = append(searchTerms, t)
-					}
-				}
-				logMain("   ├─ Expanded search terms: %v\n", searchTerms)
+		for _, sq := range subQueries {
+			if *useUtterancesVectors {
+				logMain("   ├─ Retrieving top-%d matching paragraphs via Hybrid Search (TF-IDF + Vector RRF) for: %q...\n", *topKMatches, sq)
+			} else {
+				logMain("   ├─ Retrieving top-%d matching paragraphs via TF-IDF for: %q...\n", *topKMatches, sq)
 			}
-
-			// Score utterances based on TF-IDF to prioritize rare terms like names and entities
-			uttScores := make(map[string]float64)
-			totalUtterances := float64(len(idx.Utterances))
-			for _, term := range searchTerms {
-				postings, ok := idx.Postings[term]
-				if !ok {
-					continue
+			sqCandidates := retrieveCandidatesForQuery(ctx, sq, targetSpeakers, idx, embedder, gllam, *topKMatches, *useUtterancesVectors, *useTermsVectors, qa.ConversationID)
+			for _, c := range sqCandidates {
+				if !seenCand[c] {
+					seenCand[c] = true
+					allCandidates = append(allCandidates, c)
 				}
-				df := float64(len(postings))
-				if df == 0 {
-					continue
-				}
-				// Compute IDF
-				idf := math.Log(totalUtterances / df)
-				for _, p := range postings {
-					score := float64(p.Frequency) * idf
-					u, ok := idx.Utterances[p.UtteranceID]
-					if ok && matchesAnySpeaker(u.SpeakerID, targetSpeakers) {
-						score *= 10.0
-					}
-					uttScores[p.UtteranceID] += score
-				}
-			}
-
-			type scoreEntry struct {
-				id    string
-				score float64
-			}
-			var scoredList []scoreEntry
-			for id, sc := range uttScores {
-				scoredList = append(scoredList, scoreEntry{id: id, score: sc})
-			}
-			sort.Slice(scoredList, func(i, j int) bool {
-				return scoredList[i].score > scoredList[j].score
-			})
-
-			for _, entry := range scoredList {
-				allCandidates = append(allCandidates, entry.id)
 			}
 		}
 
@@ -759,6 +558,97 @@ func extractSemanticsForText(ctx context.Context, gllam *engine.GllamEngine, emb
 			continue
 		}
 
+		// Build ID mapping to canonicalize nodes and resolve duplicates
+		nodeIDMapping := make(map[string]string)
+		for _, node := range extraction.Nodes {
+			if node.ID == "" {
+				continue
+			}
+
+			// 1. Check if ID already exists in DB
+			var dbID string
+			err := gllam.DB().QueryRowContext(ctx, "SELECT id FROM semantic_nodes WHERE id = ?", node.ID).Scan(&dbID)
+			if err == nil {
+				nodeIDMapping[node.ID] = dbID
+				continue
+			}
+
+			// 2. Check if name already exists (exact case-insensitive match)
+			var dbIDByName string
+			err = gllam.DB().QueryRowContext(ctx, "SELECT id FROM semantic_nodes WHERE LOWER(name) = LOWER(?) LIMIT 1", node.Name).Scan(&dbIDByName)
+			if err == nil {
+				nodeIDMapping[node.ID] = dbIDByName
+				logBuilder.WriteString(fmt.Sprintf("  🔄 Canonicalized Node ID: '%s' -> '%s' (exact Name match: '%s')\n", node.ID, dbIDByName, node.Name))
+				continue
+			}
+
+			// 3. Check for vector similarity match
+			if embedder != nil {
+				similar, err := gllam.SearchSimilarNodes(ctx, node.Name, 1)
+				if err == nil && len(similar) > 0 {
+					// Cosine distance threshold: < 0.12 (highly similar)
+					if similar[0].Distance < 0.12 {
+						nodeIDMapping[node.ID] = similar[0].NodeID
+						logBuilder.WriteString(fmt.Sprintf("  🔄 Canonicalized Node ID: '%s' -> '%s' (vector similarity match: Distance %f)\n", node.ID, similar[0].NodeID, similar[0].Distance))
+						continue
+					}
+				}
+			}
+
+			// Keep original ID if no match
+			nodeIDMapping[node.ID] = node.ID
+		}
+
+		// Apply mapping to Nodes and filter duplicates
+		var canonicalNodes []memory.SemanticNode
+		seenNodeIDs := make(map[string]bool)
+		for _, node := range extraction.Nodes {
+			if node.ID == "" {
+				continue
+			}
+			mappedID := nodeIDMapping[node.ID]
+			if mappedID == "" {
+				mappedID = node.ID
+			}
+			if seenNodeIDs[mappedID] {
+				continue
+			}
+			seenNodeIDs[mappedID] = true
+
+			node.ID = mappedID
+			canonicalNodes = append(canonicalNodes, node)
+		}
+
+		// Apply mapping to Links and filter self-loops
+		var canonicalLinks []memory.SemanticLink
+		for _, link := range extraction.Links {
+			if link.SourceID == "" || link.TargetID == "" || link.Relationship == "" {
+				continue
+			}
+
+			if mSrc, ok := nodeIDMapping[link.SourceID]; ok {
+				link.SourceID = mSrc
+			}
+			if mTgt, ok := nodeIDMapping[link.TargetID]; ok {
+				link.TargetID = mTgt
+			}
+			if link.OriginID != "" {
+				if mOrig, ok := nodeIDMapping[link.OriginID]; ok {
+					link.OriginID = mOrig
+				}
+			}
+			if link.Temporal != nil && link.Temporal.TemporalAnchorID != "" {
+				if mAnchor, ok := nodeIDMapping[link.Temporal.TemporalAnchorID]; ok {
+					link.Temporal.TemporalAnchorID = mAnchor
+				}
+			}
+
+			if link.SourceID == link.TargetID {
+				continue
+			}
+			canonicalLinks = append(canonicalLinks, link)
+		}
+
 		// Ingest into SQLite
 		_, _ = gllam.DB().ExecContext(ctx, "BEGIN IMMEDIATE")
 
@@ -768,10 +658,7 @@ func extractSemanticsForText(ctx context.Context, gllam *engine.GllamEngine, emb
 		}
 		var nodeVecs []nodeVector
 
-		for _, node := range extraction.Nodes {
-			if node.ID == "" {
-				continue
-			}
+		for _, node := range canonicalNodes {
 			node.CreatedFrom = fmt.Sprintf("selective_chunk-%d", cIdx+1)
 			if err := gllam.UpsertNode(ctx, node); err == nil {
 				nodesCount++
@@ -781,16 +668,16 @@ func extractSemanticsForText(ctx context.Context, gllam *engine.GllamEngine, emb
 			}
 		}
 
-		for _, link := range extraction.Links {
-			if link.SourceID == "" || link.TargetID == "" || link.Relationship == "" {
-				continue
-			}
+		for _, link := range canonicalLinks {
 			link.CreatedFrom = fmt.Sprintf("selective_chunk-%d", cIdx+1)
 			if err := gllam.AddEdge(ctx, link); err != nil {
+				logBuilder.WriteString(fmt.Sprintf("  ⚠️ AddEdge first pass failed for link %s -> %s (%s): %v\n", link.SourceID, link.TargetID, link.Relationship, err))
 				_ = gllam.UpsertNode(ctx, memory.SemanticNode{ID: link.SourceID, Name: link.SourceID, Type: "inferred", CreatedFrom: link.CreatedFrom})
 				_ = gllam.UpsertNode(ctx, memory.SemanticNode{ID: link.TargetID, Name: link.TargetID, Type: "inferred", CreatedFrom: link.CreatedFrom})
 				if retryErr := gllam.AddEdge(ctx, link); retryErr == nil {
 					linksCount++
+				} else {
+					logBuilder.WriteString(fmt.Sprintf("  ❌ AddEdge retry failed: %v\n", retryErr))
 				}
 			} else {
 				linksCount++
@@ -1106,4 +993,240 @@ func pruneIrrelevantChunks(ctx context.Context, llmClient *engine.LLMClient, tex
 		}
 	}
 	return strings.Join(keptChunks, "\n\n")
+}
+
+func decomposeQuery(ctx context.Context, llmClient *engine.LLMClient, query string) []string {
+	systemPrompt := `You are an information retrieval expert. Your task is to decompose a complex, multi-hop user question into 2 or 3 distinct, simple search queries or points of focus (phrases or keywords) that must be retrieved from a dialogue database. 
+Focus strictly on the specific entities, events, dates, or actions mentioned. Do not include question words like "how many", "what", "when", or structural logic.
+Output each query on a new line. Do not add numbering or explanations.`
+
+	userPrompt := fmt.Sprintf("Question: %q\n\nSearch Queries:", query)
+	
+	var response string
+	var err error
+	for attempt := 1; attempt <= 3; attempt++ {
+		response, err = llmClient.Generate(ctx, systemPrompt, userPrompt)
+		if err == nil && strings.TrimSpace(response) != "" {
+			break
+		}
+		time.Sleep(time.Duration(attempt) * time.Second)
+	}
+	if err != nil {
+		return []string{query} // Fallback to original query
+	}
+
+	var subQueries []string
+	lines := strings.Split(response, "\n")
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		trimmed = strings.TrimPrefix(trimmed, "- ")
+		trimmed = strings.TrimPrefix(trimmed, "* ")
+		if idx := strings.Index(trimmed, ". "); idx != -1 && idx < 3 {
+			trimmed = trimmed[idx+2:]
+		}
+		trimmed = strings.TrimSpace(trimmed)
+		if len(trimmed) > 3 {
+			subQueries = append(subQueries, trimmed)
+		}
+	}
+	
+	if len(subQueries) == 0 {
+		return []string{query}
+	}
+	return subQueries
+}
+
+func retrieveCandidatesForQuery(ctx context.Context, query string, targetSpeakers []string, idx *engine.InvertedIndex, embedder engine.Embedder, gllam *engine.GllamEngine, topK int, useUtterancesVectors, useTermsVectors bool, conversationID string) []string {
+	var searchTerms []string
+	queryTokens := engine.Tokenize(query)
+	seenTerms := make(map[string]bool)
+	for _, tok := range queryTokens {
+		if !stopWords[tok] && !seenTerms[tok] {
+			seenTerms[tok] = true
+			searchTerms = append(searchTerms, tok)
+		}
+	}
+
+	// Add adjacent non-stopword bigrams (e.g. "cover letter", "zoom call")
+	for i := 0; i < len(queryTokens)-1; i++ {
+		tok1 := queryTokens[i]
+		tok2 := queryTokens[i+1]
+		if !stopWords[tok1] && !stopWords[tok2] {
+			bigram := tok1 + " " + tok2
+			if !seenTerms[bigram] {
+				seenTerms[bigram] = true
+				searchTerms = append(searchTerms, bigram)
+			}
+		}
+	}
+
+	if useTermsVectors {
+		var expandedTerms []string
+		for _, term := range searchTerms {
+			if nonExpandableTerms[term] {
+				continue
+			}
+			tEmb, err := embedder.Embed(ctx, term)
+			if err != nil {
+				continue
+			}
+			similar, err := gllam.SearchSimilarTerms(ctx, tEmb, 4)
+			if err == nil {
+				for _, sim := range similar {
+					expandedTerms = append(expandedTerms, sim.Term)
+				}
+			}
+		}
+		for _, t := range expandedTerms {
+			if !seenTerms[t] {
+				seenTerms[t] = true
+				searchTerms = append(searchTerms, t)
+			}
+		}
+	}
+
+	// Build map of allowed session IDs belonging to this conversationID
+	allowedSessions := make(map[string]bool)
+	for sessID := range idx.Sessions {
+		if strings.Contains(sessID, conversationID) {
+			allowedSessions[sessID] = true
+		}
+	}
+
+	if useUtterancesVectors {
+		// 1. TF-IDF scoring
+		uttScores := make(map[string]float64)
+		totalUtterances := float64(len(idx.Utterances))
+		for _, term := range searchTerms {
+			postings, ok := idx.Postings[term]
+			if !ok {
+				continue
+			}
+			df := float64(len(postings))
+			if df == 0 {
+				continue
+			}
+			idf := math.Log(totalUtterances / df)
+			for _, p := range postings {
+				u, ok := idx.Utterances[p.UtteranceID]
+				if ok && allowedSessions[u.SessionID] {
+					uttScores[p.UtteranceID] += float64(p.Frequency) * idf
+				}
+			}
+		}
+
+		type scoreEntry struct {
+			id    string
+			score float64
+		}
+		var tfidfList []scoreEntry
+		for id, sc := range uttScores {
+			tfidfList = append(tfidfList, scoreEntry{id: id, score: sc})
+		}
+		sort.Slice(tfidfList, func(i, j int) bool {
+			return tfidfList[i].score > tfidfList[j].score
+		})
+
+		// 2. Vector search filtered by session
+		qEmb, err := embedder.Embed(ctx, query)
+		var vecMatches []struct {
+			UtteranceID string
+			Distance    float32
+		}
+		if err == nil {
+			rawMatches, _ := gllam.SearchSimilarUtterances(ctx, qEmb, 500)
+			for _, match := range rawMatches {
+				u, ok := idx.Utterances[match.UtteranceID]
+				if ok && allowedSessions[u.SessionID] {
+					vecMatches = append(vecMatches, match)
+				}
+			}
+		}
+
+		// 3. RRF Combination
+		rrfScores := make(map[string]float64)
+		const kRRF = 60.0
+
+		for rank, entry := range tfidfList {
+			if rank >= 100 {
+				break
+			}
+			rrfScores[entry.id] += 1.0 / (kRRF + float64(rank+1))
+		}
+
+		for rank, entry := range vecMatches {
+			rrfScores[entry.UtteranceID] += 1.0 / (kRRF + float64(rank+1))
+		}
+
+		// Speaker boost
+		if len(targetSpeakers) > 0 {
+			for id, score := range rrfScores {
+				u, ok := idx.Utterances[id]
+				if ok && matchesAnySpeaker(u.SpeakerID, targetSpeakers) {
+					rrfScores[id] = score * 10.0
+				}
+			}
+		}
+
+		type rrfEntry struct {
+			id    string
+			score float64
+		}
+		var rrfList []rrfEntry
+		for id, sc := range rrfScores {
+			rrfList = append(rrfList, rrfEntry{id: id, score: sc})
+		}
+		sort.Slice(rrfList, func(i, j int) bool {
+			return rrfList[i].score > rrfList[j].score
+		})
+
+		var candidates []string
+		for i := 0; i < len(rrfList) && i < topK; i++ {
+			candidates = append(candidates, rrfList[i].id)
+		}
+		return candidates
+	} else {
+		// Only TF-IDF
+		uttScores := make(map[string]float64)
+		totalUtterances := float64(len(idx.Utterances))
+		for _, term := range searchTerms {
+			postings, ok := idx.Postings[term]
+			if !ok {
+				continue
+			}
+			df := float64(len(postings))
+			if df == 0 {
+				continue
+			}
+			idf := math.Log(totalUtterances / df)
+			for _, p := range postings {
+				u, ok := idx.Utterances[p.UtteranceID]
+				if ok && allowedSessions[u.SessionID] {
+					score := float64(p.Frequency) * idf
+					if matchesAnySpeaker(u.SpeakerID, targetSpeakers) {
+						score *= 10.0
+					}
+					uttScores[p.UtteranceID] += score
+				}
+			}
+		}
+
+		type scoreEntry struct {
+			id    string
+			score float64
+		}
+		var scoredList []scoreEntry
+		for id, sc := range uttScores {
+			scoredList = append(scoredList, scoreEntry{id: id, score: sc})
+		}
+		sort.Slice(scoredList, func(i, j int) bool {
+			return scoredList[i].score > scoredList[j].score
+		})
+
+		var candidates []string
+		for i := 0; i < len(scoredList) && i < topK; i++ {
+			candidates = append(candidates, scoredList[i].id)
+		}
+		return candidates
+	}
 }

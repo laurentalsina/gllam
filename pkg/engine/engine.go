@@ -242,5 +242,33 @@ func (e *GllamEngine) InitSchema() error {
 		return fmt.Errorf("failed to execute schema.sql: %w", err)
 	}
 
+	// Schema Migration: Check and add temporal_link_id to semantic_links if missing from older DB files
+	var hasTemporalLinkID bool
+	rows, err := e.db.Query("PRAGMA table_info(semantic_links)")
+	if err == nil {
+		defer rows.Close()
+		for rows.Next() {
+			var cid int
+			var name string
+			var typeStr string
+			var notnull int
+			var dfltValNull sql.NullString
+			var pk int
+			if scanErr := rows.Scan(&cid, &name, &typeStr, &notnull, &dfltValNull, &pk); scanErr == nil {
+				if name == "temporal_link_id" {
+					hasTemporalLinkID = true
+					break
+				}
+			}
+		}
+	}
+	if !hasTemporalLinkID {
+		_, alterErr := e.db.Exec("ALTER TABLE semantic_links ADD COLUMN temporal_link_id TEXT REFERENCES semantic_temporal_links(id) ON DELETE SET NULL")
+		if alterErr != nil {
+			return fmt.Errorf("failed to migrate schema (add temporal_link_id to semantic_links): %w", alterErr)
+		}
+		fmt.Println("   🔧 Successfully migrated database schema: added temporal_link_id column to semantic_links table.")
+	}
+
 	return nil
 }

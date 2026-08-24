@@ -58,15 +58,19 @@ func main() {
 		total++
 		stats := categoryStats[res.Category]
 		stats.total++
+
+		rubricText := strings.Join(res.Rubric, "\n- ")
 		
 		if res.ModelAnswer == "ERROR" {
-			fmt.Printf("[%s] INCORRECT (Generation Error)\n", res.InstanceID)
+			fmt.Printf("[%s] INCORRECT\n", res.InstanceID)
+			fmt.Printf("   ├─ Question: %s\n", res.Query)
+			fmt.Printf("   ├─ Ground Truth: %s\n", res.GroundTruth)
+			fmt.Printf("   ├─ Rubric: %s\n", rubricText)
+			fmt.Println("   └─ Evaluation Details: Model generation failed or timed out.\n")
 			errorsCount++
 			categoryStats[res.Category] = stats
 			continue
 		}
-
-		rubricText := strings.Join(res.Rubric, "\n- ")
 		systemPrompt := `You are an expert evaluator for an agentic AI memory benchmark. 
 You will be provided with a Question, a Ground Truth answer, a Grading Rubric, and the Model Answer.
 Your task is to determine if the Model Answer is correct based on the Ground Truth and Rubric.
@@ -106,8 +110,14 @@ Then, conclude your evaluation with a final line starting with "Verdict: " follo
 		} else {
 			fmt.Printf("[%s] INCORRECT\n", res.InstanceID)
 		}
+		fmt.Printf("   ├─ Question: %s\n", res.Query)
+		fmt.Printf("   ├─ Ground Truth: %s\n", res.GroundTruth)
+		fmt.Printf("   ├─ Rubric: %s\n", rubricText)
+		fmt.Printf("   ├─ Model Answer: %s\n", res.ModelAnswer)
 		if explanationText != "" {
-			fmt.Printf("   ├─ Explanation:\n%s\n\n", "      "+strings.ReplaceAll(explanationText, "\n", "\n      "))
+			fmt.Printf("   └─ Evaluation Details:\n%s\n\n", "      "+strings.ReplaceAll(explanationText, "\n", "\n      "))
+		} else {
+			fmt.Println("   └─ Evaluation Details: None\n")
 		}
 		categoryStats[res.Category] = stats
 	}
