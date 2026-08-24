@@ -280,7 +280,7 @@ func main() {
 			} else {
 				logMain("   ├─ Retrieving top-%d matching paragraphs via TF-IDF for: %q...\n", *topKMatches, sq)
 			}
-			sqCandidates := retrieveCandidatesForQuery(ctx, sq, targetSpeakers, idx, embedder, gllam, *topKMatches, *useUtterancesVectors, *useTermsVectors, qa.ConversationID)
+			sqCandidates := retrieveCandidatesForQuery(ctx, sq, targetSpeakers, idx, embedder, gllam, *topKMatches, *useUtterancesVectors, *useTermsVectors, qa.ConversationID, llmClient)
 			for _, c := range sqCandidates {
 				if !seenCand[c] {
 					seenCand[c] = true
@@ -337,11 +337,11 @@ func main() {
 				}
 
 				if matchIdx != -1 {
-					start := matchIdx - 2
+					start := matchIdx - 10
 					if start < 0 {
 						start = 0
 					}
-					end := matchIdx + 5
+					end := matchIdx + 15
 					if end >= len(sessUtteranceIDs) {
 						end = len(sessUtteranceIDs) - 1
 					}
@@ -391,7 +391,7 @@ func main() {
 			detailLog.WriteString("================================================================================\n")
 			detailLog.WriteString(fmt.Sprintf("[SYSTEM PROMPT]:\n%s\n\n[USER PROMPT]:\nTranscript:\n%s\n\nQuestion: %s\n\n[LLM RESPONSE]:\n%s\n\n", directSystemPrompt, transcriptText, qa.Query, directAnswer))
 
-			isTemporal := strings.HasPrefix(strings.ToUpper(directAnswer), "TEMPORAL")
+			isTemporal := strings.HasPrefix(strings.ToUpper(directAnswer), "TEMPORAL") || (qa.Category == "temporal_reasoning" || qa.Category == "event_ordering")
 			isNotFound := strings.ToUpper(directAnswer) == "ANSWER_NOT_FOUND"
 
 			if err == nil && !isTemporal && !isNotFound && directAnswer != "" {
@@ -471,6 +471,22 @@ func main() {
 					}
 					if genErr != nil {
 						answer = "ERROR"
+					}
+
+					// Fallback to direct transcript generation if temporal engine returned 'not found'
+					if isNotFoundResponse(stripThinkingTags(answer)) {
+						logMain("   ├─ ⚠️ Temporal engine returned 'not found'. Falling back to direct transcript generation...\n")
+						fallbackPrompt := gllam.SystemPrompts.SimpleTemporalRetrieval
+						if fallbackPrompt == "" {
+							fallbackPrompt = "You are a helpful assistant. Answer the question strictly using facts directly stated in the transcript. Pay absolute attention to the chronological sequence of lines in the transcript. Determine who speaks first and who speaks second, and trace the sequence of statements. Answer the temporal ordering question precisely and directly."
+						}
+						fallbackUserQuery := fmt.Sprintf("Transcript:\n%s\n\nQuestion: %s", transcriptText, qa.Query)
+						
+						fallbackAnswer, fErr := llmClient.Generate(ctx, fallbackPrompt, fallbackUserQuery)
+						if fErr == nil && !isNotFoundResponse(stripThinkingTags(fallbackAnswer)) && fallbackAnswer != "" {
+							answer = fallbackAnswer
+							logMain("   ├─ ✅ Fallback direct generation succeeded.\n")
+						}
 					}
 
 					// Log Final QA details to detailLog
@@ -765,25 +781,41 @@ func ensureUtteranceEmbeddingsIndexed(ctx context.Context, gllam *engine.GllamEn
 		return fmt.Errorf("utterance_embeddings table does not exist or schema not initialized: %v", err)
 	}
 
-	err = gllam.DBRO().QueryRowContext(ctx, "SELECT count(*) FROM utterance_embeddings").Scan(&count)
-	if err != nil {
-		return err
+	indexedIDs := make(map[string]bool)
+	rows, err := gllam.DBRO().QueryContext(ctx, "SELECT utterance_id FROM utterance_embeddings")
+	if err == nil {
+		defer rows.Close()
+		for rows.Next() {
+			var id string
+			if scanErr := rows.Scan(&id); scanErr == nil {
+				indexedIDs[id] = true
+			}
+		}
 	}
-	if count > 0 {
-		fmt.Printf("   ├─ Found %d utterance embeddings pre-indexed in DB.\n", count)
+
+	fmt.Printf("   ├─ Found %d utterance embeddings pre-indexed in DB.\n", len(indexedIDs))
+
+	var missing []engine.CorpusUtterance
+	for id, u := range idx.Utterances {
+		if !indexedIDs[id] {
+			missing = append(missing, u)
+		}
+	}
+
+	if len(missing) == 0 {
 		return nil
 	}
 
-	fmt.Printf("   ├─ ⚙️ Embedding and indexing %d utterances into DB (one-time setup)...\n", len(idx.Utterances))
+	fmt.Printf("   ├─ ⚙️ Embedding and indexing %d missing utterances into DB...\n", len(missing))
 	
 	type task struct {
 		id   string
 		text string
 	}
 	
-	tasks := make(chan task, len(idx.Utterances))
-	for id, u := range idx.Utterances {
-		tasks <- task{id: id, text: u.Text}
+	tasks := make(chan task, len(missing))
+	for _, u := range missing {
+		tasks <- task{id: u.ID, text: u.Text}
 	}
 	close(tasks)
 
@@ -806,14 +838,13 @@ func ensureUtteranceEmbeddingsIndexed(ctx context.Context, gllam *engine.GllamEn
 				mu.Unlock()
 
 				curr := atomic.AddInt64(&progress, 1)
-				if curr%1000 == 0 {
-					fmt.Printf("      -> Embedded %d/%d utterances...\n", curr, len(idx.Utterances))
+				if curr%100 == 0 || curr == int64(len(missing)) {
+					fmt.Printf("      -> Embedded %d/%d missing utterances...\n", curr, len(missing))
 				}
 			}
 		}()
 	}
 	wg.Wait()
-	fmt.Printf("   ├─ Finished indexing %d utterance embeddings!\n", progress)
 	return nil
 }
 
@@ -824,31 +855,42 @@ func ensureTermEmbeddingsIndexed(ctx context.Context, gllam *engine.GllamEngine,
 		return fmt.Errorf("term_embeddings table does not exist or schema not initialized: %v", err)
 	}
 
-	err = gllam.DBRO().QueryRowContext(ctx, "SELECT count(*) FROM term_embeddings").Scan(&count)
-	if err != nil {
-		return err
-	}
-	if count > 0 {
-		fmt.Printf("   ├─ Found %d vocabulary term embeddings pre-indexed in DB.\n", count)
-		return nil
+	indexedTerms := make(map[string]bool)
+	rows, err := gllam.DBRO().QueryContext(ctx, "SELECT term FROM term_embeddings")
+	if err == nil {
+		defer rows.Close()
+		for rows.Next() {
+			var term string
+			if scanErr := rows.Scan(&term); scanErr == nil {
+				indexedTerms[term] = true
+			}
+		}
 	}
 
-	fmt.Printf("   ├─ ⚙️ Embedding and indexing %d unique vocabulary terms into DB (one-time setup)...\n", len(idx.Postings))
-	
-	var termsList []string
+	fmt.Printf("   ├─ Found %d vocabulary term embeddings pre-indexed in DB.\n", len(indexedTerms))
+
+	var missing []string
 	for term := range idx.Postings {
 		if strings.Contains(term, " ") {
 			continue // Skip bigram phrases during pre-indexing to avoid database vocabulary explosion
 		}
-		termsList = append(termsList, term)
+		if !indexedTerms[term] {
+			missing = append(missing, term)
+		}
 	}
 
+	if len(missing) == 0 {
+		return nil
+	}
+
+	fmt.Printf("   ├─ ⚙️ Embedding and indexing %d missing vocabulary terms into DB...\n", len(missing))
+	
 	type task struct {
 		term string
 	}
 	
-	tasks := make(chan task, len(termsList))
-	for _, term := range termsList {
+	tasks := make(chan task, len(missing))
+	for _, term := range missing {
 		tasks <- task{term: term}
 	}
 	close(tasks)
@@ -872,14 +914,13 @@ func ensureTermEmbeddingsIndexed(ctx context.Context, gllam *engine.GllamEngine,
 				mu.Unlock()
 
 				curr := atomic.AddInt64(&progress, 1)
-				if curr%2000 == 0 {
-					fmt.Printf("      -> Embedded %d/%d terms...\n", curr, len(termsList))
+				if curr%500 == 0 || curr == int64(len(missing)) {
+					fmt.Printf("      -> Embedded %d/%d missing terms...\n", curr, len(missing))
 				}
 			}
 		}()
 	}
 	wg.Wait()
-	fmt.Printf("   ├─ Finished indexing %d term embeddings!\n", progress)
 	return nil
 }
 
@@ -1036,7 +1077,7 @@ Output each query on a new line. Do not add numbering or explanations.`
 	return subQueries
 }
 
-func retrieveCandidatesForQuery(ctx context.Context, query string, targetSpeakers []string, idx *engine.InvertedIndex, embedder engine.Embedder, gllam *engine.GllamEngine, topK int, useUtterancesVectors, useTermsVectors bool, conversationID string) []string {
+func retrieveCandidatesForQuery(ctx context.Context, query string, targetSpeakers []string, idx *engine.InvertedIndex, embedder engine.Embedder, gllam *engine.GllamEngine, topK int, useUtterancesVectors, useTermsVectors bool, conversationID string, llmClient *engine.LLMClient) []string {
 	var searchTerms []string
 	queryTokens := engine.Tokenize(query)
 	seenTerms := make(map[string]bool)
@@ -1085,10 +1126,15 @@ func retrieveCandidatesForQuery(ctx context.Context, query string, targetSpeaker
 		}
 	}
 
+	if llmClient != nil {
+		searchTerms = filterTermsWithLLM(ctx, llmClient, query, searchTerms)
+	}
+
 	// Build map of allowed session IDs belonging to this conversationID
 	allowedSessions := make(map[string]bool)
+	targetPrefix := "beam-100k-" + conversationID + "-session"
 	for sessID := range idx.Sessions {
-		if strings.Contains(sessID, conversationID) {
+		if strings.HasPrefix(sessID, targetPrefix) || sessID == conversationID {
 			allowedSessions[sessID] = true
 		}
 	}
@@ -1229,4 +1275,46 @@ func retrieveCandidatesForQuery(ctx context.Context, query string, targetSpeaker
 		}
 		return candidates
 	}
+}
+
+func filterTermsWithLLM(ctx context.Context, llmClient *engine.LLMClient, query string, terms []string) []string {
+	if len(terms) == 0 {
+		return terms
+	}
+	
+	systemPrompt := `You are an information retrieval expert. Review the candidate search terms/phrases for the given question. 
+Filter out terms that are too generic (such as "call", "planned", "finish", "day", "many", "user", "assistant", "what", "how", "when", "days", "there", "between", "finish revising") and keep only the terms, bigrams, or concepts that are highly specific to retrieving the relevant dialogue chunks.
+Output the filtered terms as a JSON array of strings. Do not include any explanations, bullet points, or markdown formatting (like code blocks). Just output the JSON array.`
+
+	userPrompt := fmt.Sprintf("Question: %q\nCandidate Search Terms: %v\nFiltered Search Terms:", query, terms)
+	
+	var response string
+	var err error
+	for attempt := 1; attempt <= 3; attempt++ {
+		response, err = llmClient.Generate(ctx, systemPrompt, userPrompt)
+		if err == nil && strings.TrimSpace(response) != "" {
+			break
+		}
+		time.Sleep(time.Duration(attempt) * time.Second)
+	}
+	
+	if err != nil {
+		return terms // Fallback to unfiltered terms on error
+	}
+	
+	// Parse JSON array
+	var filtered []string
+	cleanedResponse := strings.TrimSpace(response)
+	// Remove markdown code block wraps if present
+	cleanedResponse = strings.TrimPrefix(cleanedResponse, "```json")
+	cleanedResponse = strings.TrimPrefix(cleanedResponse, "```")
+	cleanedResponse = strings.TrimSuffix(cleanedResponse, "```")
+	cleanedResponse = strings.TrimSpace(cleanedResponse)
+	
+	if err := json.Unmarshal([]byte(cleanedResponse), &filtered); err == nil && len(filtered) > 0 {
+		fmt.Printf("   ├─ LLM filtered search terms: original %d -> filtered %d: %v\n", len(terms), len(filtered), filtered)
+		return filtered
+	}
+	
+	return terms
 }

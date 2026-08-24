@@ -95,7 +95,7 @@ func TestExtractPDDLGoalRangeIntervals(t *testing.T) {
 	}
 
 	goal := ExtractPDDLGoal("what occurred between the database migration and the traffic switch", nodes, links)
-	expected := "(and (event_in_range event_cache_purge event_db_migration event_traffic_switch))"
+	expected := "(and (verified_sequence event_db_migration event_cache_purge) (verified_sequence event_cache_purge event_traffic_switch))"
 
 	if goal != expected {
 		t.Errorf("Expected goal %q, got %q", expected, goal)

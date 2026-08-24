@@ -1,14 +1,15 @@
 package engine
 
 import (
-    "bytes"
-    "context"
-    "encoding/binary"
-    "encoding/json"
-    "fmt"
-    "io"
-    "net/http"
-    "time"
+	"bytes"
+	"context"
+	"encoding/binary"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"sync"
+	"time"
 )
 
 // Embedder is the interface for generating embedding vectors from text.
@@ -25,6 +26,8 @@ type LlamaEmbedder struct {
 	BaseURL     string
 	VersionName string
 	client      *http.Client
+	cache       map[string][]float32
+	cacheMu     sync.RWMutex
 }
 
 // NewLlamaEmbedder creates a new LlamaEmbedder pointing to the specified server.
@@ -35,6 +38,7 @@ func NewLlamaEmbedder(baseURL string) *LlamaEmbedder {
 		client: &http.Client{
 			Timeout: 30 * time.Second,
 		},
+		cache: make(map[string][]float32),
 	}
 }
 
@@ -57,41 +61,53 @@ func serializeEmbedding(vec []float32) ([]byte, error) {
 
 // Embed sends text to the llama.cpp server and returns the embedding vector.
 func (l *LlamaEmbedder) Embed(ctx context.Context, text string) ([]float32, error) {
-    reqBody := map[string]string{
-        "content": text,
-    }
-    body, err := json.Marshal(reqBody)
-    if err != nil {
-        return nil, fmt.Errorf("failed to marshal embed request: %w", err)
-    }
+	l.cacheMu.RLock()
+	if val, found := l.cache[text]; found {
+		l.cacheMu.RUnlock()
+		return val, nil
+	}
+	l.cacheMu.RUnlock()
 
-    req, err := http.NewRequestWithContext(ctx, http.MethodPost, l.BaseURL+"/embedding", bytes.NewReader(body))
-    if err != nil {
-        return nil, fmt.Errorf("failed to create embed request: %w", err)
-    }
-    req.Header.Set("Content-Type", "application/json")
+	reqBody := map[string]string{
+		"content": text,
+	}
+	body, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal embed request: %w", err)
+	}
 
-    resp, err := l.client.Do(req)
-    if err != nil {
-        return nil, fmt.Errorf("llama.cpp server unreachable at %s: %w", l.BaseURL, err)
-    }
-    defer resp.Body.Close()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, l.BaseURL+"/embedding", bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create embed request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
 
-    if resp.StatusCode != http.StatusOK {
-        respBody, _ := io.ReadAll(resp.Body)
-        return nil, fmt.Errorf("llama.cpp server returned %d: %s", resp.StatusCode, string(respBody))
-    }
+	resp, err := l.client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("llama.cpp server unreachable at %s: %w", l.BaseURL, err)
+	}
+	defer resp.Body.Close()
 
-    var respData []struct {
-        Embedding [][]float32 `json:"embedding"`
-    }
-    if err := json.NewDecoder(resp.Body).Decode(&respData); err != nil {
-        return nil, fmt.Errorf("failed to decode embedding response: %w", err)
-    }
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("llama.cpp server returned %d: %s", resp.StatusCode, string(respBody))
+	}
 
-    if len(respData) == 0 || len(respData[0].Embedding) == 0 || len(respData[0].Embedding[0]) == 0 {
-        return nil, fmt.Errorf("empty embedding returned from server")
-    }
+	var respData []struct {
+		Embedding [][]float32 `json:"embedding"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&respData); err != nil {
+		return nil, fmt.Errorf("failed to decode embedding response: %w", err)
+	}
 
-    return respData[0].Embedding[0], nil
+	if len(respData) == 0 || len(respData[0].Embedding) == 0 || len(respData[0].Embedding[0]) == 0 {
+		return nil, fmt.Errorf("empty embedding returned from server")
+	}
+
+	result := respData[0].Embedding[0]
+	l.cacheMu.Lock()
+	l.cache[text] = result
+	l.cacheMu.Unlock()
+
+	return result, nil
 }

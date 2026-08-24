@@ -282,17 +282,51 @@ func (e *GllamEngine) AddEdge(ctx context.Context, link memory.SemanticLink) err
         return fmt.Errorf("failed to add edge: %w", err)
     }
 
+	// Event-Anchored State Invalidation (Trap 9):
+	// When a new state or preference link is added, mark previous active state links as expired
+	// using the new link's valid_from timestamp and temporal anchor ID.
+	if link.Relationship == "has_state" || link.Relationship == "is_preference" {
+		var validFromVal, anchorIDVal, tempNoteVal string
+		if link.Temporal != nil {
+			validFromVal = link.Temporal.ValidFrom
+			anchorIDVal = link.Temporal.TemporalAnchorID
+			tempNoteVal = link.Temporal.TemporalNote
+		}
+		_ = e.InvalidateObsoleteEdgeWithAnchor(ctx, link.SourceID, link.Relationship, link.TargetID, validFromVal, anchorIDVal, tempNoteVal)
+	}
+
     return nil
 }
 
 // InvalidateObsoleteEdge marks an older link as expired when a new preference supersedes it
 func (e *GllamEngine) InvalidateObsoleteEdge(ctx context.Context, sourceID, relationship, targetID string) error {
-	return nil
+	return e.InvalidateObsoleteEdgeWithAnchor(ctx, sourceID, relationship, targetID, "", "", "")
 }
-
 
 // InvalidateObsoleteEdgeWithAnchor marks older links as expired using an event's timestamp or anchor ID
 func (e *GllamEngine) InvalidateObsoleteEdgeWithAnchor(ctx context.Context, sourceID, relationship, targetID string, validUntil string, anchorID string, tempNote string) error {
+	if validUntil == "" {
+		if tempNote != "" || anchorID != "" {
+			validUntil = "temporal_note"
+		} else {
+			validUntil = fmt.Sprintf("%d", time.Now().Unix())
+		}
+	}
+
+	query := `
+		UPDATE semantic_links 
+		SET valid_until = ?, 
+		    temporal_anchor_id = COALESCE(NULLIF(?, ''), temporal_anchor_id),
+		    temporal_relation = CASE WHEN ? != '' THEN 'ended_by' ELSE temporal_relation END,
+		    temporal_note = COALESCE(NULLIF(?, ''), temporal_note),
+		    updated_at = ?
+		WHERE source_id = ? AND relationship = ? AND (target_id != ? OR ? = '') AND valid_until IS NULL`
+
+	now := time.Now()
+	_, err := e.db.ExecContext(ctx, query, validUntil, anchorID, anchorID, tempNote, now, sourceID, relationship, targetID, targetID)
+	if err != nil {
+		return fmt.Errorf("failed to invalidate obsolete edge: %w", err)
+	}
 	return nil
 }
 
@@ -365,6 +399,7 @@ func (e *GllamEngine) IndexNodeVector(ctx context.Context, nodeID string, vec []
 func (e *GllamEngine) SearchSimilarNodes(ctx context.Context, queryText string, limit int) ([]struct {
     NodeID   string
     Distance float32
+    Name     string
 }, error) {
     if e.embedder == nil {
         return nil, fmt.Errorf("no embedder configured")
@@ -384,10 +419,11 @@ func (e *GllamEngine) SearchSimilarNodes(ctx context.Context, queryText string, 
 
     // Search using vec0 MATCH
     query := `
-        SELECT node_id, distance
-        FROM semantic_embeddings
-        WHERE embedding MATCH vec_f32(?) AND k = ?
-        ORDER BY distance`
+        SELECT e.node_id, e.distance, COALESCE(n.name, '')
+        FROM semantic_embeddings e
+        LEFT JOIN semantic_nodes n ON e.node_id = n.id
+        WHERE e.embedding MATCH vec_f32(?) AND e.k = ?
+        ORDER BY e.distance`
 
     rows, err := e.dbRO.QueryContext(ctx, query, queryBlob, limit)
     if err != nil {
@@ -399,19 +435,34 @@ func (e *GllamEngine) SearchSimilarNodes(ctx context.Context, queryText string, 
     var results []struct {
         NodeID   string
         Distance float32
+        Name     string
     }
     for rows.Next() {
         var r struct {
             NodeID   string
             Distance float32
+            Name     string
         }
-        if err := rows.Scan(&r.NodeID, &r.Distance); err != nil {
+        if err := rows.Scan(&r.NodeID, &r.Distance, &r.Name); err != nil {
             return nil, fmt.Errorf("failed to scan result: %w", err)
         }
         results = append(results, r)
     }
 
-    fmt.Printf("SearchSimilarNodes found %d nodes\n", len(results))
+    var nodeNames []string
+    for _, r := range results {
+        if r.Name != "" {
+            nodeNames = append(nodeNames, fmt.Sprintf("'%s' (%s, dist %f)", r.Name, r.NodeID, r.Distance))
+        } else {
+            nodeNames = append(nodeNames, fmt.Sprintf("(%s, dist %f)", r.NodeID, r.Distance))
+        }
+    }
+    if len(results) > 0 {
+        fmt.Printf("SearchSimilarNodes for '%s' found %d nodes: %s\n", queryText, len(results), strings.Join(nodeNames, ", "))
+    } else {
+        fmt.Printf("SearchSimilarNodes for '%s' found 0 nodes\n", queryText)
+    }
+
     return results, rows.Err()
 }
 
@@ -432,7 +483,7 @@ func (e *GllamEngine) GetActiveLinksAtTime(ctx context.Context, timestamp int64)
     }
     defer rows.Close()
 
-    var activeLinks []memory.SemanticLink
+    var candidates []memory.SemanticLink
     for rows.Next() {
         var l memory.SemanticLink
         var origSource, resRatVal, createdFrom, temporalLinkID sql.NullString
@@ -476,6 +527,51 @@ func (e *GllamEngine) GetActiveLinksAtTime(ctx context.Context, timestamp int64)
                 l.Temporal.TemporalNote = tempNote.String
             }
         }
+        candidates = append(candidates, l)
+    }
+
+    var activeLinks []memory.SemanticLink
+    for _, l := range candidates {
+        if l.Temporal == nil {
+            activeLinks = append(activeLinks, l)
+            continue
+        }
+
+        // Check valid_from
+        fromVal := l.Temporal.ValidFrom
+        if fromVal != "" && fromVal != "temporal_note" {
+            if fromTS, err := strconv.ParseInt(fromVal, 10, 64); err == nil && fromTS > timestamp {
+                continue // Not active yet
+            }
+        }
+
+        // Check valid_until
+        untilVal := l.Temporal.ValidUntil
+        if untilVal != "" && untilVal != "temporal_note" {
+            if untilTS, err := strconv.ParseInt(untilVal, 10, 64); err == nil && untilTS <= timestamp {
+                continue // Already expired
+            }
+        }
+
+        // Dynamic Anchor Resolution
+        if l.Temporal.TemporalAnchorID != "" {
+            anchorTS := e.resolveAnchorTimestamp(ctx, l.Temporal.TemporalAnchorID, 0, "")
+            if anchorTS > 0 {
+                // If valid_from is anchored after requested timestamp, link wasn't active yet
+                if l.Temporal.ValidFrom == "temporal_note" && (l.Temporal.TemporalRelation == "after" || l.Temporal.TemporalRelation == "ended_by") {
+                    if timestamp < anchorTS {
+                        continue
+                    }
+                }
+                // If valid_until is anchored before/ended_by requested timestamp, link has expired
+                if l.Temporal.ValidUntil == "temporal_note" && (l.Temporal.TemporalRelation == "ended_by" || l.Temporal.TemporalRelation == "before") {
+                    if timestamp >= anchorTS {
+                        continue
+                    }
+                }
+            }
+        }
+
         activeLinks = append(activeLinks, l)
     }
 
@@ -483,6 +579,16 @@ func (e *GllamEngine) GetActiveLinksAtTime(ctx context.Context, timestamp int64)
 }
 
 func (e *GllamEngine) resolveAnchorTimestamp(ctx context.Context, anchorID string, offsetSeconds int64, granularity string) int64 {
+	var ts int64
+	query := `
+		SELECT CAST(t.valid_from AS INTEGER) 
+		FROM semantic_links l
+		JOIN semantic_temporal_links t ON l.temporal_link_id = t.id
+		WHERE l.source_id = ? AND t.valid_from != 'temporal_note' 
+		LIMIT 1`
+	if err := e.dbRO.QueryRowContext(ctx, query, anchorID).Scan(&ts); err == nil && ts > 0 {
+		return ts
+	}
 	return 0
 }
 
@@ -1150,7 +1256,90 @@ func (e *GllamEngine) RetrieveHybridNeedleWithTime(ctx context.Context, query st
 // SupersedeFact updates a fact (Trap 1 & Trap 5), marking oldLink as expired (valid_until = newLink.valid_from)
 // and adding a superseded_by edge connecting newLink to oldLink. Handles out-of-order ingestion backdating.
 func (e *GllamEngine) SupersedeFact(ctx context.Context, oldLink memory.SemanticLink, newLink memory.SemanticLink, rationale string) error {
-	return nil
+	nowStr := fmt.Sprintf("%d", time.Now().Unix())
+
+	// Retrieve old temporal ID and valid_from to check chronological ordering
+	var oldTemporalLinkID sql.NullString
+	var oldFrom string
+	_ = e.dbRO.QueryRowContext(ctx, 
+		"SELECT temporal_link_id FROM semantic_links WHERE source_id = ? AND target_id = ? AND relationship = ?",
+		oldLink.SourceID, oldLink.TargetID, oldLink.Relationship).Scan(&oldTemporalLinkID)
+
+	if oldTemporalLinkID.Valid && oldTemporalLinkID.String != "" {
+		_ = e.dbRO.QueryRowContext(ctx, 
+			"SELECT valid_from FROM semantic_temporal_links WHERE id = ?", 
+			oldTemporalLinkID.String).Scan(&oldFrom)
+	}
+
+	newFrom := ""
+	if newLink.Temporal != nil {
+		newFrom = newLink.Temporal.ValidFrom
+	}
+
+	// Parse timestamps to check for out-of-order ingestion (Trap 5)
+	oldFromTS, _ := strconv.ParseInt(oldFrom, 10, 64)
+	newFromTS, _ := strconv.ParseInt(newFrom, 10, 64)
+
+	var expireTSStr string
+	if newFromTS > 0 && oldFromTS > 0 && newFromTS < oldFromTS {
+		// Out-of-order ingestion: newLink is chronologically OLDER than oldLink!
+		// Do not overwrite oldLink's active status; instead, set newLink's valid_until = oldLink.ValidFrom
+		if newLink.Temporal == nil {
+			newLink.Temporal = &memory.SemanticTemporalAttributes{}
+		}
+		newLink.Temporal.ValidUntil = oldFrom
+		if newLink.Relationship == "" {
+			newLink.Relationship = oldLink.Relationship
+		}
+		return e.AddEdge(ctx, newLink)
+	} else {
+		// Normal supersession: newLink is chronologically NEWER
+		expireTSStr = newFrom
+		if expireTSStr == "" || expireTSStr == "temporal_note" {
+			expireTSStr = nowStr
+		}
+	}
+
+	// 1. Expire old link
+	if oldTemporalLinkID.Valid && oldTemporalLinkID.String != "" {
+		expireQuery := "UPDATE semantic_temporal_links SET valid_until = ? WHERE id = ?"
+		_, err := e.db.ExecContext(ctx, expireQuery, expireTSStr, oldTemporalLinkID.String)
+		if err != nil {
+			return fmt.Errorf("failed to expire old fact temporal link: %w", err)
+		}
+	} else {
+		tID := fmt.Sprintf("temp_%s_%s_%s", oldLink.SourceID, oldLink.TargetID, oldLink.Relationship)
+		_, _ = e.db.ExecContext(ctx, 
+			"INSERT OR IGNORE INTO semantic_temporal_links (id, valid_until) VALUES (?, ?)", 
+			tID, expireTSStr)
+		_, _ = e.db.ExecContext(ctx, 
+			"UPDATE semantic_links SET temporal_link_id = ? WHERE source_id = ? AND target_id = ? AND relationship = ?",
+			tID, oldLink.SourceID, oldLink.TargetID, oldLink.Relationship)
+	}
+
+	// 2. Add newLink
+	if err := e.AddEdge(ctx, newLink); err != nil {
+		return fmt.Errorf("failed to add new superseded fact link: %w", err)
+	}
+
+	// 3. Add superseded_by edge connecting new link target to old link target
+	supLink := memory.SemanticLink{
+		SourceID:            newLink.TargetID,
+		TargetID:            oldLink.TargetID,
+		Relationship:        "superseded_by",
+		ResolutionRationale: rationale,
+		OriginID:            newLink.OriginID,
+	}
+	if newLink.Temporal != nil {
+		supLink.Temporal = &memory.SemanticTemporalAttributes{
+			ValidFrom: expireTSStr,
+		}
+	}
+
+	// Trigger cascading invalidation on cross-cutting dependent links (Trap 6)
+	_ = e.InvalidateDependentCrossCuttingLinks(ctx, oldLink.TargetID, expireTSStr)
+
+	return e.AddEdge(ctx, supLink)
 }
 
 
