@@ -60,7 +60,7 @@ func (e *GllamEngine) RouteAndAssemble(ctx context.Context, userPrompt string, e
                         break
                     }
                 }
-                if !isDup {
+                if !isDup && node.Distance < 0.38 {
                     entities = append(entities, node.NodeID)
                 }
             }

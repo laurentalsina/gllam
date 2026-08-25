@@ -449,20 +449,6 @@ func (e *GllamEngine) SearchSimilarNodes(ctx context.Context, queryText string, 
         results = append(results, r)
     }
 
-    var nodeNames []string
-    for _, r := range results {
-        if r.Name != "" {
-            nodeNames = append(nodeNames, fmt.Sprintf("'%s' (%s, dist %f)", r.Name, r.NodeID, r.Distance))
-        } else {
-            nodeNames = append(nodeNames, fmt.Sprintf("(%s, dist %f)", r.NodeID, r.Distance))
-        }
-    }
-    if len(results) > 0 {
-        fmt.Printf("SearchSimilarNodes for '%s' found %d nodes: %s\n", queryText, len(results), strings.Join(nodeNames, ", "))
-    } else {
-        fmt.Printf("SearchSimilarNodes for '%s' found 0 nodes\n", queryText)
-    }
-
     return results, rows.Err()
 }
 
