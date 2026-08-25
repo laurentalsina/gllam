@@ -288,6 +288,9 @@ func (e *GllamEngine) RouteAndAssemble(ctx context.Context, userPrompt string, e
         _ = os.WriteFile(domainFile, []byte(domainStr), 0644)
         _ = os.WriteFile(problemFile, []byte(problemStr), 0644)
 
+        ctxResult.PDDLDomainPath = domainFile
+        ctxResult.PDDLProblemPath = problemFile
+
         // 4. Validate PDDL schema before execution
         if valErr := ValidatePDDL(domainStr, problemStr); valErr != nil {
             ctxResult.PlannerOutput = fmt.Sprintf("⚠️ PDDL Validation Warning: %v\nExtracted Goal: %s", valErr, goalPredicate)

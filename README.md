@@ -102,11 +102,34 @@ go run ./cmd/gllam --embeddings-server http://localhost:8080 --recall "web serve
 go run ./cmd/gllam --embeddings-server http://localhost:8080
 
 # Benchmarks
-shell-scripts in subfolders of ./bench/
-see https://arxiv.org/html/2608.02613v1 for the memarena "personal-memory" paper
-same for BEAM: https://arxiv.org/abs/2510.27246 also a conversation corpus
+See the shell-scripts in subfolders of ./bench/
 
-GLLAM gets about 60% on both in its current state, which compares well with state of the art
+## Memarena
+a personal-assistant log focus: remember conversations content and infer answer from it
+see https://arxiv.org/html/2608.02613v1 for the memarena "personal-memory" paper
+
+## BEAM
+more diverse corpus of simulated conversation, with notes, large mash of content
+see https://arxiv.org/abs/2510.27246 also a conversation corpus
+
+## Results
+GLLAM gets about 70% on both in its current state, which compares well with state of the art.
+
+### Cognee, the current leader:
+An open-source engine, that's really "open-core", selling customized ingestion pipelines to customers.
+- On BEAM:
+Cognee does not publish a score breakdown by category on this benchmark, only scores across corpus scales & setups:
+100K Scale (Standard): 79% using one-shot retrieval and *custom prompts per question type*.
+100K Scale (Optimized): "80%+" using a question-type routing, dynamically tuning retrieval params.
+10M Scale (Best Run): 67% under their best routing configuration.
+- On Memarena:
+Cognee's not tested on this, or it's not published.
+- On HotPotQA (Multi-Hop Reasoning):
+Claims 90% accuracy for graph-enhanced queries
+- On DeepEval Framework (Retrieval Quality Metrics):
+Claims 84% to 92% correctness.
+
+# How-to
 
 ```
 

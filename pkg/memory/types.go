@@ -142,6 +142,8 @@ type CompiledContext struct {
 	Lineage            []DocumentLineage
 	PlannerOutput      string
 	ResponseGuidelines string
+	PDDLDomainPath     string
+	PDDLProblemPath    string
 }
 
 

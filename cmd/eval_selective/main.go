@@ -39,6 +39,70 @@ type Result struct {
 	Rubric       []string `json:"rubric"`
 }
 
+type CandidateInfo struct {
+	UtteranceID string `json:"utterance_id"`
+	Speaker     string `json:"speaker"`
+	Text        string `json:"text"`
+	SessionID   string `json:"session_id"`
+}
+
+type ChunkPruningEvent struct {
+	ChunkIndex   int    `json:"chunk_index"`
+	Text         string `json:"text"`
+	SystemPrompt string `json:"system_prompt"`
+	UserPrompt   string `json:"user_prompt"`
+	LlmDecision  string `json:"llm_decision"`
+}
+
+type ChunkPruningInfo struct {
+	PruningEnabled bool                `json:"pruning_enabled"`
+	Chunks         []ChunkPruningEvent `json:"chunks"`
+}
+
+type FirstPassDirectQAInfo struct {
+	Attempted    bool   `json:"attempted"`
+	SystemPrompt string `json:"system_prompt"`
+	UserPrompt   string `json:"user_prompt"`
+	Response     string `json:"response"`
+	IsTemporal   bool   `json:"is_temporal"`
+	IsNotFound   bool   `json:"is_not_found"`
+}
+
+type JITExtractionEvent struct {
+	ChunkIndex           int      `json:"chunk_index"`
+	SystemPrompt         string   `json:"system_prompt"`
+	UserPrompt           string   `json:"user_prompt"`
+	RawResponse          string   `json:"raw_response"`
+	SanitizedJSON        string   `json:"sanitized_json"`
+	NodesExtracted       int      `json:"nodes_extracted"`
+	LinksExtracted       int      `json:"links_extracted"`
+	CanonicalizationLogs []string `json:"canonicalization_logs"`
+}
+
+type FinalQAInfo struct {
+	CompiledContext   interface{} `json:"compiled_context"`
+	SystemPrompt      string      `json:"system_prompt"`
+	UserPrompt        string      `json:"user_prompt"`
+	Response          string      `json:"response"`
+	FallbackTriggered bool        `json:"fallback_triggered"`
+	FallbackResponse  string      `json:"fallback_response"`
+	PDDLDomainPath    string      `json:"pddl_domain_path,omitempty"`
+	PDDLProblemPath   string      `json:"pddl_problem_path,omitempty"`
+}
+
+type StructuredDetailsLog struct {
+	InstanceID          string                 `json:"instance_id"`
+	Query               string                 `json:"query"`
+	DecomposedQueries   []string               `json:"decomposed_queries"`
+	SearchTerms         []string               `json:"search_terms"`
+	RetrievedCandidates []CandidateInfo        `json:"retrieved_candidates"`
+	ChunkPruning        ChunkPruningInfo       `json:"chunk_pruning"`
+	FirstPassDirectQA   FirstPassDirectQAInfo  `json:"first_pass_direct_qa"`
+	JITExtractions      []JITExtractionEvent   `json:"jit_extractions"`
+	FinalQA             FinalQAInfo            `json:"final_qa"`
+}
+
+
 func getGroundTruthAnswer(gt interface{}) string {
 	if gt == nil {
 		return ""
@@ -89,6 +153,9 @@ func clearSemanticTables(ctx context.Context, db *sql.DB) {
 	_, _ = db.ExecContext(ctx, "DELETE FROM semantic_links")
 	_, _ = db.ExecContext(ctx, "DELETE FROM semantic_nodes")
 	_, _ = db.ExecContext(ctx, "DELETE FROM semantic_embeddings")
+	_, _ = db.ExecContext(ctx, "DELETE FROM semantic_temporal_links")
+	_, _ = db.ExecContext(ctx, "DELETE FROM document_lineage")
+	_, _ = db.ExecContext(ctx, "DELETE FROM document_versions")
 }
 
 func main() {
@@ -242,9 +309,14 @@ func main() {
 			}
 		}
 
-		var detailLog strings.Builder
-		detailLog.WriteString(fmt.Sprintf("=== PROCESSING DETAILS FOR INSTANCE %s ===\n", qa.InstanceID))
-		detailLog.WriteString(fmt.Sprintf("Query: %s\n\n", qa.Query))
+
+
+		structuredLog := StructuredDetailsLog{
+			InstanceID:     qa.InstanceID,
+			Query:          qa.Query,
+			SearchTerms:    []string{},
+			JITExtractions: []JITExtractionEvent{},
+		}
 
 		logMain("%s\n", strings.Repeat("=", 100))
 		logMain("Processing [%s]: %s\n", qa.InstanceID, qa.Query)
@@ -263,10 +335,7 @@ func main() {
 		if *decomposeQueryFlag {
 			subQueries = decomposeQuery(ctx, llmClient, qa.Query)
 			logMain("   ├─ Decomposed query into sub-queries: %v\n", subQueries)
-			detailLog.WriteString("================================================================================\n")
-			detailLog.WriteString("=== QUERY DECOMPOSITION ===\n")
-			detailLog.WriteString("================================================================================\n")
-			detailLog.WriteString(fmt.Sprintf("Decomposed Queries:\n- %s\n\n", strings.Join(subQueries, "\n- ")))
+			structuredLog.DecomposedQueries = subQueries
 		} else {
 			subQueries = []string{qa.Query}
 		}
@@ -280,11 +349,34 @@ func main() {
 			} else {
 				logMain("   ├─ Retrieving top-%d matching paragraphs via TF-IDF for: %q...\n", *topKMatches, sq)
 			}
-			sqCandidates := retrieveCandidatesForQuery(ctx, sq, targetSpeakers, idx, embedder, gllam, *topKMatches, *useUtterancesVectors, *useTermsVectors, qa.ConversationID, llmClient)
+			sqCandidates, sqTerms := retrieveCandidatesForQuery(ctx, sq, targetSpeakers, idx, embedder, gllam, *topKMatches, *useUtterancesVectors, *useTermsVectors, qa.ConversationID, llmClient)
+			
+			for _, term := range sqTerms {
+				termSeen := false
+				for _, t := range structuredLog.SearchTerms {
+					if t == term {
+						termSeen = true
+						break
+					}
+				}
+				if !termSeen {
+					structuredLog.SearchTerms = append(structuredLog.SearchTerms, term)
+				}
+			}
+
 			for _, c := range sqCandidates {
 				if !seenCand[c] {
 					seenCand[c] = true
 					allCandidates = append(allCandidates, c)
+					
+					if u, ok := idx.Utterances[c]; ok {
+						structuredLog.RetrievedCandidates = append(structuredLog.RetrievedCandidates, CandidateInfo{
+							UtteranceID: c,
+							Speaker:     u.SpeakerID,
+							Text:        u.Text,
+							SessionID:   u.SessionID,
+						})
+					}
 				}
 			}
 		}
@@ -371,9 +463,10 @@ func main() {
 			}
 			transcriptText := cleanTranscriptSAYArtifacts(transcriptBuilder.String())
 
+			structuredLog.ChunkPruning.PruningEnabled = *pruneClueChunks
 			if *pruneClueChunks {
 				logMain("   ├─ Pruning irrelevant chunks from transcript using LLM YES/NO checks...\n")
-				transcriptText = pruneIrrelevantChunks(ctx, llmClient, transcriptText, qa.Query, gllam.SystemPrompts.ChunkSize, gllam.SystemPrompts.ChunkOverlap, &detailLog)
+				transcriptText = pruneIrrelevantChunks(ctx, llmClient, transcriptText, qa.Query, gllam.SystemPrompts.ChunkSize, gllam.SystemPrompts.ChunkOverlap, &structuredLog.ChunkPruning.Chunks)
 				logMain("   ├─ Transcript size after pruning: %d characters\n", len(transcriptText))
 			}
 
@@ -385,18 +478,29 @@ func main() {
 
 			directAnswer, err := tryDirectQA(ctx, llmClient, directSystemPrompt, transcriptText, qa.Query)
 			
-			// Log Direct QA details to detailLog
-			detailLog.WriteString("================================================================================\n")
-			detailLog.WriteString("=== FIRST-PASS DIRECT QA ===\n")
-			detailLog.WriteString("================================================================================\n")
-			detailLog.WriteString(fmt.Sprintf("[SYSTEM PROMPT]:\n%s\n\n[USER PROMPT]:\nTranscript:\n%s\n\nQuestion: %s\n\n[LLM RESPONSE]:\n%s\n\n", directSystemPrompt, transcriptText, qa.Query, directAnswer))
-
 			isTemporal := strings.HasPrefix(strings.ToUpper(directAnswer), "TEMPORAL") || (qa.Category == "temporal_reasoning" || qa.Category == "event_ordering")
 			isNotFound := strings.ToUpper(directAnswer) == "ANSWER_NOT_FOUND"
+
+			structuredLog.FirstPassDirectQA = FirstPassDirectQAInfo{
+				Attempted:    true,
+				SystemPrompt: directSystemPrompt,
+				UserPrompt:   fmt.Sprintf("Transcript:\n%s\n\nQuestion: %s", transcriptText, qa.Query),
+				Response:     directAnswer,
+				IsTemporal:   isTemporal,
+				IsNotFound:   isNotFound,
+			}
 
 			if err == nil && !isTemporal && !isNotFound && directAnswer != "" {
 				answer = directAnswer
 				logMain("   ├─ ✅ First-pass Direct QA succeeded.\n")
+				structuredLog.FinalQA = FinalQAInfo{
+					CompiledContext:   nil,
+					SystemPrompt:      directSystemPrompt,
+					UserPrompt:        fmt.Sprintf("Transcript:\n%s\n\nQuestion: %s", transcriptText, qa.Query),
+					Response:          directAnswer,
+					FallbackTriggered: false,
+					FallbackResponse:  "",
+				}
 			} else if *bypassSemantic || (isTemporal && *bypassTemporal) {
 				reason := "TEMPORAL with --bypass-temporal"
 				if *bypassSemantic {
@@ -414,11 +518,14 @@ func main() {
 					answer = "ERROR"
 				}
 
-				// Log Direct QA Bypass details to detailLog
-				detailLog.WriteString("================================================================================\n")
-				detailLog.WriteString("=== DIRECT QA BYPASS ===\n")
-				detailLog.WriteString("================================================================================\n")
-				detailLog.WriteString(fmt.Sprintf("[SYSTEM PROMPT]:\n%s\n\n[USER PROMPT]:\n%s\n\n[LLM RESPONSE]:\n%s\n\n", directPrompt, userPrompt, answer))
+				structuredLog.FinalQA = FinalQAInfo{
+					CompiledContext:   nil,
+					SystemPrompt:      directPrompt,
+					UserPrompt:        userPrompt,
+					Response:          answer,
+					FallbackTriggered: false,
+					FallbackResponse:  "",
+				}
 			} else {
 				logMain("   ├─ ❌ Direct QA returned %s. Falling back to JIT semantic extraction...\n", directAnswer)
 
@@ -439,7 +546,7 @@ func main() {
 						}
 					}
 				}
-				nodes, links, err := extractSemanticsForText(ctx, gllam, embedder, llmClient, transcriptText, extractionPrompt, schemaToUse, &detailLog)
+				nodes, links, err := extractSemanticsForText(ctx, gllam, embedder, llmClient, transcriptText, extractionPrompt, schemaToUse, qa.ConversationID, &structuredLog.JITExtractions)
 				if err != nil {
 					logMain("   ❌ Semantic extraction failed: %v\n", err)
 				} else {
@@ -473,6 +580,8 @@ func main() {
 						answer = "ERROR"
 					}
 
+					var fallbackTriggered bool
+					var fallbackResponse string
 					// Fallback to direct transcript generation if temporal engine returned 'not found'
 					if isNotFoundResponse(stripThinkingTags(answer)) {
 						logMain("   ├─ ⚠️ Temporal engine returned 'not found'. Falling back to direct transcript generation...\n")
@@ -485,15 +594,22 @@ func main() {
 						fallbackAnswer, fErr := llmClient.Generate(ctx, fallbackPrompt, fallbackUserQuery)
 						if fErr == nil && !isNotFoundResponse(stripThinkingTags(fallbackAnswer)) && fallbackAnswer != "" {
 							answer = fallbackAnswer
+							fallbackTriggered = true
+							fallbackResponse = fallbackAnswer
 							logMain("   ├─ ✅ Fallback direct generation succeeded.\n")
 						}
 					}
 
-					// Log Final QA details to detailLog
-					detailLog.WriteString("================================================================================\n")
-					detailLog.WriteString("=== FINAL Q&A ===\n")
-					detailLog.WriteString("================================================================================\n")
-					detailLog.WriteString(fmt.Sprintf("[COMPILED CONTEXT STRUCT]:\n%+v\n\n[SYSTEM PROMPT]:\n%s\n\n[USER PROMPT]:\n%s\n\n[LLM RESPONSE]:\n%s\n\n", compiled, prompt, userQuery, answer))
+					structuredLog.FinalQA = FinalQAInfo{
+						CompiledContext:   compiled,
+						SystemPrompt:      prompt,
+						UserPrompt:        userQuery,
+						Response:          answer,
+						FallbackTriggered: fallbackTriggered,
+						FallbackResponse:  fallbackResponse,
+						PDDLDomainPath:    compiled.PDDLDomainPath,
+						PDDLProblemPath:   compiled.PDDLProblemPath,
+					}
 				}
 			}
 
@@ -509,7 +625,8 @@ func main() {
 
 		// Write the consolidated details log file
 		detailLogPath := filepath.Join(runLogDir, fmt.Sprintf("processing_details_%s.log", qa.InstanceID))
-		_ = os.WriteFile(detailLogPath, []byte(detailLog.String()), 0644)
+		logBytes, _ := json.MarshalIndent(structuredLog, "", "  ")
+		_ = os.WriteFile(detailLogPath, logBytes, 0644)
 		logMain("   ├─ Logged processing details to %s\n", detailLogPath)
 
 		res := Result{
@@ -532,13 +649,8 @@ func main() {
 	logMain("\nCompleted %d evaluations. Results saved to %s\n", count, *outPath)
 }
 
-func extractSemanticsForText(ctx context.Context, gllam *engine.GllamEngine, embedder engine.Embedder, llmClient *engine.LLMClient, text string, systemPrompt string, extractionJSONSchema map[string]interface{}, detailLog *strings.Builder) (int, int, error) {
+func extractSemanticsForText(ctx context.Context, gllam *engine.GllamEngine, embedder engine.Embedder, llmClient *engine.LLMClient, text string, systemPrompt string, extractionJSONSchema map[string]interface{}, sourceName string, events *[]JITExtractionEvent) (int, int, error) {
 	chunks := engine.ChunkTranscript(text, gllam.SystemPrompts.ChunkSize, gllam.SystemPrompts.ChunkOverlap)
-
-	var logBuilder strings.Builder
-	logBuilder.WriteString("================================================================================\n")
-	logBuilder.WriteString("=== JIT SEMANTIC EXTRACTION ===\n")
-	logBuilder.WriteString("================================================================================\n\n")
 
 	var nodesCount, linksCount int
 	for cIdx, chunk := range chunks {
@@ -550,29 +662,23 @@ func extractSemanticsForText(ctx context.Context, gllam *engine.GllamEngine, emb
 
 		response, err := llmClient.GenerateWithFormat(ctx, systemPrompt, userPrompt, extractionJSONSchema)
 		if err != nil {
-			logBuilder.WriteString(fmt.Sprintf("Chunk %d/%d Error: %v\n\n", cIdx+1, len(chunks), err))
 			return 0, 0, err
 		}
 
 		sanitized := SanitizeLLMJSON(response)
-
-		logBuilder.WriteString(fmt.Sprintf("--- CHUNK %d/%d ---\n", cIdx+1, len(chunks)))
-		logBuilder.WriteString(fmt.Sprintf("[SYSTEM PROMPT]:\n%s\n\n", systemPrompt))
-		logBuilder.WriteString(fmt.Sprintf("[USER PROMPT]:\n%s\n\n", userPrompt))
-		logBuilder.WriteString(fmt.Sprintf("[RAW LLM RESPONSE]:\n%s\n\n", response))
-		logBuilder.WriteString(fmt.Sprintf("[SANITIZED JSON]:\n%s\n\n", sanitized))
 
 		var extraction struct {
 			Nodes []memory.SemanticNode `json:"nodes"`
 			Links []memory.SemanticLink `json:"links"`
 		}
 		if err := json.Unmarshal([]byte(sanitized), &extraction); err != nil {
-			logBuilder.WriteString(fmt.Sprintf("JSON Parsing Error: %v\n\n", err))
 			logFile := "./bench/beam/beam_selective_extraction_error.log"
 			logContent := fmt.Sprintf("=== ERROR AT %s ===\nError: %v\n[RAW RESPONSE]:\n%s\n[SANITIZED RESPONSE]:\n%s\n=================================\n\n", time.Now().Format(time.RFC3339), err, response, sanitized)
 			_ = os.WriteFile(logFile, []byte(logContent), 0644)
 			continue
 		}
+
+		var canonicalizationLogs []string
 
 		// Build ID mapping to canonicalize nodes and resolve duplicates
 		nodeIDMapping := make(map[string]string)
@@ -594,7 +700,7 @@ func extractSemanticsForText(ctx context.Context, gllam *engine.GllamEngine, emb
 			err = gllam.DB().QueryRowContext(ctx, "SELECT id FROM semantic_nodes WHERE LOWER(name) = LOWER(?) LIMIT 1", node.Name).Scan(&dbIDByName)
 			if err == nil {
 				nodeIDMapping[node.ID] = dbIDByName
-				logBuilder.WriteString(fmt.Sprintf("  🔄 Canonicalized Node ID: '%s' -> '%s' (exact Name match: '%s')\n", node.ID, dbIDByName, node.Name))
+				canonicalizationLogs = append(canonicalizationLogs, fmt.Sprintf("🔄 Canonicalized Node ID: '%s' -> '%s' (exact Name match: '%s')", node.ID, dbIDByName, node.Name))
 				continue
 			}
 
@@ -605,7 +711,7 @@ func extractSemanticsForText(ctx context.Context, gllam *engine.GllamEngine, emb
 					// Cosine distance threshold: < 0.12 (highly similar)
 					if similar[0].Distance < 0.12 {
 						nodeIDMapping[node.ID] = similar[0].NodeID
-						logBuilder.WriteString(fmt.Sprintf("  🔄 Canonicalized Node ID: '%s' -> '%s' (vector similarity match: Distance %f)\n", node.ID, similar[0].NodeID, similar[0].Distance))
+						canonicalizationLogs = append(canonicalizationLogs, fmt.Sprintf("🔄 Canonicalized Node ID: '%s' -> '%s' (vector similarity match: Distance %f)", node.ID, similar[0].NodeID, similar[0].Distance))
 						continue
 					}
 				}
@@ -674,10 +780,24 @@ func extractSemanticsForText(ctx context.Context, gllam *engine.GllamEngine, emb
 		}
 		var nodeVecs []nodeVector
 
+		nodeSource := fmt.Sprintf("conversation_%s_chunk_%d", sourceName, cIdx+1)
+		addLineage := func(nodeID string) {
+			lineage := memory.DocumentLineage{
+				NodeID:        nodeID,
+				SourceURI:     fmt.Sprintf("conversation://%s", sourceName),
+				DocumentTitle: fmt.Sprintf("Conversation Session %s", sourceName),
+				SourceType:    "conversation",
+				LineNumber:    cIdx + 1,
+				CharOffset:    0,
+			}
+			_ = gllam.AddDocumentLineage(ctx, lineage)
+		}
+
 		for _, node := range canonicalNodes {
-			node.CreatedFrom = fmt.Sprintf("selective_chunk-%d", cIdx+1)
+			node.CreatedFrom = nodeSource
 			if err := gllam.UpsertNode(ctx, node); err == nil {
 				nodesCount++
+				addLineage(node.ID)
 				if vec, err := embedder.Embed(ctx, node.Name); err == nil && len(vec) > 0 {
 					nodeVecs = append(nodeVecs, nodeVector{id: node.ID, vec: vec})
 				}
@@ -685,15 +805,17 @@ func extractSemanticsForText(ctx context.Context, gllam *engine.GllamEngine, emb
 		}
 
 		for _, link := range canonicalLinks {
-			link.CreatedFrom = fmt.Sprintf("selective_chunk-%d", cIdx+1)
+			link.CreatedFrom = nodeSource
 			if err := gllam.AddEdge(ctx, link); err != nil {
-				logBuilder.WriteString(fmt.Sprintf("  ⚠️ AddEdge first pass failed for link %s -> %s (%s): %v\n", link.SourceID, link.TargetID, link.Relationship, err))
+				canonicalizationLogs = append(canonicalizationLogs, fmt.Sprintf("⚠️ AddEdge first pass failed for link %s -> %s (%s): %v", link.SourceID, link.TargetID, link.Relationship, err))
 				_ = gllam.UpsertNode(ctx, memory.SemanticNode{ID: link.SourceID, Name: link.SourceID, Type: "inferred", CreatedFrom: link.CreatedFrom})
+				addLineage(link.SourceID)
 				_ = gllam.UpsertNode(ctx, memory.SemanticNode{ID: link.TargetID, Name: link.TargetID, Type: "inferred", CreatedFrom: link.CreatedFrom})
+				addLineage(link.TargetID)
 				if retryErr := gllam.AddEdge(ctx, link); retryErr == nil {
 					linksCount++
 				} else {
-					logBuilder.WriteString(fmt.Sprintf("  ❌ AddEdge retry failed: %v\n", retryErr))
+					canonicalizationLogs = append(canonicalizationLogs, fmt.Sprintf("❌ AddEdge retry failed: %v", retryErr))
 				}
 			} else {
 				linksCount++
@@ -705,10 +827,19 @@ func extractSemanticsForText(ctx context.Context, gllam *engine.GllamEngine, emb
 		}
 
 		_, _ = gllam.DB().ExecContext(ctx, "COMMIT")
-	}
 
-	if detailLog != nil {
-		detailLog.WriteString(logBuilder.String() + "\n")
+		if events != nil {
+			*events = append(*events, JITExtractionEvent{
+				ChunkIndex:           cIdx + 1,
+				SystemPrompt:         systemPrompt,
+				UserPrompt:           userPrompt,
+				RawResponse:          response,
+				SanitizedJSON:        sanitized,
+				NodesExtracted:       len(canonicalNodes),
+				LinksExtracted:       len(canonicalLinks),
+				CanonicalizationLogs: canonicalizationLogs,
+			})
+		}
 	}
 
 	return nodesCount, linksCount, nil
@@ -994,16 +1125,10 @@ func isNotFoundResponse(answer string) bool {
 	return false
 }
 
-func pruneIrrelevantChunks(ctx context.Context, llmClient *engine.LLMClient, text string, query string, chunkSize, chunkOverlap int, detailLog *strings.Builder) string {
+func pruneIrrelevantChunks(ctx context.Context, llmClient *engine.LLMClient, text string, query string, chunkSize, chunkOverlap int, events *[]ChunkPruningEvent) string {
 	chunks := engine.ChunkTranscript(text, chunkSize, chunkOverlap)
 	var keptChunks []string
 	
-	if detailLog != nil {
-		detailLog.WriteString("================================================================================\n")
-		detailLog.WriteString("=== CHUNK RELEVANCE PRUNING ===\n")
-		detailLog.WriteString("================================================================================\n\n")
-	}
-
 	for i, chunk := range chunks {
 		if !engine.ValidateTranscriptSemanticCoherence(chunk.Text) {
 			continue
@@ -1022,11 +1147,14 @@ func pruneIrrelevantChunks(ctx context.Context, llmClient *engine.LLMClient, tex
 		}
 		
 		cleaned := strings.TrimSpace(strings.ToUpper(answer))
-		if detailLog != nil {
-			detailLog.WriteString(fmt.Sprintf("--- CHUNK %d/%d ---\n", i+1, len(chunks)))
-			detailLog.WriteString(fmt.Sprintf("[SYSTEM PROMPT]:\n%s\n\n", systemPrompt))
-			detailLog.WriteString(fmt.Sprintf("[USER PROMPT]:\n%s\n\n", userPrompt))
-			detailLog.WriteString(fmt.Sprintf("[LLM RESPONSE]:\n%s\n\n", answer))
+		if events != nil {
+			*events = append(*events, ChunkPruningEvent{
+				ChunkIndex:   i + 1,
+				Text:         chunk.Text,
+				SystemPrompt: systemPrompt,
+				UserPrompt:   userPrompt,
+				LlmDecision:  answer,
+			})
 		}
 
 		if strings.HasPrefix(cleaned, "YES") {
@@ -1077,7 +1205,7 @@ Output each query on a new line. Do not add numbering or explanations.`
 	return subQueries
 }
 
-func retrieveCandidatesForQuery(ctx context.Context, query string, targetSpeakers []string, idx *engine.InvertedIndex, embedder engine.Embedder, gllam *engine.GllamEngine, topK int, useUtterancesVectors, useTermsVectors bool, conversationID string, llmClient *engine.LLMClient) []string {
+func retrieveCandidatesForQuery(ctx context.Context, query string, targetSpeakers []string, idx *engine.InvertedIndex, embedder engine.Embedder, gllam *engine.GllamEngine, topK int, useUtterancesVectors, useTermsVectors bool, conversationID string, llmClient *engine.LLMClient) ([]string, []string) {
 	var searchTerms []string
 	queryTokens := engine.Tokenize(query)
 	seenTerms := make(map[string]bool)
@@ -1230,7 +1358,7 @@ func retrieveCandidatesForQuery(ctx context.Context, query string, targetSpeaker
 		for i := 0; i < len(rrfList) && i < topK; i++ {
 			candidates = append(candidates, rrfList[i].id)
 		}
-		return candidates
+		return candidates, searchTerms
 	} else {
 		// Only TF-IDF
 		uttScores := make(map[string]float64)
@@ -1273,7 +1401,7 @@ func retrieveCandidatesForQuery(ctx context.Context, query string, targetSpeaker
 		for i := 0; i < len(scoredList) && i < topK; i++ {
 			candidates = append(candidates, scoredList[i].id)
 		}
-		return candidates
+		return candidates, searchTerms
 	}
 }
 
