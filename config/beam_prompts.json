@@ -114,6 +114,17 @@
     "instruction_following": "## Instruction Following Guidelines\n- Pay strict attention to any style preferences, rules, formatting constraints, or instructions mentioned in the context and follow them in detail.",
     "preference_following": "## Preference Following Guidelines\n- Pay strict attention to any style preferences, rules, formatting constraints, or instructions mentioned in the context and follow them in detail."
   },
+  "temporal_reasoning_guidelines": [
+    "## Temporal Reasoning Guidelines",
+    "- Speech Act vs Reported Event Order: When a question asks whether a speaker 'did / mentioned' X before or after Y, follow the sequential order of dialogue turns in the transcripts (uttered_before / turn order), unless the prompt explicitly asks about physical external event dates.",
+    "- Avoid self-contradictions: Do not claim an event happened in the past before a conversation while concluding it happened after."
+  ],
+  "conflict_warning_prompt": "⚠️ Warning: The semantic graph contains unresolved conflicts. Please ask the user to clarify which conflicting claim is correct.",
+  "lineage_citations_prompt": [
+    "## Strict Source Lineage Citations",
+    "",
+    "When synthesizing facts from this context, you MUST explicitly cite source URIs and author provenance:"
+  ],
   "response_guidelines": [
     "## Response Guidelines",
     "- Rely ONLY on facts and quotes explicitly stated in the provided GLLAM Context.",

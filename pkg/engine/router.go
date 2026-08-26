@@ -388,6 +388,9 @@ func (e *GllamEngine) RouteAndAssemble(ctx context.Context, userPrompt string, e
         }
     if e.SystemPrompts != nil {
         ctxResult.ResponseGuidelines = e.SystemPrompts.ResponseGuidelines
+        ctxResult.TemporalReasoningGuidelines = e.SystemPrompts.TemporalReasoningGuidelines
+        ctxResult.ConflictWarningPrompt = e.SystemPrompts.ConflictWarningPrompt
+        ctxResult.LineageCitationsPrompt = e.SystemPrompts.LineageCitationsPrompt
     }
     }
 
@@ -408,15 +411,23 @@ func FormatSystemPrompt(ctx *memory.CompiledContext) string {
         sb.WriteString("- Rely ONLY on facts and quotes explicitly stated in the provided GLLAM Context.\n")
         sb.WriteString("- If the context does not contain the answer, state 'Based on the provided context, this is not mentioned.' DO NOT invent or extrapolate facts.\n\n")
     }
-    sb.WriteString("## Temporal Reasoning Guidelines\n")
-    sb.WriteString("- Speech Act vs Reported Event Order: When a question asks whether a speaker 'did / mentioned' X before or after Y, follow the sequential order of dialogue turns in the transcripts (uttered_before / turn order), unless the prompt explicitly asks about physical external event dates.\n")
-    sb.WriteString("- Avoid self-contradictions: Do not claim an event happened in the past before a conversation while concluding it happened after.\n\n")
+    if ctx.TemporalReasoningGuidelines != "" {
+        sb.WriteString(ctx.TemporalReasoningGuidelines + "\n\n")
+    } else {
+        sb.WriteString("## Temporal Reasoning Guidelines\n")
+        sb.WriteString("- Speech Act vs Reported Event Order: When a question asks whether a speaker 'did / mentioned' X before or after Y, follow the sequential order of dialogue turns in the transcripts (uttered_before / turn order), unless the prompt explicitly asks about physical external event dates.\n")
+        sb.WriteString("- Avoid self-contradictions: Do not claim an event happened in the past before a conversation while concluding it happened after.\n\n")
+    }
 
     // Dynamic warning if conflicts are present in the retrieved graph
     if len(ctx.SemanticLinks) > 0 {
         for _, link := range ctx.SemanticLinks {
             if link.Relationship == "has_unresolved_conflict" {
-                sb.WriteString("⚠️ Warning: The semantic graph contains unresolved conflicts. Please ask the user to clarify which conflicting claim is correct.\n\n")
+                if ctx.ConflictWarningPrompt != "" {
+                    sb.WriteString(ctx.ConflictWarningPrompt + "\n\n")
+                } else {
+                    sb.WriteString("⚠️ Warning: The semantic graph contains unresolved conflicts. Please ask the user to clarify which conflicting claim is correct.\n\n")
+                }
                 break
             }
         }
@@ -498,8 +509,12 @@ func FormatSystemPrompt(ctx *memory.CompiledContext) string {
 
     // Strict Source Lineage Citations (Issue #8 & Multi-Author Versions)
     if len(ctx.Lineage) > 0 {
-        sb.WriteString("## Strict Source Lineage Citations\n\n")
-        sb.WriteString("When synthesizing facts from this context, you MUST explicitly cite source URIs and author provenance:\n\n")
+        if ctx.LineageCitationsPrompt != "" {
+            sb.WriteString(ctx.LineageCitationsPrompt + "\n\n")
+        } else {
+            sb.WriteString("## Strict Source Lineage Citations\n\n")
+            sb.WriteString("When synthesizing facts from this context, you MUST explicitly cite source URIs and author provenance:\n\n")
+        }
         for _, lin := range ctx.Lineage {
             lineStr := ""
             if lin.LineNumber > 0 {

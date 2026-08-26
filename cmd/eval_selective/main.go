@@ -279,6 +279,21 @@ func main() {
 	}
 	defer outFile.Close()
 
+	var (
+		totalClearTablesTime   time.Duration
+		totalDecomposeTime     time.Duration
+		totalRetrieveTime      time.Duration
+		totalPruneTime         time.Duration
+		totalDirectQATime      time.Duration
+		totalExtractionTime    time.Duration
+		totalRouteAssembleTime time.Duration
+		totalGenerationTime    time.Duration
+	)
+
+	logTimestamp := func(stepName string) {
+		logMain("   ├─ [%s] Starting %s...\n", time.Now().Format("2006-01-02 15:04:05"), stepName)
+	}
+
 	scanner := bufio.NewScanner(qaFile)
 	count := 0
 	llmClient := engine.NewLLMClient(*textServer)
@@ -323,7 +338,9 @@ func main() {
 		logMain("   ├─ Processing Details Log: %s/processing_details_%s.log\n", runLogDir, qa.InstanceID)
 
 		// 1. Clear semantic database tables for fresh query
+		tClear0 := time.Now()
 		clearSemanticTables(ctx, gllam.DB())
+		totalClearTablesTime += time.Since(tClear0)
 
 		targetSpeakers := extractTargetSpeakers(qa.Query, idx)
 		if len(targetSpeakers) > 0 {
@@ -331,15 +348,20 @@ func main() {
 		}
 
 		// 2. Retrieve top matching utterances
+		tDecompose0 := time.Now()
 		var subQueries []string
 		if *decomposeQueryFlag {
+			logTimestamp("query decomposition")
 			subQueries = decomposeQuery(ctx, llmClient, qa.Query)
 			logMain("   ├─ Decomposed query into sub-queries: %v\n", subQueries)
 			structuredLog.DecomposedQueries = subQueries
 		} else {
 			subQueries = []string{qa.Query}
 		}
+		totalDecomposeTime += time.Since(tDecompose0)
 
+		tRetrieve0 := time.Now()
+		logTimestamp("candidate retrieval")
 		var allCandidates []string
 		seenCand := make(map[string]bool)
 
@@ -380,6 +402,9 @@ func main() {
 				}
 			}
 		}
+		retrieveDur := time.Since(tRetrieve0)
+		totalRetrieveTime += retrieveDur
+		logMain("   ├─ [%s] [%v] Candidate retrieval completed.\n", time.Now().Format("2006-01-02 15:04:05"), retrieveDur.Round(time.Millisecond))
 
 		var answer string
 
@@ -463,20 +488,30 @@ func main() {
 			}
 			transcriptText := cleanTranscriptSAYArtifacts(transcriptBuilder.String())
 
+			tPrune0 := time.Now()
 			structuredLog.ChunkPruning.PruningEnabled = *pruneClueChunks
 			if *pruneClueChunks {
+				logTimestamp("chunk pruning")
 				logMain("   ├─ Pruning irrelevant chunks from transcript using LLM YES/NO checks...\n")
 				transcriptText = pruneIrrelevantChunks(ctx, llmClient, transcriptText, qa.Query, gllam.SystemPrompts.ChunkSize, gllam.SystemPrompts.ChunkOverlap, &structuredLog.ChunkPruning.Chunks)
+				pruneDur := time.Since(tPrune0)
+				logMain("   ├─ [%s] [%v] Chunk pruning completed.\n", time.Now().Format("2006-01-02 15:04:05"), pruneDur.Round(time.Millisecond))
 				logMain("   ├─ Transcript size after pruning: %d characters\n", len(transcriptText))
 			}
+			totalPruneTime += time.Since(tPrune0)
 
 			logMain("   ├─ Retrieved & expanded context size: %d turns (%d characters)\n", len(expandedUtterances), len(transcriptText))
 
 			// 5. Try Direct QA First Pass
+			tDirectQA0 := time.Now()
+			logTimestamp("first-pass Direct QA")
 			logMain("   ├─ Attempting Direct QA first-pass...\n")
 			directSystemPrompt := gllam.SystemPrompts.DirectQAPrompt
 
 			directAnswer, err := tryDirectQA(ctx, llmClient, directSystemPrompt, transcriptText, qa.Query)
+			directQADur := time.Since(tDirectQA0)
+			totalDirectQATime += directQADur
+			logMain("   ├─ [%s] [%v] First-pass Direct QA completed.\n", time.Now().Format("2006-01-02 15:04:05"), directQADur.Round(time.Millisecond))
 			
 			isTemporal := strings.HasPrefix(strings.ToUpper(directAnswer), "TEMPORAL") || (qa.Category == "temporal_reasoning" || qa.Category == "event_ordering")
 			isNotFound := strings.ToUpper(directAnswer) == "ANSWER_NOT_FOUND"
@@ -530,6 +565,8 @@ func main() {
 				logMain("   ├─ ❌ Direct QA returned %s. Falling back to JIT semantic extraction...\n", directAnswer)
 
 				// 6. Extract semantics just-in-time
+				tExtract0 := time.Now()
+				logTimestamp("JIT semantic extraction")
 				extractionPrompt := gllam.SystemPrompts.SemanticExtraction
 				schemaToUse := extractionJSONSchema
 				if isTemporal && gllam.SystemPrompts.SemanticExtractionTemporal != "" {
@@ -547,6 +584,9 @@ func main() {
 					}
 				}
 				nodes, links, err := extractSemanticsForText(ctx, gllam, embedder, llmClient, transcriptText, extractionPrompt, schemaToUse, qa.ConversationID, &structuredLog.JITExtractions)
+				extractDur := time.Since(tExtract0)
+				totalExtractionTime += extractDur
+				logMain("   ├─ [%s] [%v] JIT semantic extraction completed.\n", time.Now().Format("2006-01-02 15:04:05"), extractDur.Round(time.Millisecond))
 				if err != nil {
 					logMain("   ❌ Semantic extraction failed: %v\n", err)
 				} else {
@@ -554,7 +594,12 @@ func main() {
 				}
 
 				// 7. Route and Assemble semantic context & answer query
+				tRoute0 := time.Now()
+				logTimestamp("Route & Assemble")
 				compiled, err := gllam.RouteAndAssemble(ctx, qa.Query, nil)
+				routeDur := time.Since(tRoute0)
+				totalRouteAssembleTime += routeDur
+				logMain("   ├─ [%s] [%v] Route & Assemble completed.\n", time.Now().Format("2006-01-02 15:04:05"), routeDur.Round(time.Millisecond))
 				if err != nil {
 					logMain("   ❌ Error routing query: %v\n", err)
 					answer = "ERROR"
@@ -569,6 +614,8 @@ func main() {
 					userQuery := fmt.Sprintf("Discussion Transcript:\n%s\n\nQuestion: %s", transcriptText, qa.Query)
 
 					var genErr error
+					tGen0 := time.Now()
+					logTimestamp("Final QA Generation")
 					for attempt := 1; attempt <= 3; attempt++ {
 						answer, genErr = llmClient.Generate(ctx, prompt, userQuery)
 						if genErr == nil && strings.TrimSpace(answer) != "" {
@@ -599,6 +646,9 @@ func main() {
 							logMain("   ├─ ✅ Fallback direct generation succeeded.\n")
 						}
 					}
+					genDur := time.Since(tGen0)
+					totalGenerationTime += genDur
+					logMain("   ├─ [%s] [%v] Final QA Generation completed.\n", time.Now().Format("2006-01-02 15:04:05"), genDur.Round(time.Millisecond))
 
 					structuredLog.FinalQA = FinalQAInfo{
 						CompiledContext:   compiled,
@@ -647,6 +697,28 @@ func main() {
 	}
 
 	logMain("\nCompleted %d evaluations. Results saved to %s\n", count, *outPath)
+
+	totalOverallTime := totalClearTablesTime + totalDecomposeTime + totalRetrieveTime + totalPruneTime + totalDirectQATime + totalExtractionTime + totalRouteAssembleTime + totalGenerationTime
+	
+	percentage := func(part time.Duration, total time.Duration) float64 {
+		if total <= 0 {
+			return 0
+		}
+		return float64(part) / float64(total) * 100
+	}
+
+	logMain("\n====================================================================================================\n")
+	logMain("--- Phase Execution Time Summary ---\n")
+	logMain("Total Accumulated Phase Time: %v\n", totalOverallTime.Round(time.Millisecond))
+	logMain("  - Database Cleanups        : %-8v (%5.1f%%)\n", totalClearTablesTime.Round(time.Millisecond), percentage(totalClearTablesTime, totalOverallTime))
+	logMain("  - Query Decomposition      : %-8v (%5.1f%%)\n", totalDecomposeTime.Round(time.Millisecond), percentage(totalDecomposeTime, totalOverallTime))
+	logMain("  - Candidate Retrieval      : %-8v (%5.1f%%)\n", totalRetrieveTime.Round(time.Millisecond), percentage(totalRetrieveTime, totalOverallTime))
+	logMain("  - Chunk Pruning            : %-8v (%5.1f%%)\n", totalPruneTime.Round(time.Millisecond), percentage(totalPruneTime, totalOverallTime))
+	logMain("  - First-Pass Direct QA     : %-8v (%5.1f%%)\n", totalDirectQATime.Round(time.Millisecond), percentage(totalDirectQATime, totalOverallTime))
+	logMain("  - JIT Semantic Extraction  : %-8v (%5.1f%%)\n", totalExtractionTime.Round(time.Millisecond), percentage(totalExtractionTime, totalOverallTime))
+	logMain("  - Route & Assemble         : %-8v (%5.1f%%)\n", totalRouteAssembleTime.Round(time.Millisecond), percentage(totalRouteAssembleTime, totalOverallTime))
+	logMain("  - Final QA Generation      : %-8v (%5.1f%%)\n", totalGenerationTime.Round(time.Millisecond), percentage(totalGenerationTime, totalOverallTime))
+	logMain("====================================================================================================\n")
 }
 
 func extractSemanticsForText(ctx context.Context, gllam *engine.GllamEngine, embedder engine.Embedder, llmClient *engine.LLMClient, text string, systemPrompt string, extractionJSONSchema map[string]interface{}, sourceName string, events *[]JITExtractionEvent) (int, int, error) {

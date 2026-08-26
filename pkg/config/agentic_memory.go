@@ -53,17 +53,23 @@ type AgenticMemorySystemPrompts struct {
 	SalienceQueryPrompt            string                                 `json:"salience_query_prompt"`
 	CustomCategoryPrompts          map[string]string                      `json:"custom_category_prompts,omitempty"`
 	ResponseGuidelines             string                                 `json:"response_guidelines"`
+	TemporalReasoningGuidelines    string                                 `json:"temporal_reasoning_guidelines"`
+	ConflictWarningPrompt          string                                 `json:"conflict_warning_prompt"`
+	LineageCitationsPrompt         string                                 `json:"lineage_citations_prompt"`
 }
 
 func (p *AgenticMemorySystemPrompts) UnmarshalJSON(data []byte) error {
 	// Alias prevents recursive UnmarshalJSON calls when parsing raw fields
 	type Alias AgenticMemorySystemPrompts
 	var aux struct {
-		SemanticExtraction         json.RawMessage `json:"semantic_extraction"`
-		SemanticExtractionTemporal json.RawMessage `json:"semantic_extraction_temporal"`
-		DirectQAPrompt          json.RawMessage `json:"direct_qa_prompt"`
-		SimpleTemporalRetrieval json.RawMessage `json:"simple_temporal_retrieval"`
-		ResponseGuidelines      json.RawMessage `json:"response_guidelines"`
+		SemanticExtraction          json.RawMessage `json:"semantic_extraction"`
+		SemanticExtractionTemporal  json.RawMessage `json:"semantic_extraction_temporal"`
+		DirectQAPrompt              json.RawMessage `json:"direct_qa_prompt"`
+		SimpleTemporalRetrieval     json.RawMessage `json:"simple_temporal_retrieval"`
+		ResponseGuidelines          json.RawMessage `json:"response_guidelines"`
+		TemporalReasoningGuidelines json.RawMessage `json:"temporal_reasoning_guidelines"`
+		ConflictWarningPrompt       json.RawMessage `json:"conflict_warning_prompt"`
+		LineageCitationsPrompt      json.RawMessage `json:"lineage_citations_prompt"`
 		*Alias
 	}
 	aux.Alias = (*Alias)(p)
@@ -138,6 +144,48 @@ func (p *AgenticMemorySystemPrompts) UnmarshalJSON(data []byte) error {
 				p.ResponseGuidelines = strings.TrimSpace(single)
 			} else {
 				return fmt.Errorf("response_guidelines must be a string or array of strings")
+			}
+		}
+	}
+
+	if len(aux.TemporalReasoningGuidelines) > 0 {
+		var lines []string
+		if err := json.Unmarshal(aux.TemporalReasoningGuidelines, &lines); err == nil {
+			p.TemporalReasoningGuidelines = strings.TrimSpace(strings.Join(lines, "\n"))
+		} else {
+			var single string
+			if err := json.Unmarshal(aux.TemporalReasoningGuidelines, &single); err == nil {
+				p.TemporalReasoningGuidelines = strings.TrimSpace(single)
+			} else {
+				return fmt.Errorf("temporal_reasoning_guidelines must be a string or array of strings")
+			}
+		}
+	}
+
+	if len(aux.ConflictWarningPrompt) > 0 {
+		var lines []string
+		if err := json.Unmarshal(aux.ConflictWarningPrompt, &lines); err == nil {
+			p.ConflictWarningPrompt = strings.TrimSpace(strings.Join(lines, "\n"))
+		} else {
+			var single string
+			if err := json.Unmarshal(aux.ConflictWarningPrompt, &single); err == nil {
+				p.ConflictWarningPrompt = strings.TrimSpace(single)
+			} else {
+				return fmt.Errorf("conflict_warning_prompt must be a string or array of strings")
+			}
+		}
+	}
+
+	if len(aux.LineageCitationsPrompt) > 0 {
+		var lines []string
+		if err := json.Unmarshal(aux.LineageCitationsPrompt, &lines); err == nil {
+			p.LineageCitationsPrompt = strings.TrimSpace(strings.Join(lines, "\n"))
+		} else {
+			var single string
+			if err := json.Unmarshal(aux.LineageCitationsPrompt, &single); err == nil {
+				p.LineageCitationsPrompt = strings.TrimSpace(single)
+			} else {
+				return fmt.Errorf("lineage_citations_prompt must be a string or array of strings")
 			}
 		}
 	}
@@ -242,6 +290,13 @@ Prioritize focal entities mentioned directly in the user query, their 1-hop sema
 - Provide ONLY the direct, 1-sentence answer matching the question. DO NOT add extra background history, unprompted timeline commentary, or secondary events beyond what was asked.
 - Rely ONLY on facts and quotes explicitly stated in the provided GLLAM Context.
 - If the context does not contain the answer, state 'Based on the provided context, this is not mentioned.' DO NOT invent or extrapolate facts.`,
+		TemporalReasoningGuidelines: `## Temporal Reasoning Guidelines
+- Speech Act vs Reported Event Order: When a question asks whether a speaker 'did / mentioned' X before or after Y, follow the sequential order of dialogue turns in the transcripts (uttered_before / turn order), unless the prompt explicitly asks about physical external event dates.
+- Avoid self-contradictions: Do not claim an event happened in the past before a conversation while concluding it happened after.`,
+		ConflictWarningPrompt: `⚠️ Warning: The semantic graph contains unresolved conflicts. Please ask the user to clarify which conflicting claim is correct.`,
+		LineageCitationsPrompt: `## Strict Source Lineage Citations
+
+When synthesizing facts from this context, you MUST explicitly cite source URIs and author provenance:`,
 	}
 }
 
