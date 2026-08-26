@@ -574,8 +574,8 @@ func main() {
 			structuredLog.ChunkPruning.PruningEnabled = *pruneClueChunks
 			if *pruneClueChunks {
 				logTimestamp("chunk pruning")
-				logMain("   ├─ Pruning irrelevant chunks from transcript using LLM YES/NO checks...\n")
-				transcriptText = pruneIrrelevantChunks(ctx, llmClient, transcriptText, qa.Query, gllam.SystemPrompts.ChunkSize, gllam.SystemPrompts.ChunkOverlap, &structuredLog.ChunkPruning.Chunks)
+				logMain("   ├─ Pruning irrelevant chunks from transcript using keyword overlap scoring...\n")
+				transcriptText = pruneIrrelevantChunks(ctx, transcriptText, qa.Query, structuredLog.SearchTerms, gllam.SystemPrompts.ChunkSize, gllam.SystemPrompts.ChunkOverlap, &structuredLog.ChunkPruning.Chunks)
 				pruneDur := time.Since(tPrune0)
 				logMain("   ├─ [%s] [%v] Chunk pruning completed.\n", time.Now().Format("2006-01-02 15:04:05"), pruneDur.Round(time.Millisecond))
 				addEvent(fmt.Sprintf("Chunk pruning completed in %v", pruneDur.Round(time.Millisecond)))
@@ -603,7 +603,7 @@ func main() {
 			structuredLog.FirstPassDirectQA = FirstPassDirectQAInfo{
 				Attempted:    true,
 				SystemPrompt: directSystemPrompt,
-				UserPrompt:   fmt.Sprintf("Transcript:\n%s\n\nQuestion: %s", transcriptText, qa.Query),
+				UserPrompt:   fmt.Sprintf("Question: %s\n\nTranscript:\n%s", qa.Query, transcriptText),
 				Response:     directAnswer,
 				IsTemporal:   isTemporal,
 				IsNotFound:   isNotFound,
@@ -615,7 +615,7 @@ func main() {
 				structuredLog.FinalQA = FinalQAInfo{
 					CompiledContext:   nil,
 					SystemPrompt:      directSystemPrompt,
-					UserPrompt:        fmt.Sprintf("Transcript:\n%s\n\nQuestion: %s", transcriptText, qa.Query),
+					UserPrompt:        fmt.Sprintf("Question: %s\n\nTranscript:\n%s", qa.Query, transcriptText),
 					Response:          directAnswer,
 					FallbackTriggered: false,
 					FallbackResponse:  "",
@@ -627,10 +627,19 @@ func main() {
 				}
 				logMain("   ├─ ⚠️ Bypassing JIT semantic extraction (%s). Answering directly from transcript...\n", reason)
 				directPrompt := gllam.SystemPrompts.SimpleTemporalRetrieval
-				if directPrompt == "" {
+				if !isTemporal {
+					directPrompt = "You are a helpful assistant. Answer the question strictly and concisely using facts directly stated in the transcript. Output only your direct answer, do not include any reasoning or thinking steps."
+				} else if directPrompt == "" {
 					directPrompt = "You are a helpful assistant. Answer the question strictly using facts directly stated in the transcript. Pay absolute attention to the chronological sequence of lines in the transcript. Determine who speaks first and who speaks second, and trace the sequence of statements. Answer the temporal ordering question precisely and directly."
 				}
-				userPrompt := fmt.Sprintf("Transcript:\n%s\n\nQuestion: %s", transcriptText, qa.Query)
+
+				if gllam.SystemPrompts != nil && gllam.SystemPrompts.CustomCategoryPrompts != nil {
+					if catPrompt, ok := gllam.SystemPrompts.CustomCategoryPrompts[qa.Category]; ok && catPrompt != "" {
+						directPrompt = directPrompt + "\n\n" + catPrompt
+						logMain("   ├─ Appended category-specific guidelines for: %s\n", qa.Category)
+					}
+				}
+				userPrompt := fmt.Sprintf("Question: %s\n\nTranscript:\n%s", qa.Query, transcriptText)
 
 				answer, err = llmClient.Generate(ctx, directPrompt, userPrompt)
 				if err != nil {
@@ -697,7 +706,7 @@ func main() {
 							logMain("   ├─ Appended category-specific guidelines for: %s\n", qa.Category)
 						}
 					}
-					userQuery := fmt.Sprintf("Discussion Transcript:\n%s\n\nQuestion: %s", transcriptText, qa.Query)
+					userQuery := fmt.Sprintf("Question: %s\n\nDiscussion Transcript:\n%s", qa.Query, transcriptText)
 
 					var genErr error
 					tGen0 := time.Now()
@@ -719,10 +728,19 @@ func main() {
 					if isNotFoundResponse(stripThinkingTags(answer)) {
 						logMain("   ├─ ⚠️ Temporal engine returned 'not found'. Falling back to direct transcript generation...\n")
 						fallbackPrompt := gllam.SystemPrompts.SimpleTemporalRetrieval
-						if fallbackPrompt == "" {
+						if !isTemporal {
+							fallbackPrompt = "You are a helpful assistant. Answer the question strictly and concisely using facts directly stated in the transcript. Output only your direct answer, do not include any reasoning or thinking steps."
+						} else if fallbackPrompt == "" {
 							fallbackPrompt = "You are a helpful assistant. Answer the question strictly using facts directly stated in the transcript. Pay absolute attention to the chronological sequence of lines in the transcript. Determine who speaks first and who speaks second, and trace the sequence of statements. Answer the temporal ordering question precisely and directly."
 						}
-						fallbackUserQuery := fmt.Sprintf("Transcript:\n%s\n\nQuestion: %s", transcriptText, qa.Query)
+
+						if gllam.SystemPrompts != nil && gllam.SystemPrompts.CustomCategoryPrompts != nil {
+							if catPrompt, ok := gllam.SystemPrompts.CustomCategoryPrompts[qa.Category]; ok && catPrompt != "" {
+								fallbackPrompt = fallbackPrompt + "\n\n" + catPrompt
+								logMain("   ├─ Appended category-specific guidelines for: %s\n", qa.Category)
+							}
+						}
+						fallbackUserQuery := fmt.Sprintf("Question: %s\n\nTranscript:\n%s", qa.Query, transcriptText)
 						
 						fallbackAnswer, fErr := llmClient.Generate(ctx, fallbackPrompt, fallbackUserQuery)
 						if fErr == nil && !isNotFoundResponse(stripThinkingTags(fallbackAnswer)) && fallbackAnswer != "" {
@@ -1082,7 +1100,7 @@ func cleanTranscriptSAYArtifacts(text string) string {
 }
 
 func tryDirectQA(ctx context.Context, llmClient *engine.LLMClient, systemPrompt string, transcript string, query string) (string, error) {
-	userPrompt := fmt.Sprintf("Transcript:\n%s\n\nQuestion: %s", transcript, query)
+	userPrompt := fmt.Sprintf("Question: %s\n\nTranscript:\n%s", query, transcript)
 	answer, err := llmClient.Generate(ctx, systemPrompt, userPrompt)
 	if err != nil {
 		return "", err
@@ -1310,42 +1328,152 @@ func isNotFoundResponse(answer string) bool {
 	return false
 }
 
-func pruneIrrelevantChunks(ctx context.Context, llmClient *engine.LLMClient, text string, query string, chunkSize, chunkOverlap int, events *[]ChunkPruningEvent) string {
+func pruneIrrelevantChunks(ctx context.Context, text string, query string, searchTerms []string, chunkSize, chunkOverlap int, events *[]ChunkPruningEvent) string {
 	chunks := engine.ChunkTranscript(text, chunkSize, chunkOverlap)
 	var keptChunks []string
-	
+
+	// Build search keywords from query as fallback/expansion
+	words := strings.Fields(query)
+	stopWords := map[string]struct{}{
+		"what": {}, "does": {}, "did": {}, "before": {}, "after": {}, "is": {},
+		"the": {}, "a": {}, "an": {}, "where": {}, "why": {}, "who": {}, "how": {},
+		"mentioned": {}, "say": {}, "said": {}, "about": {}, "with": {}, "to": {},
+		"mention": {}, "type": {}, "first": {}, "second": {}, "between": {}, "from": {},
+		"and": {}, "of": {}, "in": {}, "on": {}, "at": {}, "for": {}, "or": {},
+		"many": {}, "days": {}, "passed": {}, "when": {}, "had": {}, "have": {},
+		"some": {}, "good": {}, "should": {}, "check": {}, "out": {}, "could": {},
+		"would": {}, "will": {}, "can": {}, "then": {}, "than": {}, "more": {},
+		"better": {}, "best": {}, "are": {}, "was": {}, "were": {}, "been": {},
+		"has": {}, "into": {}, "onto": {}, "your": {}, "my": {}, "their": {},
+		"his": {}, "her": {}, "our": {}, "they": {}, "them": {}, "him": {},
+		"she": {}, "you": {}, "me": {}, "this": {}, "that": {}, "these": {},
+		"those": {}, "there": {}, "here": {}, "any": {}, "all": {},
+		"please": {}, "help": {}, "sure": {}, "yes": {}, "no": {}, "not": {},
+		"but": {}, "so": {}, "very": {}, "just": {}, "like": {},
+	}
+
+	allTerms := make([]string, 0, len(searchTerms))
+	seenTerm := make(map[string]bool)
+	for _, term := range searchTerms {
+		tLower := strings.TrimSpace(strings.ToLower(term))
+		_, isStop := stopWords[tLower]
+		if len(tLower) >= 3 && !isStop && !seenTerm[tLower] {
+			seenTerm[tLower] = true
+			allTerms = append(allTerms, tLower)
+		}
+	}
+
+	// Fallback to query words ONLY if we have no filtered search terms
+	if len(allTerms) == 0 {
+		for _, w := range words {
+			wClean := strings.Trim(strings.ToLower(w), "?!.,'\":;")
+			_, isStop := stopWords[wClean]
+			if len(wClean) >= 3 && !isStop && !seenTerm[wClean] {
+				seenTerm[wClean] = true
+				allTerms = append(allTerms, wClean)
+			}
+		}
+	}
+
+	type chunkScore struct {
+		text  string
+		score float64
+		index int
+	}
+	var scoredChunks []chunkScore
+
 	for i, chunk := range chunks {
 		if !engine.ValidateTranscriptSemanticCoherence(chunk.Text) {
 			continue
 		}
-		systemPrompt := "You are a helpful assistant. Determine if a given transcript chunk contains ANY information, clues, dates, or mentions of the entities/events referred to in the user's question. The question may be a multi-step or multi-hop comparison, so a chunk is relevant if it mentions even ONE of the events, topics, or dates referred to in the question. The first word of your response must strictly be YES or NO, you can add a brief explanation of the why after."
-		userPrompt := fmt.Sprintf("Question: %q\n\nTranscript Chunk:\n%s\n\nDoes this chunk contain information that helps answer the question? (YES/NO):", query, chunk.Text)
-		
-		var answer string
-		var err error
-		for attempt := 1; attempt <= 3; attempt++ {
-			answer, err = llmClient.Generate(ctx, systemPrompt, userPrompt)
-			if err == nil && strings.TrimSpace(answer) != "" {
+
+		score := 0.0
+		chunkLower := strings.ToLower(chunk.Text)
+		for _, term := range allTerms {
+			count := strings.Count(chunkLower, term)
+			score += float64(count)
+		}
+
+		scoredChunks = append(scoredChunks, chunkScore{
+			text:  chunk.Text,
+			score: score,
+			index: i,
+		})
+	}
+
+	// Keep chunks with score > 0, up to a character limit to prevent context window bloat
+	maxChars := 65000
+	currentChars := 0
+	keptIndices := make(map[int]bool)
+
+	type chunkIndexScore struct {
+		index int
+		score float64
+		text  string
+	}
+	var cisList []chunkIndexScore
+	for _, sc := range scoredChunks {
+		if sc.score > 0 {
+			cisList = append(cisList, chunkIndexScore{
+				index: sc.index,
+				score: sc.score,
+				text:  sc.text,
+			})
+		}
+	}
+
+	sort.Slice(cisList, func(i, j int) bool {
+		return cisList[i].score > cisList[j].score
+	})
+
+	for _, cis := range cisList {
+		keptIndices[cis.index] = true
+		currentChars += len(cis.text)
+		if currentChars > maxChars {
+			break
+		}
+	}
+
+	// Fallback if no chunks had any overlap: keep all of them within budget (including first overstep)
+	if len(keptIndices) == 0 {
+		for _, sc := range scoredChunks {
+			keptIndices[sc.index] = true
+			currentChars += len(sc.text)
+			if currentChars > maxChars {
 				break
 			}
-			time.Sleep(time.Duration(attempt) * time.Second)
 		}
-		
-		cleaned := strings.TrimSpace(strings.ToUpper(answer))
+	}
+
+	// Reconstruct kept chunks in chronological order
+	for i, chunk := range chunks {
+		decision := "NO (Score: 0.0)"
+		var score float64
+		for _, sc := range scoredChunks {
+			if sc.index == i {
+				score = sc.score
+				break
+			}
+		}
+
+		if keptIndices[i] {
+			keptChunks = append(keptChunks, chunk.Text)
+			decision = fmt.Sprintf("YES (Score: %.1f)", score)
+		} else if score > 0 {
+			decision = fmt.Sprintf("NO (Score: %.1f, Exceeded Budget)", score)
+		}
+
 		if events != nil {
 			*events = append(*events, ChunkPruningEvent{
 				ChunkIndex:   i + 1,
 				Text:         chunk.Text,
-				SystemPrompt: systemPrompt,
-				UserPrompt:   userPrompt,
-				LlmDecision:  answer,
+				SystemPrompt: "Keyword overlap pruning",
+				UserPrompt:   strings.Join(allTerms, ", "),
+				LlmDecision:  decision,
 			})
 		}
-
-		if strings.HasPrefix(cleaned, "YES") {
-			keptChunks = append(keptChunks, chunk.Text)
-		}
 	}
+
 	return strings.Join(keptChunks, "\n\n")
 }
 
@@ -1595,11 +1723,12 @@ func filterTermsWithLLM(ctx context.Context, llmClient *engine.LLMClient, query 
 		return terms
 	}
 	
-	systemPrompt := `You are an information retrieval expert. Review the candidate search terms/phrases for the given question. 
-Filter out terms that are too generic (such as "call", "planned", "finish", "day", "many", "user", "assistant", "what", "how", "when", "days", "there", "between", "finish revising") and keep only the terms, bigrams, or concepts that are highly specific to retrieving the relevant dialogue chunks.
+	systemPrompt := `You are an information retrieval expert. Review the candidate search terms/phrases for relevance in text that answers the question.
+Filter out terms that are too generic (such as "some", "should", "check", "out", "call", "planned", "finish", "day", "many", "user", "assistant", "what", "how", "when", "days", "there", "between") because their presence in text does not make that text relevant to the question. Keep only terms, bigrams, or concepts that are specific to what the question is looking to answer.
 Output the filtered terms as a JSON array of strings. Do not include any explanations, bullet points, or markdown formatting (like code blocks). Just output the JSON array.`
 
-	userPrompt := fmt.Sprintf("Question: %q\nCandidate Search Terms: %v\nFiltered Search Terms:", query, terms)
+	termsJSON, _ := json.Marshal(terms)
+	userPrompt := fmt.Sprintf("Question: %q\nCandidate Search Terms: %s\nFiltered Search Terms:", query, termsJSON)
 	
 	var response string
 	var err error
