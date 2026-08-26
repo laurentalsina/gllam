@@ -102,6 +102,57 @@ type StructuredDetailsLog struct {
 	FinalQA             FinalQAInfo            `json:"final_qa"`
 }
 
+type MainLogInstanceEvent struct {
+	Timestamp string `json:"timestamp"`
+	Event     string `json:"event"`
+}
+
+type MainLogInstance struct {
+	InstanceID  string                 `json:"instance_id"`
+	Category    string                 `json:"category"`
+	Query       string                 `json:"query"`
+	Timestamp   string                 `json:"timestamp"`
+	Events      []MainLogInstanceEvent `json:"events"`
+	ModelAnswer string                 `json:"model_answer"`
+	GroundTruth string                 `json:"ground_truth"`
+}
+
+type MainLogConfig struct {
+	UseUtterancesVectors bool `json:"use_utterances_vectors"`
+	UseTermsVectors      bool `json:"use_terms_vectors"`
+	BypassTemporal       bool `json:"bypass_temporal"`
+	BypassSemantic       bool `json:"bypass_semantic"`
+	TopKMatches          int  `json:"top_k_matches"`
+}
+
+type MainLogPhaseDurations struct {
+	DatabaseCleanupsMs      int64 `json:"database_cleanups_ms"`
+	QueryDecompositionMs    int64 `json:"query_decomposition_ms"`
+	CandidateRetrievalMs    int64 `json:"candidate_retrieval_ms"`
+	ChunkPruningMs          int64 `json:"chunk_pruning_ms"`
+	FirstPassDirectQAMs     int64 `json:"first_pass_direct_qa_ms"`
+	JITSemanticExtractionMs int64 `json:"jit_semantic_extraction_ms"`
+	RouteAssembleMs         int64 `json:"route_assemble_ms"`
+	FinalQAGenerationMs     int64 `json:"final_qa_generation_ms"`
+}
+
+type MainLogSummary struct {
+	TotalAttempted int     `json:"total_attempted"`
+	Correct        int     `json:"correct"`
+	Accuracy       float64 `json:"accuracy"`
+}
+
+type MainLogStructure struct {
+	Timestamp            string                 `json:"timestamp"`
+	Config               MainLogConfig          `json:"config"`
+	IndexBuildDurationMs int64                  `json:"index_build_duration_ms"`
+	IndexUtteranceCount  int                    `json:"index_utterance_count"`
+	IndexTermCount       int                    `json:"index_term_count"`
+	Evaluations          []MainLogInstance      `json:"evaluations"`
+	Summary              MainLogSummary         `json:"summary"`
+	PhaseDurationsMs     MainLogPhaseDurations  `json:"phase_durations_ms"`
+}
+
 
 func getGroundTruthAnswer(gt interface{}) string {
 	if gt == nil {
@@ -194,17 +245,20 @@ func main() {
 	}
 
 	mainLogPath := filepath.Join(runLogDir, "eval_selective.log")
-	mainLogFile, err := os.OpenFile(mainLogPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to open main log file: %v\n", err)
-		os.Exit(1)
-	}
-	defer mainLogFile.Close()
 
 	logMain := func(format string, args ...interface{}) {
 		msg := fmt.Sprintf(format, args...)
 		fmt.Print(msg)
-		_, _ = mainLogFile.WriteString(msg)
+	}
+
+	var mainLog MainLogStructure
+	mainLog.Timestamp = time.Now().Format(time.RFC3339)
+	mainLog.Config = MainLogConfig{
+		UseUtterancesVectors: *useUtterancesVectors,
+		UseTermsVectors:      *useTermsVectors,
+		BypassTemporal:       *bypassTemporal,
+		BypassSemantic:       *bypassSemantic,
+		TopKMatches:          *topKMatches,
 	}
 
 	logMain("DEBUG: use-utterances-vectors=%v, use-terms-vectors=%v, bypass-temporal=%v, bypass-semantic=%v, top-k=%d\n", *useUtterancesVectors, *useTermsVectors, *bypassTemporal, *bypassSemantic, *topKMatches)
@@ -250,6 +304,9 @@ func main() {
 		os.Exit(1)
 	}
 	logMain("Index built in %v. Utterances: %d, Terms: %d\n", time.Since(startIdx).Round(time.Millisecond), len(idx.Utterances), len(idx.Postings))
+	mainLog.IndexBuildDurationMs = time.Since(startIdx).Milliseconds()
+	mainLog.IndexUtteranceCount = len(idx.Utterances)
+	mainLog.IndexTermCount = len(idx.Postings)
 
 	if *useUtterancesVectors {
 		if err := ensureUtteranceEmbeddingsIndexed(ctx, gllam, embedder, idx); err != nil {
@@ -290,9 +347,7 @@ func main() {
 		totalGenerationTime    time.Duration
 	)
 
-	logTimestamp := func(stepName string) {
-		logMain("   ├─ [%s] Starting %s...\n", time.Now().Format("2006-01-02 15:04:05"), stepName)
-	}
+
 
 	scanner := bufio.NewScanner(qaFile)
 	count := 0
@@ -326,6 +381,28 @@ func main() {
 
 
 
+		logInstance := MainLogInstance{
+			InstanceID:  qa.InstanceID,
+			Category:    qa.Category,
+			Query:       qa.Query,
+			Timestamp:   time.Now().Format(time.RFC3339),
+			Events:      []MainLogInstanceEvent{},
+			ModelAnswer: "",
+			GroundTruth: getGroundTruthAnswer(qa.GroundTruth),
+		}
+
+		addEvent := func(msg string) {
+			logInstance.Events = append(logInstance.Events, MainLogInstanceEvent{
+				Timestamp: time.Now().Format(time.RFC3339),
+				Event:     msg,
+			})
+		}
+
+		logTimestamp := func(stepName string) {
+			logMain("   ├─ [%s] Starting %s...\n", time.Now().Format("2006-01-02 15:04:05"), stepName)
+			addEvent("Starting " + stepName)
+		}
+
 		structuredLog := StructuredDetailsLog{
 			InstanceID:     qa.InstanceID,
 			Query:          qa.Query,
@@ -341,6 +418,7 @@ func main() {
 		tClear0 := time.Now()
 		clearSemanticTables(ctx, gllam.DB())
 		totalClearTablesTime += time.Since(tClear0)
+		addEvent("Semantic tables cleared")
 
 		targetSpeakers := extractTargetSpeakers(qa.Query, idx)
 		if len(targetSpeakers) > 0 {
@@ -359,6 +437,9 @@ func main() {
 			subQueries = []string{qa.Query}
 		}
 		totalDecomposeTime += time.Since(tDecompose0)
+		if *decomposeQueryFlag {
+			addEvent(fmt.Sprintf("Query decomposition completed: %v sub-queries", len(subQueries)))
+		}
 
 		tRetrieve0 := time.Now()
 		logTimestamp("candidate retrieval")
@@ -405,6 +486,7 @@ func main() {
 		retrieveDur := time.Since(tRetrieve0)
 		totalRetrieveTime += retrieveDur
 		logMain("   ├─ [%s] [%v] Candidate retrieval completed.\n", time.Now().Format("2006-01-02 15:04:05"), retrieveDur.Round(time.Millisecond))
+		addEvent(fmt.Sprintf("Candidate retrieval completed in %v", retrieveDur.Round(time.Millisecond)))
 
 		var answer string
 
@@ -496,6 +578,7 @@ func main() {
 				transcriptText = pruneIrrelevantChunks(ctx, llmClient, transcriptText, qa.Query, gllam.SystemPrompts.ChunkSize, gllam.SystemPrompts.ChunkOverlap, &structuredLog.ChunkPruning.Chunks)
 				pruneDur := time.Since(tPrune0)
 				logMain("   ├─ [%s] [%v] Chunk pruning completed.\n", time.Now().Format("2006-01-02 15:04:05"), pruneDur.Round(time.Millisecond))
+				addEvent(fmt.Sprintf("Chunk pruning completed in %v", pruneDur.Round(time.Millisecond)))
 				logMain("   ├─ Transcript size after pruning: %d characters\n", len(transcriptText))
 			}
 			totalPruneTime += time.Since(tPrune0)
@@ -512,6 +595,7 @@ func main() {
 			directQADur := time.Since(tDirectQA0)
 			totalDirectQATime += directQADur
 			logMain("   ├─ [%s] [%v] First-pass Direct QA completed.\n", time.Now().Format("2006-01-02 15:04:05"), directQADur.Round(time.Millisecond))
+			addEvent(fmt.Sprintf("First-pass Direct QA completed in %v. Result: %s", directQADur.Round(time.Millisecond), directAnswer))
 			
 			isTemporal := strings.HasPrefix(strings.ToUpper(directAnswer), "TEMPORAL") || (qa.Category == "temporal_reasoning" || qa.Category == "event_ordering")
 			isNotFound := strings.ToUpper(directAnswer) == "ANSWER_NOT_FOUND"
@@ -587,6 +671,7 @@ func main() {
 				extractDur := time.Since(tExtract0)
 				totalExtractionTime += extractDur
 				logMain("   ├─ [%s] [%v] JIT semantic extraction completed.\n", time.Now().Format("2006-01-02 15:04:05"), extractDur.Round(time.Millisecond))
+				addEvent(fmt.Sprintf("JIT semantic extraction completed in %v. Extracted %d nodes, %d links", extractDur.Round(time.Millisecond), nodes, links))
 				if err != nil {
 					logMain("   ❌ Semantic extraction failed: %v\n", err)
 				} else {
@@ -600,6 +685,7 @@ func main() {
 				routeDur := time.Since(tRoute0)
 				totalRouteAssembleTime += routeDur
 				logMain("   ├─ [%s] [%v] Route & Assemble completed.\n", time.Now().Format("2006-01-02 15:04:05"), routeDur.Round(time.Millisecond))
+				addEvent(fmt.Sprintf("Route & Assemble completed in %v", routeDur.Round(time.Millisecond)))
 				if err != nil {
 					logMain("   ❌ Error routing query: %v\n", err)
 					answer = "ERROR"
@@ -649,6 +735,7 @@ func main() {
 					genDur := time.Since(tGen0)
 					totalGenerationTime += genDur
 					logMain("   ├─ [%s] [%v] Final QA Generation completed.\n", time.Now().Format("2006-01-02 15:04:05"), genDur.Round(time.Millisecond))
+					addEvent(fmt.Sprintf("Final QA Generation completed in %v", genDur.Round(time.Millisecond)))
 
 					structuredLog.FinalQA = FinalQAInfo{
 						CompiledContext:   compiled,
@@ -692,8 +779,17 @@ func main() {
 		outFile.Write(resBytes)
 		outFile.WriteString("\n")
 
+		logInstance.ModelAnswer = answer
+		mainLog.Evaluations = append(mainLog.Evaluations, logInstance)
+
 		count++
-		logMain("   └─ Answer: %s\n", strings.ReplaceAll(strings.Split(answer, "\n")[0], "\r", ""))
+		if answer == "ERROR" {
+			logMain("   ├─ [%s] Status: ❌ ERROR\n", time.Now().Format("2006-01-02 15:04:05"))
+			logMain("   └─ Answer: None\n")
+		} else {
+			logMain("   ├─ [%s] Status: ✅ SUCCESS\n", time.Now().Format("2006-01-02 15:04:05"))
+			logMain("   └─ Answer: %s\n", answer)
+		}
 	}
 
 	logMain("\nCompleted %d evaluations. Results saved to %s\n", count, *outPath)
@@ -719,6 +815,23 @@ func main() {
 	logMain("  - Route & Assemble         : %-8v (%5.1f%%)\n", totalRouteAssembleTime.Round(time.Millisecond), percentage(totalRouteAssembleTime, totalOverallTime))
 	logMain("  - Final QA Generation      : %-8v (%5.1f%%)\n", totalGenerationTime.Round(time.Millisecond), percentage(totalGenerationTime, totalOverallTime))
 	logMain("====================================================================================================\n")
+
+	mainLog.Summary = MainLogSummary{
+		TotalAttempted: count,
+	}
+	mainLog.PhaseDurationsMs = MainLogPhaseDurations{
+		DatabaseCleanupsMs:      totalClearTablesTime.Milliseconds(),
+		QueryDecompositionMs:    totalDecomposeTime.Milliseconds(),
+		CandidateRetrievalMs:    totalRetrieveTime.Milliseconds(),
+		ChunkPruningMs:          totalPruneTime.Milliseconds(),
+		FirstPassDirectQAMs:     totalDirectQATime.Milliseconds(),
+		JITSemanticExtractionMs: totalExtractionTime.Milliseconds(),
+		RouteAssembleMs:         totalRouteAssembleTime.Milliseconds(),
+		FinalQAGenerationMs:     totalGenerationTime.Milliseconds(),
+	}
+
+	mainLogData, _ := json.MarshalIndent(mainLog, "", "  ")
+	_ = os.WriteFile(mainLogPath, mainLogData, 0644)
 }
 
 func extractSemanticsForText(ctx context.Context, gllam *engine.GllamEngine, embedder engine.Embedder, llmClient *engine.LLMClient, text string, systemPrompt string, extractionJSONSchema map[string]interface{}, sourceName string, events *[]JITExtractionEvent) (int, int, error) {
