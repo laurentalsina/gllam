@@ -13,7 +13,12 @@ import (
 func (e *GllamEngine) SaveEpisodicSummary(ctx context.Context, summary memory.EpisodicSummary) error {
     query := `
         INSERT INTO episodic_summaries (id, session_id, summary_text, source_uri, created_at)
-        VALUES (?, ?, ?, ?, ?)`
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+            session_id = excluded.session_id,
+            summary_text = excluded.summary_text,
+            source_uri = excluded.source_uri,
+            created_at = excluded.created_at`
 
     var srcURI sql.NullString
     if summary.SourceURI != "" {
