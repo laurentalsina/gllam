@@ -35,7 +35,7 @@ if [ ! -f "$RESULTS_FILE" ]; then
 fi
 
 RESULTS_DIR=$(dirname "$RESULTS_FILE")
-GRADE_OUT="${2:-${RESULTS_DIR}/beam_final_grade_selective.txt}"
+GRADE_OUT="${2:-${RESULTS_DIR}/beam_final_grade_selective.json}"
 
 echo "======================================================="
 echo "📊 Grading BEAM Results"
@@ -47,7 +47,8 @@ echo "======================================================="
 # Run Grader
 go run ./cmd/grade_beam/main.go \
   --results "$RESULTS_FILE" \
-  --text-server "$TEXT_SERVER" > "$GRADE_OUT" 2>&1
+  --text-server "$TEXT_SERVER" \
+  --output "$GRADE_OUT"
 
 echo "======================================================="
 echo "✅ Grading Complete!"

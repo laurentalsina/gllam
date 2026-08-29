@@ -21,9 +21,40 @@ type BEAMResult struct {
 	Rubric       []string `json:"rubric"`
 }
 
+type EvaluationDetail struct {
+	InstanceID  string   `json:"instance_id"`
+	Category    string   `json:"category"`
+	Query       string   `json:"query"`
+	ModelAnswer string   `json:"model_answer"`
+	GroundTruth string   `json:"ground_truth"`
+	Rubric      []string `json:"rubric"`
+	Verdict     string   `json:"verdict"` // "CORRECT", "INCORRECT", "ERROR"
+	Explanation string   `json:"explanation,omitempty"`
+}
+
+type CategorySummary struct {
+	Total           int     `json:"total"`
+	Correct         int     `json:"correct"`
+	AccuracyPercent float64 `json:"accuracy_percent"`
+}
+
+type GradingSummary struct {
+	TotalAttempted   int     `json:"total_attempted"`
+	ErrorsCount      int     `json:"errors_count"`
+	CorrectCount     int     `json:"correct_count"`
+	AccuracyPercent  float64 `json:"accuracy_percent"`
+}
+
+type GradingReport struct {
+	Summary     GradingSummary             `json:"summary"`
+	Categories  map[string]CategorySummary `json:"categories"`
+	Evaluations []EvaluationDetail         `json:"evaluations"`
+}
+
 func main() {
 	resultsPath := flag.String("results", "./beam_100k_results_sample50.jsonl", "Path to results JSONL")
 	textEndpoint := flag.String("text-server", "http://100.96.179.19:8888", "LLM text server")
+	outputPath := flag.String("output", "", "Path to output JSON file (prints to stdout if empty)")
 	flag.Parse()
 
 	file, err := os.Open(*resultsPath)
@@ -39,19 +70,18 @@ func main() {
 	scanner := bufio.NewScanner(file)
 	buf := make([]byte, 64*1024)
 	scanner.Buffer(buf, 10*1024*1024)
-	
+
+	var evaluations []EvaluationDetail
 	categoryStats := make(map[string]struct{ total, correct int })
 	total := 0
 	correct := 0
 	errorsCount := 0
 
-	fmt.Println("Starting BEAM grading...")
-
 	for scanner.Scan() {
 		line := scanner.Bytes()
 		var res BEAMResult
 		if err := json.Unmarshal(line, &res); err != nil {
-			fmt.Println("Error parsing JSON:", err)
+			fmt.Fprintf(os.Stderr, "Error parsing JSON line: %v\n", err)
 			continue
 		}
 
@@ -60,17 +90,23 @@ func main() {
 		stats.total++
 
 		rubricText := strings.Join(res.Rubric, "\n- ")
-		
+
 		if res.ModelAnswer == "ERROR" {
-			fmt.Printf("[%s] INCORRECT\n", res.InstanceID)
-			fmt.Printf("   ├─ Question: %s\n", res.Query)
-			fmt.Printf("   ├─ Ground Truth: %s\n", res.GroundTruth)
-			fmt.Printf("   ├─ Rubric: %s\n", rubricText)
-			fmt.Println("   └─ Evaluation Details: Model generation failed or timed out.\n")
+			evaluations = append(evaluations, EvaluationDetail{
+				InstanceID:  res.InstanceID,
+				Category:    res.Category,
+				Query:       res.Query,
+				ModelAnswer: res.ModelAnswer,
+				GroundTruth: res.GroundTruth,
+				Rubric:      res.Rubric,
+				Verdict:     "INCORRECT",
+				Explanation: "Model generation failed or timed out.",
+			})
 			errorsCount++
 			categoryStats[res.Category] = stats
 			continue
 		}
+
 		systemPrompt := `You are an expert evaluator for an agentic AI memory benchmark. 
 You will be provided with a Question, a Ground Truth answer, a Grading Rubric, and the Model Answer.
 Your task is to determine if the Model Answer is correct based on the Ground Truth and Rubric.
@@ -81,7 +117,17 @@ Then, conclude your evaluation with a final line starting with "Verdict: " follo
 
 		verdict, err := llmClient.Generate(ctx, systemPrompt, userPrompt)
 		if err != nil {
-			fmt.Printf("LLM grading failed for %s: %v\n", res.InstanceID, err)
+			fmt.Fprintf(os.Stderr, "LLM grading failed for %s: %v\n", res.InstanceID, err)
+			evaluations = append(evaluations, EvaluationDetail{
+				InstanceID:  res.InstanceID,
+				Category:    res.Category,
+				Query:       res.Query,
+				ModelAnswer: res.ModelAnswer,
+				GroundTruth: res.GroundTruth,
+				Rubric:      res.Rubric,
+				Verdict:     "ERROR",
+				Explanation: fmt.Sprintf("Grading failed: %v", err),
+			})
 			categoryStats[res.Category] = stats
 			continue
 		}
@@ -103,35 +149,63 @@ Then, conclude your evaluation with a final line starting with "Verdict: " follo
 
 		explanationText := strings.TrimSpace(strings.Join(explanationLines, "\n"))
 
+		verdictStr := "INCORRECT"
 		if isCorrect {
 			correct++
 			stats.correct++
-			fmt.Printf("[%s] CORRECT\n", res.InstanceID)
-		} else {
-			fmt.Printf("[%s] INCORRECT\n", res.InstanceID)
-		}
-		fmt.Printf("   ├─ Question: %s\n", res.Query)
-		fmt.Printf("   ├─ Ground Truth: %s\n", res.GroundTruth)
-		fmt.Printf("   ├─ Rubric: %s\n", rubricText)
-		fmt.Printf("   ├─ Model Answer: %s\n", res.ModelAnswer)
-		if explanationText != "" {
-			fmt.Printf("   └─ Evaluation Details:\n%s\n\n", "      "+strings.ReplaceAll(explanationText, "\n", "\n      "))
-		} else {
-			fmt.Println("   └─ Evaluation Details: None\n")
+			verdictStr = "CORRECT"
 		}
 		categoryStats[res.Category] = stats
+
+		evaluations = append(evaluations, EvaluationDetail{
+			InstanceID:  res.InstanceID,
+			Category:    res.Category,
+			Query:       res.Query,
+			ModelAnswer: res.ModelAnswer,
+			GroundTruth: res.GroundTruth,
+			Rubric:      res.Rubric,
+			Verdict:     verdictStr,
+			Explanation: explanationText,
+		})
 	}
 
+	var report GradingReport
 	if total > 0 {
-		accuracy := float64(correct) / float64(total) * 100
-		fmt.Printf("\n--- Final BEAM Score ---\nTotal Attempted: %d\nGeneration Errors/Timeouts: %d\nCorrect: %d\nOverall Accuracy: %.2f%%\n\n", total, errorsCount, correct, accuracy)
-		
-		fmt.Println("--- Accuracy by Category ---")
-		for cat, stats := range categoryStats {
-			catAcc := float64(stats.correct) / float64(stats.total) * 100
-			fmt.Printf("%-30s : %d/%d (%.2f%%)\n", cat, stats.correct, stats.total, catAcc)
+		report.Summary = GradingSummary{
+			TotalAttempted:  total,
+			ErrorsCount:     errorsCount,
+			CorrectCount:    correct,
+			AccuracyPercent: float64(correct) / float64(total) * 100,
 		}
+
+		report.Categories = make(map[string]CategorySummary)
+		for cat, stats := range categoryStats {
+			catAcc := 0.0
+			if stats.total > 0 {
+				catAcc = float64(stats.correct) / float64(stats.total) * 100
+			}
+			report.Categories[cat] = CategorySummary{
+				Total:           stats.total,
+				Correct:         stats.correct,
+				AccuracyPercent: catAcc,
+			}
+		}
+	}
+	report.Evaluations = evaluations
+
+	jsonBytes, err := json.MarshalIndent(report, "", "  ")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to marshal grading report: %v\n", err)
+		os.Exit(1)
+	}
+
+	if *outputPath != "" {
+		if err := os.WriteFile(*outputPath, jsonBytes, 0644); err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to write output file: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Fprintf(os.Stderr, "Grading completed successfully! Report saved to: %s\n", *outputPath)
 	} else {
-		fmt.Println("No results found to grade.")
+		fmt.Println(string(jsonBytes))
 	}
 }

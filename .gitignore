@@ -9,7 +9,8 @@ d7_qa.jsonl
 sbom_compliance_en.json
 
 # Binaries
-/gllam
+grade_beam
+eval_selective
 
 # Logs
 *.log

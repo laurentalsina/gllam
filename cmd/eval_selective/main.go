@@ -10,11 +10,13 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/laurentalsina/gllam/pkg/engine"
@@ -37,6 +39,7 @@ type Result struct {
 	ModelAnswer  string   `json:"model_answer"`
 	GroundTruth  string   `json:"ground_truth"`
 	Rubric       []string `json:"rubric"`
+	Error        string   `json:"error,omitempty"`
 }
 
 type CandidateInfo struct {
@@ -66,6 +69,7 @@ type FirstPassDirectQAInfo struct {
 	Response     string `json:"response"`
 	IsTemporal   bool   `json:"is_temporal"`
 	IsNotFound   bool   `json:"is_not_found"`
+	Error        string `json:"error,omitempty"`
 }
 
 type JITExtractionEvent struct {
@@ -77,6 +81,7 @@ type JITExtractionEvent struct {
 	NodesExtracted       int      `json:"nodes_extracted"`
 	LinksExtracted       int      `json:"links_extracted"`
 	CanonicalizationLogs []string `json:"canonicalization_logs"`
+	Error                string   `json:"error,omitempty"`
 }
 
 type FinalQAInfo struct {
@@ -88,6 +93,7 @@ type FinalQAInfo struct {
 	FallbackResponse  string      `json:"fallback_response"`
 	PDDLDomainPath    string      `json:"pddl_domain_path,omitempty"`
 	PDDLProblemPath   string      `json:"pddl_problem_path,omitempty"`
+	Error             string      `json:"error,omitempty"`
 }
 
 type StructuredDetailsLog struct {
@@ -100,6 +106,7 @@ type StructuredDetailsLog struct {
 	FirstPassDirectQA   FirstPassDirectQAInfo  `json:"first_pass_direct_qa"`
 	JITExtractions      []JITExtractionEvent   `json:"jit_extractions"`
 	FinalQA             FinalQAInfo            `json:"final_qa"`
+	Error               string                 `json:"error,omitempty"`
 }
 
 type MainLogInstanceEvent struct {
@@ -353,6 +360,37 @@ func main() {
 	count := 0
 	llmClient := engine.NewLLMClient(*textServer)
 
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		<-sigChan
+		logMain("\n⚠️ Interrupted by user! Saving progress and exiting gracefully...\n")
+
+		if outFile != nil {
+			_ = outFile.Sync()
+			_ = outFile.Close()
+		}
+
+		mainLog.Summary = MainLogSummary{
+			TotalAttempted: count,
+		}
+		mainLog.PhaseDurationsMs = MainLogPhaseDurations{
+			DatabaseCleanupsMs:      totalClearTablesTime.Milliseconds(),
+			QueryDecompositionMs:    totalDecomposeTime.Milliseconds(),
+			CandidateRetrievalMs:    totalRetrieveTime.Milliseconds(),
+			ChunkPruningMs:          totalPruneTime.Milliseconds(),
+			FirstPassDirectQAMs:     totalDirectQATime.Milliseconds(),
+			JITSemanticExtractionMs: totalExtractionTime.Milliseconds(),
+			RouteAssembleMs:         totalRouteAssembleTime.Milliseconds(),
+			FinalQAGenerationMs:     totalGenerationTime.Milliseconds(),
+		}
+
+		mainLogData, _ := json.MarshalIndent(mainLog, "", "  ")
+		_ = os.WriteFile(mainLogPath, mainLogData, 0644)
+
+		os.Exit(0)
+	}()
+
 	for scanner.Scan() {
 		if *limit > 0 && count >= *limit {
 			break
@@ -595,7 +633,15 @@ func main() {
 			directQADur := time.Since(tDirectQA0)
 			totalDirectQATime += directQADur
 			logMain("   ├─ [%s] [%v] First-pass Direct QA completed.\n", time.Now().Format("2006-01-02 15:04:05"), directQADur.Round(time.Millisecond))
-			addEvent(fmt.Sprintf("First-pass Direct QA completed in %v. Result: %s", directQADur.Round(time.Millisecond), directAnswer))
+			
+			var errStr string
+			if err != nil {
+				errStr = err.Error()
+				logMain("   ├─ ❌ First-pass Direct QA failed: %v\n", err)
+				addEvent(fmt.Sprintf("First-pass Direct QA failed with error: %v", err))
+			} else {
+				addEvent(fmt.Sprintf("First-pass Direct QA completed in %v. Result: %s", directQADur.Round(time.Millisecond), directAnswer))
+			}
 			
 			isTemporal := strings.HasPrefix(strings.ToUpper(directAnswer), "TEMPORAL") || (qa.Category == "temporal_reasoning" || qa.Category == "event_ordering")
 			isNotFound := strings.ToUpper(directAnswer) == "ANSWER_NOT_FOUND"
@@ -607,6 +653,7 @@ func main() {
 				Response:     directAnswer,
 				IsTemporal:   isTemporal,
 				IsNotFound:   isNotFound,
+				Error:        errStr,
 			}
 
 			if err == nil && !isTemporal && !isNotFound && directAnswer != "" {
@@ -642,8 +689,11 @@ func main() {
 				userPrompt := fmt.Sprintf("Question: %s\n\nTranscript:\n%s", qa.Query, transcriptText)
 
 				answer, err = llmClient.Generate(ctx, directPrompt, userPrompt)
+				var finalErrStr string
 				if err != nil {
 					answer = "ERROR"
+					finalErrStr = err.Error()
+					logMain("   ├─ ❌ Direct QA bypass generation failed: %v\n", err)
 				}
 
 				structuredLog.FinalQA = FinalQAInfo{
@@ -653,7 +703,9 @@ func main() {
 					Response:          answer,
 					FallbackTriggered: false,
 					FallbackResponse:  "",
+					Error:             finalErrStr,
 				}
+				structuredLog.Error = finalErrStr
 			} else {
 				logMain("   ├─ ❌ Direct QA returned %s. Falling back to JIT semantic extraction...\n", directAnswer)
 
@@ -683,6 +735,7 @@ func main() {
 				addEvent(fmt.Sprintf("JIT semantic extraction completed in %v. Extracted %d nodes, %d links", extractDur.Round(time.Millisecond), nodes, links))
 				if err != nil {
 					logMain("   ❌ Semantic extraction failed: %v\n", err)
+					structuredLog.Error = err.Error()
 				} else {
 					logMain("   ├─ Extracted JIT: %d nodes, %d links\n", nodes, links)
 				}
@@ -698,6 +751,7 @@ func main() {
 				if err != nil {
 					logMain("   ❌ Error routing query: %v\n", err)
 					answer = "ERROR"
+					structuredLog.Error = err.Error()
 				} else {
 					prompt := engine.FormatSystemPrompt(compiled)
 					if gllam.SystemPrompts != nil && gllam.SystemPrompts.CustomCategoryPrompts != nil {
@@ -709,6 +763,7 @@ func main() {
 					userQuery := fmt.Sprintf("Question: %s\n\nDiscussion Transcript:\n%s", qa.Query, transcriptText)
 
 					var genErr error
+					var finalErrStr string
 					tGen0 := time.Now()
 					logTimestamp("Final QA Generation")
 					for attempt := 1; attempt <= 3; attempt++ {
@@ -720,6 +775,8 @@ func main() {
 					}
 					if genErr != nil {
 						answer = "ERROR"
+						finalErrStr = genErr.Error()
+						logMain("   ├─ ❌ Final QA generation failed: %v\n", genErr)
 					}
 
 					var fallbackTriggered bool
@@ -743,7 +800,10 @@ func main() {
 						fallbackUserQuery := fmt.Sprintf("Question: %s\n\nTranscript:\n%s", qa.Query, transcriptText)
 						
 						fallbackAnswer, fErr := llmClient.Generate(ctx, fallbackPrompt, fallbackUserQuery)
-						if fErr == nil && !isNotFoundResponse(stripThinkingTags(fallbackAnswer)) && fallbackAnswer != "" {
+						if fErr != nil {
+							finalErrStr = fErr.Error()
+							logMain("   ├─ ❌ Fallback direct generation failed: %v\n", fErr)
+						} else if !isNotFoundResponse(stripThinkingTags(fallbackAnswer)) && fallbackAnswer != "" {
 							answer = fallbackAnswer
 							fallbackTriggered = true
 							fallbackResponse = fallbackAnswer
@@ -764,7 +824,9 @@ func main() {
 						FallbackResponse:  fallbackResponse,
 						PDDLDomainPath:    compiled.PDDLDomainPath,
 						PDDLProblemPath:   compiled.PDDLProblemPath,
+						Error:             finalErrStr,
 					}
+					structuredLog.Error = finalErrStr
 				}
 			}
 
@@ -791,6 +853,7 @@ func main() {
 			ModelAnswer: answer,
 			GroundTruth: getGroundTruthAnswer(qa.GroundTruth),
 			Rubric:      qa.Rubric,
+			Error:       structuredLog.Error,
 		}
 
 		resBytes, _ := json.Marshal(res)
@@ -1724,7 +1787,8 @@ func filterTermsWithLLM(ctx context.Context, llmClient *engine.LLMClient, query 
 	}
 	
 	systemPrompt := `You are an information retrieval expert. Review the candidate search terms/phrases for relevance in text that answers the question.
-Filter out terms that are too generic (such as "some", "should", "check", "out", "call", "planned", "finish", "day", "many", "user", "assistant", "what", "how", "when", "days", "there", "between") because their presence in text does not make that text relevant to the question. Keep only terms, bigrams, or concepts that are specific to what the question is looking to answer.
+Filter out ONLY terms that are extremely generic (such as "some", "should", "check", "out", "call", "planned", "finish", "day", "many", "user", "assistant", "what", "how", "when", "days", "there", "between") because their presence in text does not make that text relevant.
+Retain all specific terms, synonyms, bigrams, or related concepts (such as book titles, names, locations, libraries, reading platforms, or specific actions) that are relevant to the subject matter of the question, even if those exact words are not present in the question.
 Output the filtered terms as a JSON array of strings. Do not include any explanations, bullet points, or markdown formatting (like code blocks). Just output the JSON array.`
 
 	termsJSON, _ := json.Marshal(terms)
@@ -1754,7 +1818,9 @@ Output the filtered terms as a JSON array of strings. Do not include any explana
 	cleanedResponse = strings.TrimSpace(cleanedResponse)
 	
 	if err := json.Unmarshal([]byte(cleanedResponse), &filtered); err == nil && len(filtered) > 0 {
-		fmt.Printf("   ├─ LLM filtered search terms: original %d -> filtered %d: %v\n", len(terms), len(filtered), filtered)
+		origJSON, _ := json.Marshal(terms)
+		filtJSON, _ := json.Marshal(filtered)
+		fmt.Printf("   ├─ LLM filtered search terms: original %d %s -> filtered %d %s\n", len(terms), string(origJSON), len(filtered), string(filtJSON))
 		return filtered
 	}
 	
