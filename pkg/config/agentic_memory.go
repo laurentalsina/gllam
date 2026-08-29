@@ -37,6 +37,8 @@ type AgenticMemorySystemPrompts struct {
 	SemanticExtraction             string                                 `json:"semantic_extraction"` // Stored as array of strings, but loaded as a concatenated String
 	SemanticExtractionTemporal     string                                 `json:"semantic_extraction_temporal"` // Alternate temporal extraction prompt
 	AllowUserGrilling              bool                                   `json:"allow_user_grilling"` // Set false in non-interactive benchmark evaluation (e.g. BEAM)
+	BitemporalSoftDelete           bool                                   `json:"bitemporal_soft_delete"` // Set true to soft-expire conflicting/superseded facts instead of physical delete
+	SemanticDistanceThreshold      float64                                `json:"semantic_distance_threshold"` // Vector similarity cosine distance threshold for entities
 	TrustWeightPrompt              string                                 `json:"trust_weight_prompt"`
 	SourceReliabilityPrompt        string                                 `json:"source_reliability_prompt"`
 	SourceReliabilityHeuristics    map[string]int                         `json:"source_reliability_heuristics,omitempty"` // Individual source trust adjustments (e.g. "alice": +150, "dave": -150)
@@ -210,7 +212,9 @@ func (a *AgenticMemorySystemPrompts) GetIngestionSteeringPrompt(docType string) 
 // DefaultAgenticMemorySystemPrompts returns built-in baseline system prompts.
 func DefaultAgenticMemorySystemPrompts() *AgenticMemorySystemPrompts {
 	return &AgenticMemorySystemPrompts{
-		AllowUserGrilling: true,
+		AllowUserGrilling:         true,
+		BitemporalSoftDelete:      true,
+		SemanticDistanceThreshold: 0.45,
 		IngestionSteeringPrompt: `INGESTION STEERING DIRECTIVES FOR MULTI-AUTHOR & VERSION HISTORY:
 1. Confluence / Wiki: Parse page revision history and author edit epochs into CompactedRevisionEpochs.
 2. Jira / Issue Trackers: Parse comment history, author provenance, and status transitions (Open -> Resolved).

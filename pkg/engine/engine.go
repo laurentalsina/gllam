@@ -22,10 +22,12 @@ type GllamEngine struct {
 	dbRO                  *sql.DB                            // Read handle: connection pool for concurrent read-only queries
 	embedder              Embedder                           // Pluggable embedding generator (e.g., llama.cpp)
 	PlannerExecutablePath string                             // Path to external PDDL planner binary/script
-	SystemPrompts         *config.AgenticMemorySystemPrompts // Agentic memory system prompting configuration
-	AllowUserGrilling     bool                               // Set false for non-interactive benchmark evaluation (e.g. BEAM)
-	stopWALManager        chan struct{}                      // Control channel for background WAL checkpoint manager
-	stopEmbeddingWorkers  chan struct{}                      // Control channel for background embedding worker pool
+	SystemPrompts             *config.AgenticMemorySystemPrompts // Agentic memory system prompting configuration
+	AllowUserGrilling         bool                               // Set false for non-interactive benchmark evaluation (e.g. BEAM)
+	BitemporalSoftDelete      bool                               // Set true to soft-expire conflicting/superseded facts instead of physical delete
+	SemanticDistanceThreshold float64                            // Vector similarity cosine distance threshold for entities
+	stopWALManager            chan struct{}                      // Control channel for background WAL checkpoint manager
+	stopEmbeddingWorkers      chan struct{}                      // Control channel for background embedding worker pool
 	stopTaxonomyWorker    chan struct{}                      // Control channel for background taxonomy worker
 	chunckSize            int
 	chunkOverlap          int
@@ -44,9 +46,20 @@ func (e *GllamEngine) SetAllowUserGrilling(allowed bool) {
 	}
 }
 
+func (e *GllamEngine) SetBitemporalSoftDelete(enabled bool) {
+	e.BitemporalSoftDelete = enabled
+	if e.SystemPrompts != nil {
+		e.SystemPrompts.BitemporalSoftDelete = enabled
+	}
+}
 
 func (e *GllamEngine) SetSystemPrompts(prompts *config.AgenticMemorySystemPrompts) {
 	e.SystemPrompts = prompts
+	if prompts != nil {
+		e.AllowUserGrilling = prompts.AllowUserGrilling
+		e.BitemporalSoftDelete = prompts.BitemporalSoftDelete
+		e.SemanticDistanceThreshold = prompts.SemanticDistanceThreshold
+	}
 }
 
 func (e *GllamEngine) LoadSystemPromptsConfig(path string) error {
@@ -113,14 +126,16 @@ func NewGllamEngine(dbPath string, embedder Embedder) (*GllamEngine, error) {
 	}
 
 	engine := &GllamEngine{
-		db:                 db,
-		dbRO:               dbRO,
-		embedder:           embedder,
-		SystemPrompts:      config.DefaultAgenticMemorySystemPrompts(),
-		AllowUserGrilling:  true,
-		stopWALManager:     make(chan struct{}),
+		db:                        db,
+		dbRO:                      dbRO,
+		embedder:                  embedder,
+		SystemPrompts:             config.DefaultAgenticMemorySystemPrompts(),
+		AllowUserGrilling:         true,
+		BitemporalSoftDelete:      true,
+		SemanticDistanceThreshold: 0.45,
+		stopWALManager:            make(chan struct{}),
 		stopEmbeddingWorkers: make(chan struct{}),
-		stopTaxonomyWorker: make(chan struct{}),
+		stopTaxonomyWorker:   make(chan struct{}),
 	}
 
 	return engine, nil

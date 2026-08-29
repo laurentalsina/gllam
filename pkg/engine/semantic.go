@@ -79,6 +79,12 @@ func (e *GllamEngine) UpsertNode(ctx context.Context, node memory.SemanticNode) 
 
 // AddEdge inserts a new semantic link after checking for existing active links with the same source and relationship
 func (e *GllamEngine) AddEdge(ctx context.Context, link memory.SemanticLink) error {
+	nowTime := time.Now().UTC().Format(time.RFC3339)
+	createdTime := nowTime
+	if !link.CreatedAt.IsZero() {
+		createdTime = link.CreatedAt.UTC().Format(time.RFC3339)
+	}
+
 	// Query existing active links for the same source_id and relationship
 	var existingCaveats string
 	var existingTargetID string
@@ -122,10 +128,17 @@ func (e *GllamEngine) AddEdge(ctx context.Context, link memory.SemanticLink) err
 		}
 
 		if newTrustWeight > existingTrustWeight {
-			// Incoming claim has HIGHER trust weight -> Delete existing claim automatically!
-			deleteQuery := `DELETE FROM semantic_links WHERE source_id = ? AND target_id = ? AND relationship = ?`
-			if _, err := e.db.ExecContext(ctx, deleteQuery, link.SourceID, existingTargetID, link.Relationship); err != nil {
-				return fmt.Errorf("failed to delete existing lower-trust claim: %w", err)
+			if e.BitemporalSoftDelete {
+				// Soft-expire the existing claim instead of deleting it physically
+				if err := e.InvalidateObsoleteEdgeWithAnchor(ctx, link.SourceID, link.Relationship, link.TargetID, createdTime, "", ""); err != nil {
+					return fmt.Errorf("failed to soft-expire lower-trust claim: %w", err)
+				}
+			} else {
+				// Incoming claim has HIGHER trust weight -> Delete existing claim automatically!
+				deleteQuery := `DELETE FROM semantic_links WHERE source_id = ? AND target_id = ? AND relationship = ?`
+				if _, err := e.db.ExecContext(ctx, deleteQuery, link.SourceID, existingTargetID, link.Relationship); err != nil {
+					return fmt.Errorf("failed to delete existing lower-trust claim: %w", err)
+				}
 			}
 
 			// Insert resolves_conflict edge
@@ -149,9 +162,16 @@ func (e *GllamEngine) AddEdge(ctx context.Context, link memory.SemanticLink) err
 		} else if !e.AllowUserGrilling || (e.SystemPrompts != nil && !e.SystemPrompts.AllowUserGrilling) {
 			// Equal trust weights & User Grilling is DISABLED (e.g. BEAM Benchmark Evaluation Mode):
 			// Automatically resolve by Recency Preference (newer incoming claim supersedes older claim)
-			deleteQuery := `DELETE FROM semantic_links WHERE source_id = ? AND target_id = ? AND relationship = ?`
-			if _, err := e.db.ExecContext(ctx, deleteQuery, link.SourceID, existingTargetID, link.Relationship); err != nil {
-				return fmt.Errorf("failed to delete older claim in benchmark mode: %w", err)
+			if e.BitemporalSoftDelete {
+				// Soft-expire the older claim instead of deleting it physically
+				if err := e.InvalidateObsoleteEdgeWithAnchor(ctx, link.SourceID, link.Relationship, link.TargetID, createdTime, "", ""); err != nil {
+					return fmt.Errorf("failed to soft-expire older claim: %w", err)
+				}
+			} else {
+				deleteQuery := `DELETE FROM semantic_links WHERE source_id = ? AND target_id = ? AND relationship = ?`
+				if _, err := e.db.ExecContext(ctx, deleteQuery, link.SourceID, existingTargetID, link.Relationship); err != nil {
+					return fmt.Errorf("failed to delete older claim in benchmark mode: %w", err)
+				}
 			}
 
 			_ = e.AddEdge(ctx, memory.SemanticLink{
@@ -188,11 +208,6 @@ func (e *GllamEngine) AddEdge(ctx context.Context, link memory.SemanticLink) err
 				Relationship: "conflicting_claim",
 			})
 		}
-	}
-	nowTime := time.Now().UTC().Format(time.RFC3339)
-	createdTime := nowTime
-	if !link.CreatedAt.IsZero() {
-		createdTime = link.CreatedAt.UTC().Format(time.RFC3339)
 	}
 
 	if link.Modality == "" {
@@ -313,19 +328,80 @@ func (e *GllamEngine) InvalidateObsoleteEdgeWithAnchor(ctx context.Context, sour
 		}
 	}
 
-	query := `
-		UPDATE semantic_links 
-		SET valid_until = ?, 
-		    temporal_anchor_id = COALESCE(NULLIF(?, ''), temporal_anchor_id),
-		    temporal_relation = CASE WHEN ? != '' THEN 'ended_by' ELSE temporal_relation END,
-		    temporal_note = COALESCE(NULLIF(?, ''), temporal_note),
-		    updated_at = ?
-		WHERE source_id = ? AND relationship = ? AND (target_id != ? OR ? = '') AND valid_until IS NULL`
+	// 1. Find the old links matching sourceID and relationship (where targetID is different, or targetID is empty/ignored)
+	// and get their temporal_link_id.
+	var query string
+	var rows *sql.Rows
+	var err error
 
-	now := time.Now()
-	_, err := e.db.ExecContext(ctx, query, validUntil, anchorID, anchorID, tempNote, now, sourceID, relationship, targetID, targetID)
+	if targetID != "" {
+		query = `SELECT target_id, temporal_link_id FROM semantic_links WHERE source_id = ? AND relationship = ? AND target_id != ?`
+		rows, err = e.db.QueryContext(ctx, query, sourceID, relationship, targetID)
+	} else {
+		query = `SELECT target_id, temporal_link_id FROM semantic_links WHERE source_id = ? AND relationship = ?`
+		rows, err = e.db.QueryContext(ctx, query, sourceID, relationship)
+	}
 	if err != nil {
-		return fmt.Errorf("failed to invalidate obsolete edge: %w", err)
+		return fmt.Errorf("failed to query old links for invalidation: %w", err)
+	}
+
+	type oldLinkItem struct {
+		targetID       string
+		temporalLinkID sql.NullString
+	}
+	var items []oldLinkItem
+
+	for rows.Next() {
+		var item oldLinkItem
+		if err := rows.Scan(&item.targetID, &item.temporalLinkID); err == nil {
+			items = append(items, item)
+		}
+	}
+	rows.Close() // Release SQLite read lock immediately!
+
+	now := time.Now().UTC().Format(time.RFC3339)
+
+	for _, item := range items {
+		var tID string
+		if item.temporalLinkID.Valid && item.temporalLinkID.String != "" {
+			tID = item.temporalLinkID.String
+			// Update existing temporal link
+			updateQuery := `
+				UPDATE semantic_temporal_links 
+				SET valid_until = ?, 
+				    temporal_anchor_id = COALESCE(NULLIF(?, ''), temporal_anchor_id),
+				    temporal_relation = CASE WHEN ? != '' THEN 'ended_by' ELSE temporal_relation END,
+				    temporal_note = COALESCE(NULLIF(?, ''), temporal_note)
+				WHERE id = ?`
+			if _, err := e.db.ExecContext(ctx, updateQuery, validUntil, anchorID, anchorID, tempNote, tID); err != nil {
+				return fmt.Errorf("failed to update temporal link: %w", err)
+			}
+		} else {
+			// Create a new temporal link
+			tID = fmt.Sprintf("temp-%s-%s-%s", sourceID, item.targetID, relationship)
+			insertQuery := `
+				INSERT INTO semantic_temporal_links (id, valid_until, temporal_anchor_id, temporal_relation, temporal_note)
+				VALUES (?, ?, ?, ?, ?)
+				ON CONFLICT(id) DO UPDATE SET
+					valid_until = excluded.valid_until,
+					temporal_anchor_id = COALESCE(NULLIF(excluded.temporal_anchor_id, ''), temporal_anchor_id),
+					temporal_relation = CASE WHEN excluded.temporal_relation != '' THEN excluded.temporal_relation ELSE temporal_relation END,
+					temporal_note = COALESCE(NULLIF(excluded.temporal_note, ''), temporal_note)`
+			
+			var tempRel string
+			if anchorID != "" {
+				tempRel = "ended_by"
+			}
+			if _, err := e.db.ExecContext(ctx, insertQuery, tID, validUntil, anchorID, tempRel, tempNote); err != nil {
+				return fmt.Errorf("failed to insert temporal link: %w", err)
+			}
+
+			// Associate with the old link in semantic_links
+			associateQuery := `UPDATE semantic_links SET temporal_link_id = ?, updated_at = ? WHERE source_id = ? AND target_id = ? AND relationship = ?`
+			if _, err := e.db.ExecContext(ctx, associateQuery, tID, now, sourceID, item.targetID, relationship); err != nil {
+				return fmt.Errorf("failed to associate temporal link with old link: %w", err)
+			}
+		}
 	}
 	return nil
 }
@@ -1626,7 +1702,38 @@ func FilterActiveSummaryFacts(links []memory.SemanticLink) []memory.SemanticLink
 // FilterActiveSummaryFactsForTime filters links active as of a specific evaluation timestamp (asOfTime).
 // If asOfTime is nil, filters links where valid_until IS NULL.
 func FilterActiveSummaryFactsForTime(links []memory.SemanticLink, asOfTime *int64) []memory.SemanticLink {
-	return links
+	var active []memory.SemanticLink
+	for _, l := range links {
+		if l.Temporal == nil {
+			active = append(active, l)
+			continue
+		}
+
+		// Check valid_from
+		if asOfTime != nil && l.Temporal.ValidFrom != "" && l.Temporal.ValidFrom != "temporal_note" {
+			fromTS := parseTimestamp(l.Temporal.ValidFrom)
+			if fromTS > 0 && fromTS > *asOfTime {
+				continue // Not active yet as of the requested timestamp
+			}
+		}
+
+		// Check valid_until
+		if l.Temporal.ValidUntil != "" && l.Temporal.ValidUntil != "temporal_note" {
+			untilTS := parseTimestamp(l.Temporal.ValidUntil)
+			if untilTS > 0 {
+				if asOfTime != nil {
+					if untilTS <= *asOfTime {
+						continue // Already expired as of the requested timestamp
+					}
+				} else {
+					continue // Expired links are filtered out for normal active fact retrieval
+				}
+			}
+		}
+
+		active = append(active, l)
+	}
+	return active
 }
 
 func parseTimestamp(s string) int64 {

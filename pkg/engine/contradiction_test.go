@@ -110,6 +110,7 @@ func TestEpistemicHierarchySourceTrustWeighting(t *testing.T) {
 		t.Fatalf("Failed to create engine: %v", err)
 	}
 	defer gllam.Close()
+	gllam.SetBitemporalSoftDelete(false)
 
 	if err := gllam.InitSchema(); err != nil {
 		t.Fatalf("Failed to init schema: %v", err)
@@ -222,6 +223,7 @@ func TestAllowUserGrillingDisabledBenchmarkMode(t *testing.T) {
 		t.Fatalf("Failed to create engine: %v", err)
 	}
 	defer gllam.Close()
+	gllam.SetBitemporalSoftDelete(false)
 
 	if err := gllam.InitSchema(); err != nil {
 		t.Fatalf("Failed to init schema: %v", err)

@@ -51,6 +51,10 @@ func (e *GllamEngine) RouteAndAssemble(ctx context.Context, userPrompt string, e
     if e.embedder != nil {
         similarNodes, err := e.SearchSimilarNodes(ctx, userPrompt, 100)
         if err == nil {
+            distThreshold := e.SemanticDistanceThreshold
+            if distThreshold == 0.0 {
+                distThreshold = 0.45
+            }
             for _, node := range similarNodes {
                 // Ensure we don't duplicate explicitly provided entities
                 isDup := false
@@ -60,7 +64,7 @@ func (e *GllamEngine) RouteAndAssemble(ctx context.Context, userPrompt string, e
                         break
                     }
                 }
-                if !isDup && node.Distance < 0.38 {
+                if !isDup && node.Distance < float32(distThreshold) {
                     entities = append(entities, node.NodeID)
                 }
             }
@@ -77,6 +81,16 @@ func (e *GllamEngine) RouteAndAssemble(ctx context.Context, userPrompt string, e
         }
     }
 
+    belongsToDifferentSession := func(nodeID string, prefixFilter string) bool {
+        if prefixFilter == "" {
+            return false
+        }
+        if strings.HasPrefix(nodeID, "beam-100k-") {
+            return !strings.HasPrefix(nodeID, prefixFilter)
+        }
+        return false
+    }
+
     // Retrieve semantic links and nodes via Dual-Channel RRF Hybrid Retrieval
     if len(entities) > 0 || userPrompt != "" {
         needleResults, err := e.RetrieveHybridNeedle(ctx, userPrompt, entities, "", 50)
@@ -85,12 +99,12 @@ func (e *GllamEngine) RouteAndAssemble(ctx context.Context, userPrompt string, e
             linkMap := make(map[string]memory.SemanticLink)
 
             for _, nr := range needleResults {
-                if prefixFilter != "" && !strings.HasPrefix(nr.Node.ID, prefixFilter) {
+                if belongsToDifferentSession(nr.Node.ID, prefixFilter) {
                     continue
                 }
                 nodeMap[nr.Node.ID] = nr.Node
                 for _, l := range nr.Links {
-                    if prefixFilter != "" && (!strings.HasPrefix(l.SourceID, prefixFilter) || !strings.HasPrefix(l.TargetID, prefixFilter)) {
+                    if belongsToDifferentSession(l.SourceID, prefixFilter) || belongsToDifferentSession(l.TargetID, prefixFilter) {
                         continue
                     }
                     key := fmt.Sprintf("%s-%s-%s", l.SourceID, l.TargetID, l.Relationship)
@@ -107,8 +121,19 @@ func (e *GllamEngine) RouteAndAssemble(ctx context.Context, userPrompt string, e
                 hybridLinks = append(hybridLinks, l)
             }
 
-            // Perform 1-hop temporal graph expansion to capture transitive chains within token budget
-            expandedNodes, expandedLinks, expErr := e.ExpandTemporalNeighbors(ctx, hybridNodes, hybridLinks, 1)
+            // Determine maxHops based on whether the query has a temporal/sequencing component
+            maxHops := 1
+            temporalKeywords := []string{"before", "after", "first", "second", "third", "order", "sequence", "chronological", "timeline", "when", "then", "earliest", "latest"}
+            lowerPrompt := strings.ToLower(userPrompt)
+            for _, kw := range temporalKeywords {
+                if strings.Contains(lowerPrompt, kw) {
+                    maxHops = 2
+                    break
+                }
+            }
+
+            // Perform temporal graph expansion to capture transitive chains within token budget
+            expandedNodes, expandedLinks, expErr := e.ExpandTemporalNeighbors(ctx, hybridNodes, hybridLinks, maxHops)
             if expErr == nil {
                 ctxResult.SemanticNodes = expandedNodes
                 ctxResult.SemanticLinks = expandedLinks
@@ -187,6 +212,17 @@ func (e *GllamEngine) RouteAndAssemble(ctx context.Context, userPrompt string, e
             "the": true, "a": true, "an": true, "where": true, "why": true, "who": true, "how": true,
             "mentioned": true, "say": true, "said": true, "about": true, "with": true, "to": true,
             "mention": true, "type": true, "first": true, "second": true, "between": true, "from": true,
+            "and": true, "of": true, "in": true, "on": true, "at": true, "for": true, "or": true,
+            "many": true, "days": true, "passed": true, "when": true, "had": true, "have": true,
+            "some": true, "good": true, "should": true, "check": true, "out": true, "could": true,
+            "would": true, "will": true, "can": true, "then": true, "than": true, "more": true,
+            "better": true, "best": true, "are": true, "was": true, "were": true, "been": true,
+            "has": true, "into": true, "onto": true, "your": true, "my": true, "their": true,
+            "his": true, "her": true, "our": true, "they": true, "them": true, "him": true,
+            "she": true, "you": true, "me": true, "this": true, "that": true, "these": true,
+            "those": true, "there": true, "here": true, "any": true, "all": true,
+            "please": true, "help": true, "sure": true, "yes": true, "no": true, "not": true,
+            "but": true, "so": true, "very": true, "just": true, "like": true,
         }
         for _, rawW := range words {
             w := strings.Trim(strings.ToLower(rawW), "?!.,'\":;")
