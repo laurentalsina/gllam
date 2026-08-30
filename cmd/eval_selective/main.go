@@ -693,7 +693,7 @@ func main() {
 				logMain("   ├─ ⚠️ Bypassing JIT semantic extraction (%s). Answering directly from transcript...\n", reason)
 				directPrompt := gllam.SystemPrompts.SimpleTemporalRetrieval
 				if !isTemporal {
-					directPrompt = "You are a helpful assistant. Answer the question strictly and concisely using facts directly stated in the transcript. Output only your direct answer, do not include any reasoning or thinking steps."
+					directPrompt = "You are a helpful assistant. Answer the question strictly using facts directly stated in the transcript."
 				} else if directPrompt == "" {
 					directPrompt = "You are a helpful assistant. Answer the question strictly using facts directly stated in the transcript. Pay absolute attention to the chronological sequence of lines in the transcript. Determine who speaks first and who speaks second, and trace the sequence of statements. Answer the temporal ordering question precisely and directly."
 				}
@@ -804,7 +804,7 @@ func main() {
 						logMain("   ├─ ⚠️ Temporal engine returned 'not found'. Falling back to direct transcript generation...\n")
 						fallbackPrompt := gllam.SystemPrompts.SimpleTemporalRetrieval
 						if !isTemporal {
-							fallbackPrompt = "You are a helpful assistant. Answer the question strictly and concisely using facts directly stated in the transcript. Output only your direct answer, do not include any reasoning or thinking steps."
+							fallbackPrompt = "You are a helpful assistant. Answer the question strictly using facts directly stated in the transcript."
 						} else if fallbackPrompt == "" {
 							fallbackPrompt = "You are a helpful assistant. Answer the question strictly using facts directly stated in the transcript. Pay absolute attention to the chronological sequence of lines in the transcript. Determine who speaks first and who speaks second, and trace the sequence of statements. Answer the temporal ordering question precisely and directly."
 						}
