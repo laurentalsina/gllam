@@ -661,8 +661,9 @@ func main() {
 				addEvent(fmt.Sprintf("First-pass Direct QA completed in %v. Result: %s", directQADur.Round(time.Millisecond), directAnswer))
 			}
 			
-			isTemporal := strings.HasPrefix(strings.ToUpper(directAnswer), "TEMPORAL") || (qa.Category == "temporal_reasoning" || qa.Category == "event_ordering")
-			isNotFound := strings.ToUpper(directAnswer) == "ANSWER_NOT_FOUND"
+			cleanedDirect := stripThinkingTags(directAnswer)
+			isTemporal := strings.HasPrefix(strings.ToUpper(cleanedDirect), "TEMPORAL") || (qa.Category == "temporal_reasoning" || qa.Category == "event_ordering")
+			isNotFound := strings.ToUpper(cleanedDirect) == "ANSWER_NOT_FOUND"
 
 			structuredLog.FirstPassDirectQA = FirstPassDirectQAInfo{
 				Attempted:    true,
@@ -674,8 +675,8 @@ func main() {
 				Error:        errStr,
 			}
 
-			if err == nil && !isTemporal && !isNotFound && directAnswer != "" {
-				answer = directAnswer
+			if err == nil && !isTemporal && !isNotFound && cleanedDirect != "" {
+				answer = cleanedDirect
 				logMain("   ├─ ✅ First-pass Direct QA succeeded.\n")
 				structuredLog.FinalQA = FinalQAInfo{
 					CompiledContext:   nil,
