@@ -42,9 +42,8 @@
                         "1. Analyze if the question has a temporal sequencing component (e.g. asking whether an event happened \"before\" or \"after\" another, or requesting a specific chronological order/sequence of events).",
                          "   - If the question contains a temporal ordering/sequencing component, reply exactly \"TEMPORAL\" followed by a brief reason.",
                         "2. If there is no temporal sequencing component, answer the question strictly using facts directly stated in the transcript.",
-                         "   - If the transcript contains the answer, write a concise but complete 1-sentence answer that mentions all directly relevant details, but stays below about 60 words max.",
-                         "   - If the transcript does NOT contain the answer, reply exactly \"ANSWER_NOT_FOUND\".",
-                         "   - Only provide a straight answer, do not elaborate reasoning within the response."
+                          "   - If the transcript contains the answer, answer the question using the facts directly stated in the transcript. Follow any style rules, detailed formatting preferences, or instructions indicated in the question context.",
+                          "   - If the transcript does NOT contain the answer, reply exactly \"ANSWER_NOT_FOUND\"."
                          ],
   "simple_temporal_retrieval": ["You will be provided with a conversation transcript and a question.",
                                 "First, inside <thinking>...</thinking> tags, perform a step-by-step chronological analysis of the dialogue sequence.",
