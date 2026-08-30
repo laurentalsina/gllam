@@ -7,6 +7,7 @@ export STRONG_TEXT_SERVER="https://openrouter.ai/api/v1"
 export STRONG_LLM_MODEL="google/gemini-3.7-flash"
 
 # LLMs have by default two minutes to reply
+# set this to 0 for infinite (ie. LLM server's own timeout)
 export GLLAM_LLM_TIMEOUT=120
 
 # note: ensure any private IP address is protected by a VPN
