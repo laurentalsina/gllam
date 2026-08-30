@@ -56,6 +56,7 @@ type LLMClient struct {
 	BaseURL string
 	APIKey  string
 	Model   string
+	Tier    string // "strong", "fast", or "default"
 	client  *http.Client
 }
 
@@ -89,6 +90,7 @@ func NewLLMClient(baseURL string) *LLMClient {
 		BaseURL: baseURL,
 		APIKey:  apiKey,
 		Model:   model,
+		Tier:    "default",
 		client: &http.Client{
 			Transport: transport,
 			Timeout:   0, // Infinite timeout for long-running streaming inference
@@ -164,12 +166,18 @@ func (c *LLMClient) GenerateWithFormat(ctx context.Context, systemPrompt, userPr
 	if !cacheBypass {
 		db, dbErr = getCacheDB()
 		if dbErr == nil {
-			cacheKey = computeCacheKey(c.Model, systemPrompt, userPrompt, responseFormat)
+			cacheKey = computeCacheKey(systemPrompt, userPrompt, responseFormat)
 			var cachedResponse string
-			err := db.QueryRowContext(ctx, "SELECT response FROM prompt_cache WHERE key = ?", cacheKey).Scan(&cachedResponse)
+			var cachedTier string
+			err := db.QueryRowContext(ctx, "SELECT response, model_tier FROM prompt_cache WHERE key = ?", cacheKey).Scan(&cachedResponse, &cachedTier)
 			if err == nil {
-				// Cache hit!
-				return cachedResponse, nil
+				// Bypass cache if strong client is active but cached response is only from a fast client
+				isBypass := c.Tier == "strong" && cachedTier == "fast"
+				if !isBypass {
+					// Cache hit!
+					fmt.Printf("   ├─ [LLM CACHE HIT] model=%s tier=%s key=%s\n", c.Model, c.Tier, cacheKey)
+					return cachedResponse, nil
+				}
 			}
 		}
 	}
@@ -181,7 +189,7 @@ func (c *LLMClient) GenerateWithFormat(ctx context.Context, systemPrompt, userPr
 
 	if !cacheBypass && dbErr == nil && cacheKey != "" && content != "" {
 		now := time.Now().UTC().Format(time.RFC3339)
-		_, _ = db.ExecContext(ctx, "INSERT OR REPLACE INTO prompt_cache (key, response, created_at) VALUES (?, ?, ?)", cacheKey, content, now)
+		_, _ = db.ExecContext(ctx, "INSERT OR REPLACE INTO prompt_cache (key, response, model_tier, created_at) VALUES (?, ?, ?, ?)", cacheKey, content, c.Tier, now)
 	}
 
 	return content, nil
@@ -425,6 +433,7 @@ func getCacheDB() (*sql.DB, error) {
 			CREATE TABLE IF NOT EXISTS prompt_cache (
 				key TEXT PRIMARY KEY,
 				response TEXT NOT NULL,
+				model_tier TEXT NOT NULL DEFAULT 'default',
 				created_at TEXT NOT NULL
 			);
 		`
@@ -440,10 +449,8 @@ func getCacheDB() (*sql.DB, error) {
 	return cacheDB, cacheDBErr
 }
 
-func computeCacheKey(model string, systemPrompt string, userPrompt string, responseFormat map[string]interface{}) string {
+func computeCacheKey(systemPrompt string, userPrompt string, responseFormat map[string]interface{}) string {
 	h := sha256.New()
-	h.Write([]byte(model))
-	h.Write([]byte("|"))
 	h.Write([]byte(systemPrompt))
 	h.Write([]byte("|"))
 	h.Write([]byte(userPrompt))

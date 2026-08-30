@@ -366,16 +366,19 @@ func main() {
 	var strongClient *engine.LLMClient
 	if strongServerEnv != "" {
 		strongClient = engine.NewLLMClientWithKey(strongServerEnv, "", strongModelEnv)
+		strongClient.Tier = "strong"
 	}
 
 	var fastClient *engine.LLMClient
 	if fastServerEnv != "" {
 		fastClient = engine.NewLLMClientWithKey(fastServerEnv, "", fastModelEnv)
+		fastClient.Tier = "fast"
 	}
 
 	var defaultClient *engine.LLMClient
 	if strongClient == nil && fastClient == nil {
 		defaultClient = engine.NewLLMClient(*textServer)
+		defaultClient.Tier = "default"
 	}
 
 	sigChan := make(chan os.Signal, 1)

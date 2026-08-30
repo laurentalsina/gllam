@@ -106,16 +106,19 @@ func main() {
 		var strongClient *engine.LLMClient
 		if strongServerEnv != "" {
 			strongClient = engine.NewLLMClientWithKey(strongServerEnv, "", strongModelEnv)
+			strongClient.Tier = "strong"
 		}
 
 		var fastClient *engine.LLMClient
 		if fastServerEnv != "" {
 			fastClient = engine.NewLLMClientWithKey(fastServerEnv, "", fastModelEnv)
+			fastClient.Tier = "fast"
 		}
 
 		var defaultClient *engine.LLMClient
 		if strongClient == nil && fastClient == nil {
 			defaultClient = engine.NewLLMClient(*textServer)
+			defaultClient.Tier = "default"
 		}
 		
 		// Optional: prepend conversation ID to query to help disambiguate cross-conversation leakage
