@@ -4,13 +4,18 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -149,8 +154,40 @@ func (c *LLMClient) adaptResponseFormat(original map[string]interface{}) map[str
 	return original
 }
 
-// GenerateWithFormat sends a completion request with an optional constrained response_format schema
+// GenerateWithFormat sends a completion request with an optional constrained response_format schema, using cache if enabled
 func (c *LLMClient) GenerateWithFormat(ctx context.Context, systemPrompt, userPrompt string, responseFormat map[string]interface{}) (string, error) {
+	cacheBypass := os.Getenv("GLLAM_BYPASS_CACHE") == "true" || os.Getenv("GLLAM_DISABLE_CACHE") == "true"
+	var cacheKey string
+	var db *sql.DB
+	var dbErr error
+
+	if !cacheBypass {
+		db, dbErr = getCacheDB()
+		if dbErr == nil {
+			cacheKey = computeCacheKey(c.Model, systemPrompt, userPrompt, responseFormat)
+			var cachedResponse string
+			err := db.QueryRowContext(ctx, "SELECT response FROM prompt_cache WHERE key = ?", cacheKey).Scan(&cachedResponse)
+			if err == nil {
+				// Cache hit!
+				return cachedResponse, nil
+			}
+		}
+	}
+
+	content, err := c.generateWithFormatNoCache(ctx, systemPrompt, userPrompt, responseFormat)
+	if err != nil {
+		return "", err
+	}
+
+	if !cacheBypass && dbErr == nil && cacheKey != "" && content != "" {
+		now := time.Now().UTC().Format(time.RFC3339)
+		_, _ = db.ExecContext(ctx, "INSERT OR REPLACE INTO prompt_cache (key, response, created_at) VALUES (?, ?, ?)", cacheKey, content, now)
+	}
+
+	return content, nil
+}
+
+func (c *LLMClient) generateWithFormatNoCache(ctx context.Context, systemPrompt, userPrompt string, responseFormat map[string]interface{}) (string, error) {
 	url := c.resolveChatURL()
 
 	// If response format is provided, perform a non-streaming constrained request
@@ -347,4 +384,73 @@ func (c *LLMClient) GenerateWithFormat(ctx context.Context, systemPrompt, userPr
 	}
 
 	return resStr, nil
+}
+
+var (
+	cacheDB      *sql.DB
+	cacheOnce    sync.Once
+	cacheDBErr   error
+	cachePath    string
+)
+
+func getCacheDB() (*sql.DB, error) {
+	cacheOnce.Do(func() {
+		dir := os.Getenv("GLLAM_BENCH_DIR")
+		if dir == "" {
+			dir = "/home/laurent/Projects/gllam/bench"
+		}
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			cacheDBErr = err
+			return
+		}
+		cachePath = filepath.Join(dir, "gllam_prompt_cache.db")
+		db, err := sql.Open("sqlite3", cachePath)
+		if err != nil {
+			cacheDBErr = err
+			return
+		}
+		
+		pragmas := `
+			PRAGMA journal_mode = WAL;
+			PRAGMA synchronous = NORMAL;
+			PRAGMA busy_timeout = 30000;
+		`
+		if _, err := db.Exec(pragmas); err != nil {
+			db.Close()
+			cacheDBErr = err
+			return
+		}
+
+		createTable := `
+			CREATE TABLE IF NOT EXISTS prompt_cache (
+				key TEXT PRIMARY KEY,
+				response TEXT NOT NULL,
+				created_at TEXT NOT NULL
+			);
+		`
+		if _, err := db.Exec(createTable); err != nil {
+			db.Close()
+			cacheDBErr = err
+			return
+		}
+
+		cacheDB = db
+	})
+
+	return cacheDB, cacheDBErr
+}
+
+func computeCacheKey(model string, systemPrompt string, userPrompt string, responseFormat map[string]interface{}) string {
+	h := sha256.New()
+	h.Write([]byte(model))
+	h.Write([]byte("|"))
+	h.Write([]byte(systemPrompt))
+	h.Write([]byte("|"))
+	h.Write([]byte(userPrompt))
+	if responseFormat != nil {
+		h.Write([]byte("|"))
+		fmtBytes, _ := json.Marshal(responseFormat)
+		h.Write(fmtBytes)
+	}
+	return hex.EncodeToString(h.Sum(nil))
 }

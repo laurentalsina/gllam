@@ -24,10 +24,10 @@ GRADE_OUT="${RUN_LOG_DIR}/beam_final_grade_selective.txt"
 # Parse command line arguments
 CATEGORIES=""
 DEBUG_FLAG="false"
-BYPASS_SEMANTIC="true"
+BYPASS_SEMANTIC="false"
 BYPASS_TEMPORAL="false"
-PRUNE_CLUE_CHUNKS="false"
-DECOMPOSE_QUERY="false"
+PRUNE_CLUE_CHUNKS="true"
+DECOMPOSE_QUERY="true"
 
 while [[ "$#" -gt 0 ]]; do
     case $1 in

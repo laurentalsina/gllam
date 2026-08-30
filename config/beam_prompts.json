@@ -111,7 +111,7 @@
     "event_ordering": "## Event Ordering Guidelines\n- List the events in their exact chronological order of occurrence. List them sequentially (e.g. 1st, 2nd, 3rd...).",
     "summarization": "## Summarization Guidelines\n- Summarize how plans, decisions, budgets, and preferences evolved chronologically over time.",
     "abstention": "## Abstention Guidelines\n- If the context does not contain the answer, reply exactly: 'Based on the provided context, this is not mentioned.' Do not assume or extrapolate.",
-    "instruction_following": "## Instruction Following Guidelines\n- Pay strict attention to any style preferences, rules, formatting constraints, or instructions mentioned in the context and follow them in detail.",
+    "instruction_following": "## Instruction Following Guidelines\n- Pay strict attention to any style preferences, rules, formatting constraints, or instructions mentioned in the context and follow them in detail. Provide a detailed answer that justify its reasoning and details its steps.",
     "preference_following": "## Preference Following Guidelines\n- Pay strict attention to any style preferences, rules, formatting constraints, or instructions mentioned in the context and follow them in detail."
   },
   "temporal_reasoning_guidelines": [
