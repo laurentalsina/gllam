@@ -245,7 +245,7 @@ func main() {
 	if *runTimestampFlag != "" {
 		runTimestamp = *runTimestampFlag
 	}
-	runLogDir := fmt.Sprintf("./bench/beam/run_log_%s", runTimestamp)
+	runLogDir := fmt.Sprintf("./bench/beam/run_logs/%s", runTimestamp)
 	if err := os.MkdirAll(runLogDir, 0755); err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to create run log directory: %v\n", err)
 		os.Exit(1)

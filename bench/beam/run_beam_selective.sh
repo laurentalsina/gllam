@@ -16,7 +16,7 @@ DB_PATH="./bench/gllam_data_selective_beam.db"
 BEAM_CORPUS="/home/laurent/Projects/agentic_benchmarks/beam_100k_conversations.jsonl"
 BEAM_QA="/home/laurent/Projects/agentic_benchmarks/beam_100k_qa_sample50.jsonl"
 RUN_TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
-RUN_LOG_DIR="./bench/beam/run_log_${RUN_TIMESTAMP}"
+RUN_LOG_DIR="./bench/beam/run_logs/${RUN_TIMESTAMP}"
 mkdir -p "$RUN_LOG_DIR"
 OUT_RESULTS="${RUN_LOG_DIR}/beam_100k_results_selective.jsonl"
 GRADE_OUT="${RUN_LOG_DIR}/beam_final_grade_selective.txt"

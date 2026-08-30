@@ -1,9 +1,9 @@
-# Database files
+# sqlite Database files
 *.db
 *.db-shm
 *.db-wal
 
-# Dataset files
+# benchmark dataset files
 corpus_sessions.jsonl
 d7_qa.jsonl
 sbom_compliance_en.json
@@ -20,7 +20,7 @@ raw_embed.json
 bench/pddl_domains/
 bench/memarena/extraction_snapshot_*
 d7_qa_results_selective.jsonl
-bench/beam/run_log_*
+bench/beam/run_logs/
 
-# temp diff folder
+# temp folder, for diffs etc
 scratch/
