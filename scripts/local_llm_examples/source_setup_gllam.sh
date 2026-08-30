@@ -6,6 +6,9 @@ export DATABASE_PATH="/home/greta/Projects/gllam/bench/gllam_data.db"
 export STRONG_TEXT_SERVER="https://openrouter.ai/api/v1"
 export STRONG_LLM_MODEL="google/gemini-3.7-flash"
 
+# LLMs have by default two minutes to reply
+export GLLAM_LLM_TIMEOUT=120
+
 # note: ensure any private IP address is protected by a VPN
 export FAST_TEXT_SERVER="http://100.96.179.19:8888"
 export FAST_LLM_MODEL="local-server"

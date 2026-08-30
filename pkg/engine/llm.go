@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -218,7 +219,23 @@ func (c *LLMClient) generateWithFormatNoCache(ctx context.Context, systemPrompt,
 			return "", fmt.Errorf("failed to marshal request: %w", err)
 		}
 
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(payload))
+		timeoutSec := 120
+		if tStr := os.Getenv("GLLAM_LLM_TIMEOUT"); tStr != "" {
+			if parsed, err := strconv.Atoi(tStr); err == nil && parsed >= 0 {
+				timeoutSec = parsed
+			}
+		}
+
+		var reqCtx context.Context
+		var cancel context.CancelFunc
+		if timeoutSec > 0 {
+			reqCtx, cancel = context.WithTimeout(ctx, time.Duration(timeoutSec)*time.Second)
+			defer cancel()
+		} else {
+			reqCtx = ctx
+		}
+
+		req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, url, bytes.NewReader(payload))
 		if err != nil {
 			return "", fmt.Errorf("failed to create request: %w", err)
 		}
