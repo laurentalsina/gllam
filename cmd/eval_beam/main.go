@@ -98,7 +98,25 @@ func main() {
 
 		fmt.Printf("Evaluating [%s] Category: %s\n", qa.InstanceID, qa.Category)
 		
-		llmClient := engine.NewLLMClient(*textServer)
+		strongServerEnv := getEnv("STRONG_TEXT_SERVER", "")
+		strongModelEnv := getEnv("STRONG_LLM_MODEL", "")
+		fastServerEnv := getEnv("FAST_TEXT_SERVER", "")
+		fastModelEnv := getEnv("FAST_LLM_MODEL", "")
+
+		var strongClient *engine.LLMClient
+		if strongServerEnv != "" {
+			strongClient = engine.NewLLMClientWithKey(strongServerEnv, "", strongModelEnv)
+		}
+
+		var fastClient *engine.LLMClient
+		if fastServerEnv != "" {
+			fastClient = engine.NewLLMClientWithKey(fastServerEnv, "", fastModelEnv)
+		}
+
+		var defaultClient *engine.LLMClient
+		if strongClient == nil && fastClient == nil {
+			defaultClient = engine.NewLLMClient(*textServer)
+		}
 		
 		// Optional: prepend conversation ID to query to help disambiguate cross-conversation leakage
 		// though vector search should naturally prioritize exact semantic matches.
@@ -111,7 +129,7 @@ func main() {
 			answer = "ERROR"
 		} else {
 			prompt := engine.FormatSystemPrompt(compiled)
-			answer, err = llmClient.Generate(ctx, prompt, qa.Query)
+			answer, err = getClientForTask("BENCH_RESULT_EVALUATION", "STRONG_TEXT_SERVER", strongClient, fastClient, defaultClient).Generate(ctx, prompt, qa.Query)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Error generating answer for %s: %v\n", qa.InstanceID, err)
 				answer = "ERROR"
@@ -135,4 +153,23 @@ func main() {
 	}
 
 	fmt.Printf("Completed %d BEAM evaluations. Results saved to %s\n", count, *outPath)
+}
+
+func getClientForTask(taskName string, defaultTier string, strongClient, fastClient, defaultClient *engine.LLMClient) *engine.LLMClient {
+	tier := getEnv(taskName, defaultTier)
+	if tier == "STRONG_TEXT_SERVER" && strongClient != nil {
+		return strongClient
+	}
+	if tier == "FAST_TEXT_SERVER" && fastClient != nil {
+		return fastClient
+	}
+	
+	// Fallback to whichever client is configured
+	if strongClient != nil {
+		return strongClient
+	}
+	if fastClient != nil {
+		return fastClient
+	}
+	return defaultClient
 }

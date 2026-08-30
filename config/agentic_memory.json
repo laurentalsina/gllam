@@ -105,13 +105,18 @@
   },
 
 
-
-  "historical_context_prompt": "CORPUS HISTORICAL & DOMAIN CONTEXT:\nThe target document corpus contains multi-session transcripts, enterprise ticketing exports, and architectural specifications spanning system evolution. When evaluating temporal ordering or conflicting claims, prioritize verified post-migration architecture state over historical pre-migration discussion notes.",
+  "historical_context_prompt": "HISTORICAL & DOMAIN CONTEXT:\nThe target document corpus contains multi-session transcripts, enterprise ticketing exports, and architectural specifications spanning system evolution. When evaluating temporal ordering or conflicting claims, prioritize verified post-implementation architecture state over historical pre-implementation discussion notes.",
   "semantic_extraction_prompt": "SEMANTIC EXTRACTION DIRECTIVES:\nExtract grounded entities, caveated relationships, Allen temporal interval relations, turn-bound constraints, and epistemic origin nodes. Maintain strict entity ID fidelity.",
   "procedural_generalization_prompt": "PROCEDURAL KNOWLEDGE GENERALIZATION DIRECTIVES:\nIdentify repeated operational workflows and terminal command sequences across episodes. Abstract them into reusable procedural recipes with explicit trigger contexts and feedback rules.",
   "salience_query_prompt": "SALIENCE SCORING DIRECTIVES:\nPrioritize focal entities mentioned directly in the user query, their 1-hop semantic neighbors, and active temporal bounds relevant to the query window.",
   "custom_category_prompts": {
-    "enterprise_domain": "ENTERPRISE SPECIFIC OVERRIDE:\nJira Project PROD and GitHub repo main branch take absolute precedence over legacy Confluence exports."
+    "enterprise_domain": "ENTERPRISE SPECIFIC OVERRIDE:\nJira Project PROD and GitHub repo main branch take absolute precedence over legacy Confluence exports.",
+    "instruction_following": "INSTRUCTION FOLLOWING:\n- you MUST provide explicit details and justifications for your answer.\n- if asked about errors, you MUST mention error codes associated with each error.\n- If asked about materials or manufacturing, you MUST mention environmental impact.\n- If asked how to do something, you MUST describe multiple methods/approaches.\n- If asked for recommendations, you MUST include an explanation of determining characteristics and relevant details/context.",
+    "preference_following": "PREFERENCE FOLLOWING:\n- When suggesting tools, methods, or caching setups, prioritize simple, lightweight, in-memory, or vanilla options (such as localStorage, in-memory cache, or vanilla JS libraries like lazysizes) and explicitly avoid proposing complex databases, heavy frameworks, or large libraries.\n- If asked to organize tasks or appointments, suggest digital apps and explicitly avoid recommending physical organizers or paper planners.",
+    "temporal_reasoning": "TEMPORAL REASONING:\n- When calculating the days passed or duration between two events, compute the exact number of days.\n- You MUST explicitly state the exact dates of both events (e.g., 'Event A on March 10 and Event B on March 12') and state the date range using the format 'from [Date] till [Date]' (e.g., 'from March 10 till March 12'). Seek explicit confirmation that schedule changes have been confirmed, do not assume they automatically were agreed upon.",
+    "event_ordering": "EVENT ORDERING:\n- You MUST list events in their chronological order.\n- Number each item sequentially (e.g., (1), (2), etc.).\n- Strictly respect any requested count constraint, so 'Mention ONLY five items' means you must list exactly five items.",
+    "contradiction_resolution": "CONTRADICTION RESOLUTION:\n- You MUST explicitly point out contradictory or conflicting information in the transcripts.\n- Clearly state both conflicting statements or claims.\n- Conclude by identifying the cause of contradiction and proposing what is correct.",
+    "abstention": "ABSTENTION:\n- If the requested information is not mentioned or found in the context, you MUST reply exactly: 'There is no information related to [subject of the question]'. Do not confabulkate or extrapolate facts."
   },
   "temporal_reasoning_guidelines": [
     "## Temporal Reasoning Guidelines",

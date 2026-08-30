@@ -358,7 +358,25 @@ func main() {
 
 	scanner := bufio.NewScanner(qaFile)
 	count := 0
-	llmClient := engine.NewLLMClient(*textServer)
+	strongServerEnv := os.Getenv("STRONG_TEXT_SERVER")
+	strongModelEnv := os.Getenv("STRONG_LLM_MODEL")
+	fastServerEnv := os.Getenv("FAST_TEXT_SERVER")
+	fastModelEnv := os.Getenv("FAST_LLM_MODEL")
+
+	var strongClient *engine.LLMClient
+	if strongServerEnv != "" {
+		strongClient = engine.NewLLMClientWithKey(strongServerEnv, "", strongModelEnv)
+	}
+
+	var fastClient *engine.LLMClient
+	if fastServerEnv != "" {
+		fastClient = engine.NewLLMClientWithKey(fastServerEnv, "", fastModelEnv)
+	}
+
+	var defaultClient *engine.LLMClient
+	if strongClient == nil && fastClient == nil {
+		defaultClient = engine.NewLLMClient(*textServer)
+	}
 
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
@@ -468,7 +486,7 @@ func main() {
 		var subQueries []string
 		if *decomposeQueryFlag {
 			logTimestamp("query decomposition")
-			subQueries = decomposeQuery(ctx, llmClient, qa.Query)
+			subQueries = decomposeQuery(ctx, getClientForTask("QUERY_DECOMPOSITION", "STRONG_TEXT_SERVER", strongClient, fastClient, defaultClient), qa.Query)
 			logMain("   ├─ Decomposed query into sub-queries: %v\n", subQueries)
 			structuredLog.DecomposedQueries = subQueries
 		} else {
@@ -490,7 +508,7 @@ func main() {
 			} else {
 				logMain("   ├─ Retrieving top-%d matching paragraphs via TF-IDF for: %q...\n", *topKMatches, sq)
 			}
-			sqCandidates, sqTerms := retrieveCandidatesForQuery(ctx, sq, targetSpeakers, idx, embedder, gllam, *topKMatches, *useUtterancesVectors, *useTermsVectors, qa.ConversationID, llmClient)
+			sqCandidates, sqTerms := retrieveCandidatesForQuery(ctx, sq, targetSpeakers, idx, embedder, gllam, *topKMatches, *useUtterancesVectors, *useTermsVectors, qa.ConversationID, getClientForTask("SEARCH_CANDIDATES", "FAST_TEXT_SERVER", strongClient, fastClient, defaultClient))
 			
 			for _, term := range sqTerms {
 				termSeen := false
@@ -629,7 +647,7 @@ func main() {
 			logMain("   ├─ Attempting Direct QA first-pass...\n")
 			directSystemPrompt := gllam.SystemPrompts.DirectQAPrompt
 
-			directAnswer, err := tryDirectQA(ctx, llmClient, directSystemPrompt, transcriptText, qa.Query)
+			directAnswer, err := tryDirectQA(ctx, getClientForTask("ZERO_SHOT_ANSWER", "STRONG_TEXT_SERVER", strongClient, fastClient, defaultClient), directSystemPrompt, transcriptText, qa.Query)
 			directQADur := time.Since(tDirectQA0)
 			totalDirectQATime += directQADur
 			logMain("   ├─ [%s] [%v] First-pass Direct QA completed.\n", time.Now().Format("2006-01-02 15:04:05"), directQADur.Round(time.Millisecond))
@@ -688,7 +706,7 @@ func main() {
 				}
 				userPrompt := fmt.Sprintf("Question: %s\n\nTranscript:\n%s", qa.Query, transcriptText)
 
-				answer, err = llmClient.Generate(ctx, directPrompt, userPrompt)
+				answer, err = getClientForTask("FINAL_ANSWER", "STRONG_TEXT_SERVER", strongClient, fastClient, defaultClient).Generate(ctx, directPrompt, userPrompt)
 				var finalErrStr string
 				if err != nil {
 					answer = "ERROR"
@@ -728,7 +746,7 @@ func main() {
 						}
 					}
 				}
-				nodes, links, err := extractSemanticsForText(ctx, gllam, embedder, llmClient, transcriptText, extractionPrompt, schemaToUse, qa.ConversationID, &structuredLog.JITExtractions)
+				nodes, links, err := extractSemanticsForText(ctx, gllam, embedder, getClientForTask("SEMANTIC_EXTRACTION", "FAST_TEXT_SERVER", strongClient, fastClient, defaultClient), transcriptText, extractionPrompt, schemaToUse, qa.ConversationID, &structuredLog.JITExtractions)
 				extractDur := time.Since(tExtract0)
 				totalExtractionTime += extractDur
 				logMain("   ├─ [%s] [%v] JIT semantic extraction completed.\n", time.Now().Format("2006-01-02 15:04:05"), extractDur.Round(time.Millisecond))
@@ -767,7 +785,7 @@ func main() {
 					tGen0 := time.Now()
 					logTimestamp("Final QA Generation")
 					for attempt := 1; attempt <= 3; attempt++ {
-						answer, genErr = llmClient.Generate(ctx, prompt, userQuery)
+						answer, genErr = getClientForTask("FINAL_ANSWER", "STRONG_TEXT_SERVER", strongClient, fastClient, defaultClient).Generate(ctx, prompt, userQuery)
 						if genErr == nil && strings.TrimSpace(answer) != "" {
 							break
 						}
@@ -799,7 +817,7 @@ func main() {
 						}
 						fallbackUserQuery := fmt.Sprintf("Question: %s\n\nTranscript:\n%s", qa.Query, transcriptText)
 						
-						fallbackAnswer, fErr := llmClient.Generate(ctx, fallbackPrompt, fallbackUserQuery)
+						fallbackAnswer, fErr := getClientForTask("FALLBACK_ANSWER", "FAST_TEXT_SERVER", strongClient, fastClient, defaultClient).Generate(ctx, fallbackPrompt, fallbackUserQuery)
 						if fErr != nil {
 							finalErrStr = fErr.Error()
 							logMain("   ├─ ❌ Fallback direct generation failed: %v\n", fErr)
@@ -1787,9 +1805,10 @@ func filterTermsWithLLM(ctx context.Context, llmClient *engine.LLMClient, query 
 	}
 	
 	systemPrompt := `You are an information retrieval expert. Review the candidate search terms/phrases for relevance in text that answers the question.
-Filter out ONLY terms that are extremely generic (such as "some", "should", "check", "out", "call", "planned", "finish", "day", "many", "user", "assistant", "what", "how", "when", "days", "there", "between") because their presence in text does not make that text relevant.
-Retain all specific terms, synonyms, bigrams, or related concepts (such as book titles, names, locations, libraries, reading platforms, or specific actions) that are relevant to the subject matter of the question, even if those exact words are not present in the question.
-Output the filtered terms as a JSON array of strings. Do not include any explanations, bullet points, or markdown formatting (like code blocks). Just output the JSON array.`
+1. Filter out ONLY terms that are extremely generic (such as "some", "should", "check", "out", "call", "planned", "finish", "day", "many", "user", "assistant", "what", "how", "when", "days", "there", "between") because their presence in text does not make that text relevant.
+2. Retain all specific terms, synonyms, bigrams, or related concepts that are relevant to the subject matter of the question.
+3. Suggest 2-4 highly specific additional terms, synonyms, or related conceptual phrases (e.g. specific entity names, product brands, software platforms, or action verbs) inferred from the text of the question that would help retrieve the correct parts of the discussion to answer the question.
+Add these suggested terms to the final list. Output the combined terms as a JSON array of strings. Do not include any explanations, bullet points, or markdown formatting (like code blocks). Just output the JSON array.`
 
 	termsJSON, _ := json.Marshal(terms)
 	userPrompt := fmt.Sprintf("Question: %q\nCandidate Search Terms: %s\nFiltered Search Terms:", query, termsJSON)
@@ -1825,4 +1844,23 @@ Output the filtered terms as a JSON array of strings. Do not include any explana
 	}
 	
 	return terms
+}
+
+func getClientForTask(taskName string, defaultTier string, strongClient, fastClient, defaultClient *engine.LLMClient) *engine.LLMClient {
+	tier := getEnv(taskName, defaultTier)
+	if tier == "STRONG_TEXT_SERVER" && strongClient != nil {
+		return strongClient
+	}
+	if tier == "FAST_TEXT_SERVER" && fastClient != nil {
+		return fastClient
+	}
+	
+	// Fallback to whichever client is configured
+	if strongClient != nil {
+		return strongClient
+	}
+	if fastClient != nil {
+		return fastClient
+	}
+	return defaultClient
 }

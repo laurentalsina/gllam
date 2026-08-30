@@ -1,0 +1,21 @@
+export EMBEDDINGS_SERVER="http://127.0.0.1:8800"
+
+export OPENROUTER_API_KEY=sk-or-v1-42424242424242424242424242424242424242424242424242424242424
+export DATABASE_PATH="/home/greta/Projects/gllam/bench/gllam_data.db"
+
+export STRONG_TEXT_SERVER="https://openrouter.ai/api/v1"
+export STRONG_LLM_MODEL="google/gemini-3.7-flash"
+
+# note: ensure any private IP address is protected by a VPN
+export FAST_TEXT_SERVER="http://100.96.179.19:8888"
+export FAST_LLM_MODEL="local-server"
+
+# these settings are only recommendations
+export SEMANTIC_EXTRACTION=FAST_TEXT_SERVER
+export SEARCH_CANDIDATES=FAST_TEXT_SERVER
+export QUERY_DECOMPOSITION=STRONG_TEXT_SERVER
+export ZERO_SHOT_ANSWER=STRONG_TEXT_SERVER
+export FINAL_ANSWER=STRONG_TEXT_SERVER
+export FALLBACK_ANSWER=FAST_TEXT_SERVER
+
+export BENCH_RESULT_EVALUATION=STRONG_TEXT_SERVER
