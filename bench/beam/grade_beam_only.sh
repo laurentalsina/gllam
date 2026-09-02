@@ -8,7 +8,15 @@ export CGO_ENABLED=1
 export CGO_CFLAGS="-I/home/laurent/vllm/.venv/lib/python3.13/site-packages/_rocm_sdk_devel/lib/rocm_sysdeps/include"
 
 TEXT_SERVER="${TEXT_SERVER:-http://100.96.179.19:8888}"
-RESULTS_INPUT="${1:-./bench/beam/beam_100k_results_selective.jsonl}"
+# Resolve the default results input file using the latest run logs directory
+DEFAULT_RESULTS="./bench/beam/beam_100k_results_selective.jsonl"
+if [ -d "./bench/beam/run_logs" ]; then
+    LATEST_RUN_DIR=$(find ./bench/beam/run_logs -mindepth 1 -maxdepth 1 -type d | sort -r | head -n 1)
+    if [ ! -z "$LATEST_RUN_DIR" ]; then
+        DEFAULT_RESULTS="${LATEST_RUN_DIR}/beam_100k_results_selective.jsonl"
+    fi
+fi
+RESULTS_INPUT="${1:-$DEFAULT_RESULTS}"
 RESULTS_FILE="$RESULTS_INPUT"
 
 # Auto-resolve directories
