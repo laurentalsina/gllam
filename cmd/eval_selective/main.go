@@ -1136,7 +1136,7 @@ func extractSemanticsForText(ctx context.Context, gllam *engine.GllamEngine, emb
 func SanitizeLLMJSON(s string) string {
 	raw := []byte(s)
 	raw = bytes.ReplaceAll(raw, []byte{0xc2, 0xa0}, []byte(" "))
-	s = string(raw)
+	s = stripThinkingTags(string(raw))
 
 	s = strings.TrimSpace(s)
 	if idx := strings.Index(s, "```json"); idx != -1 {
@@ -1384,14 +1384,31 @@ func matchesAnySpeaker(speakerID string, targets []string) bool {
 }
 
 func stripThinkingTags(s string) string {
-	for {
-		start := strings.Index(s, "<thinking>")
-		end := strings.Index(s, "</thinking>")
-		if start != -1 && end != -1 && end > start {
-			s = s[:start] + s[end+11:]
-		} else {
-			break
+	tags := []struct{ open, close string }{
+		{"<think>", "</think>"},
+		{"<thinking>", "</thinking>"},
+		{"<THINK>", "</THINK>"},
+		{"<THINKING>", "</THINKING>"},
+	}
+	for _, t := range tags {
+		for {
+			start := strings.Index(s, t.open)
+			if start == -1 {
+				break
+			}
+			end := strings.Index(s[start:], t.close)
+			if end != -1 {
+				s = s[:start] + s[start+end+len(t.close):]
+			} else {
+				// Unclosed opening tag: remove everything from start onwards
+				s = s[:start]
+				break
+			}
 		}
+	}
+	// Clean up any orphan closing tags
+	for _, closeTag := range []string{"</think>", "</thinking>", "</THINK>", "</THINKING>"} {
+		s = strings.ReplaceAll(s, closeTag, "")
 	}
 	return strings.TrimSpace(s)
 }
@@ -1565,7 +1582,7 @@ func pruneIrrelevantChunks(ctx context.Context, text string, query string, searc
 func decomposeQuery(ctx context.Context, llmClient *engine.LLMClient, query string) []string {
 	systemPrompt := `You are an information retrieval expert. Your task is to decompose a complex, multi-hop user question into 2 or 3 distinct, simple search queries or points of focus (phrases or keywords) that must be retrieved from a dialogue database. 
 Focus strictly on the specific entities, events, dates, or actions mentioned. Do not include question words like "how many", "what", "when", or structural logic.
-Output each query on a new line. Do not add numbering or explanations.`
+Output each query on a new line. Do not add numbering, explanations, thinking tags, or introductory commentary.`
 
 	userPrompt := fmt.Sprintf("Question: %q\n\nSearch Queries:", query)
 	
@@ -1582,8 +1599,10 @@ Output each query on a new line. Do not add numbering or explanations.`
 		return []string{query} // Fallback to original query
 	}
 
+	cleaned := stripThinkingTags(response)
+
 	var subQueries []string
-	lines := strings.Split(response, "\n")
+	lines := strings.Split(cleaned, "\n")
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
 		trimmed = strings.TrimPrefix(trimmed, "- ")
@@ -1592,13 +1611,25 @@ Output each query on a new line. Do not add numbering or explanations.`
 			trimmed = trimmed[idx+2:]
 		}
 		trimmed = strings.TrimSpace(trimmed)
-		if len(trimmed) > 3 {
+		lower := strings.ToLower(trimmed)
+		if len(trimmed) > 3 &&
+			!strings.HasPrefix(lower, "<think") &&
+			!strings.HasPrefix(lower, "</think") &&
+			!strings.HasPrefix(lower, "<thinking") &&
+			!strings.HasPrefix(lower, "</thinking") &&
+			!strings.HasPrefix(trimmed, "```") &&
+			!strings.HasPrefix(lower, "search queries:") &&
+			!strings.HasPrefix(lower, "queries:") &&
+			!strings.HasPrefix(lower, "here are") {
 			subQueries = append(subQueries, trimmed)
 		}
 	}
 	
 	if len(subQueries) == 0 {
 		return []string{query}
+	}
+	if len(subQueries) > 4 {
+		subQueries = subQueries[:4]
 	}
 	return subQueries
 }
@@ -1833,12 +1864,22 @@ Add these suggested terms to the final list. Output the combined terms as a JSON
 	
 	// Parse JSON array
 	var filtered []string
-	cleanedResponse := strings.TrimSpace(response)
+	cleanedResponse := stripThinkingTags(response)
 	// Remove markdown code block wraps if present
-	cleanedResponse = strings.TrimPrefix(cleanedResponse, "```json")
-	cleanedResponse = strings.TrimPrefix(cleanedResponse, "```")
-	cleanedResponse = strings.TrimSuffix(cleanedResponse, "```")
+	if idx := strings.Index(cleanedResponse, "```json"); idx != -1 {
+		cleanedResponse = cleanedResponse[idx+7:]
+	} else if idx := strings.Index(cleanedResponse, "```"); idx != -1 {
+		cleanedResponse = cleanedResponse[idx+3:]
+	}
+	if idx := strings.LastIndex(cleanedResponse, "```"); idx != -1 {
+		cleanedResponse = cleanedResponse[:idx]
+	}
 	cleanedResponse = strings.TrimSpace(cleanedResponse)
+	if start := strings.Index(cleanedResponse, "["); start != -1 {
+		if end := strings.LastIndex(cleanedResponse, "]"); end != -1 && end > start {
+			cleanedResponse = cleanedResponse[start : end+1]
+		}
+	}
 	
 	if err := json.Unmarshal([]byte(cleanedResponse), &filtered); err == nil && len(filtered) > 0 {
 		origJSON, _ := json.Marshal(terms)
