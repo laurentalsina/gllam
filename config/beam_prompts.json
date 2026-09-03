@@ -40,20 +40,25 @@
   "direct_qa_prompt": [ "You will be provided with a conversation transcript and a question.",
                         "Your task is to:",
                         "First, inside <thinking>...</thinking> tags, perform a step-by-step analysis:",
-                        "  a. Determine if the question has a temporal sequencing/ordering component (e.g. asking whether an event happened 'before' or 'after' another, or requesting a specific chronological sequence/order of events).",
-                        "  b. If not temporal, verify if the provided transcript contains the direct answer to the question.",
+                        "  a. Determine if the question has a temporal sequencing, ordering, date offset, or duration calculation component (e.g. asking whether an event happened 'before' or 'after' another, calculating elapsed days/time between events, or requesting a specific chronological sequence/order of events).",
+                        "  b. Scan the transcript for any active user instructions, recurring preferences (e.g., 'Always do X', 'Never do Y'), or formatting rules that apply to answering this type of question.",
+                        "  c. If not temporal, verify if the provided transcript contains the direct answer to the question.",
                         "Then, outside the thinking tags, output ONLY one of the following:",
-                        "1. If the question has a temporal sequencing/ordering component, write exactly: TEMPORAL",
-                        "2. If it is not temporal and the transcript contains the answer, write the complete, detailed answer using the facts directly stated in the transcript (following any style rules, detailed formatting preferences, or instructions indicated in the question context).",
+                        "1. If the question has a temporal sequencing, ordering, date offset, or duration calculation component, write exactly: TEMPORAL",
+                        "2. If it is not temporal and the transcript contains the answer, write the complete, detailed answer using the facts directly stated in the transcript, strictly obeying any user instructions, style rules, or formatting preferences identified in the context.",
                         "3. If the transcript does not contain the answer, write exactly: ANSWER_NOT_FOUND"
                        ],
   "simple_temporal_retrieval": ["You will be provided with a conversation transcript and a question.",
-                                "First, inside <thinking>...</thinking> tags, perform a step-by-step chronological analysis of the dialogue sequence.",
- 				"Trace and note which line or quote relevant to the question came in what order and who said it.",
- 	                        "Answer the question strictly using facts directly stated in the transcript.",
+                                "First, inside <thinking>...</thinking> tags, perform a step-by-step chronological analysis of the dialogue sequence and events:",
+                                "  a. Identify the exact entities, events, or milestones referenced in the question. Distinguish clearly between distinct project/task phases (e.g., drafting deadline vs. revision completion target vs. final submission/filing date).",
+                                "  b. Check whether scheduled events or proposed reschedules were actually confirmed, or whether they encountered unresolved conflicts or cancellations. Do not assume unconfirmed proposals were finalized.",
+                                "  c. Trace and note which quote came in what order, who stated it, and the precise calendar dates.",
+                                "  d. If calculating days or durations between dates, calculate the exact difference step by step.",
+                                "Answer the question strictly using facts directly stated in the transcript.",
                                 "If the transcript does NOT allow answering, reply exactly \"ANSWER_NOT_FOUND\".",
                                 "Then, outside the thinking tags, write your final direct and concise answer."
                                ],
+
   "allow_user_grilling": true,
   "ingestion_steering_prompt": "INGESTION STEERING DIRECTIVES FOR MULTI-AUTHOR & VERSION HISTORY:\n1. Confluence / Wiki: Parse page revision history and author edit epochs into CompactedRevisionEpochs.\n2. Jira / Issue Trackers: Parse comment history, author provenance, and status transitions (Open -> Resolved).\n3. Git Repositories / PRs: Parse branch merge history, commit signatures, and PR review comments.\n4. Chat / Slack: Parse thread reply chains and author message timestamps.",
   "ingestion_steering_directives": {
@@ -107,13 +112,14 @@
   "procedural_generalization_prompt": "PROCEDURAL KNOWLEDGE GENERALIZATION DIRECTIVES:\nIdentify repeated operational workflows and terminal command sequences across episodes. Abstract them into reusable procedural recipes with explicit trigger contexts and feedback rules.",
   "salience_query_prompt": "SALIENCE SCORING DIRECTIVES:\nPrioritize focal entities mentioned directly in the user query, their 1-hop semantic neighbors, and active temporal bounds relevant to the query window.",
   "custom_category_prompts": {
-    "contradiction_resolution": "## Contradiction Resolution Guidelines\n- If there is conflicting or contradictory information in the context, you MUST explicitly state that contradictory information exists.\n- Clearly mention both conflicting sides of the statement from the context.\n- Ask the user to clarify which statement is correct.",
-    "knowledge_update": "## Knowledge Update Guidelines\n- Prioritize the latest/most recent updates or changes in plans, goals, or values. Provide the newest value as the active fact.",
-    "event_ordering": "## Event Ordering Guidelines\n- List the events in their exact chronological order of occurrence. List them sequentially (e.g. 1st, 2nd, 3rd...).",
-    "summarization": "## Summarization Guidelines\n- Summarize how plans, decisions, budgets, and preferences evolved chronologically over time.",
-    "abstention": "## Abstention Guidelines\n- If the context does not contain the answer, reply exactly: 'Based on the provided context, this is not mentioned.' Do not assume or extrapolate.",
-    "instruction_following": "## Instruction Following Guidelines\n- Pay strict attention to any style preferences, rules, formatting constraints, or instructions mentioned in the context and follow them in detail. Provide a detailed answer that justify its reasoning and details its steps.",
-    "preference_following": "## Preference Following Guidelines\n- Pay strict attention to any style preferences, rules, formatting constraints, or instructions mentioned in the context and follow them in detail."
+    "instruction_following": "INSTRUCTION FOLLOWING:\n- Actively scan the conversation context for standing user instructions, recurring rules, formatting directives, or negative constraints (e.g., 'Always do X', 'Never do Y', 'When recommending..., describe...').\n- Treat all past user-stated directives as strict, binding constraints when formulating your answer.\n- Provide a complete and justified answer: explain determining characteristics, contextual reasons, and key criteria rather than giving a bare or unsubstantiated response.",
+    "preference_following": "PREFERENCE FOLLOWING:\n- Actively honor persistent user preferences, favored tools, workflow styles, and formatting guidelines expressed throughout the dialogue history.\n- When walking through a process, explanation, or problem-solving task, break it down into clear, logical, sequential steps.",
+    "temporal_reasoning": "TEMPORAL REASONING:\n- Distinguish between distinct phases or milestones of an activity (e.g., initial draft completion vs. revision completion vs. final submission/filing date). Do not substitute a later submission target for an earlier revision milestone.\n- Distinguish inquiries about possible reschedules from confirmed events: if a meeting move was tentative or encountered an unresolved schedule conflict, use the confirmed date.\n- When calculating duration or elapsed days between two events, compute the exact calendar day difference (EndDate - StartDate = N days).\n- Explicitly state the exact dates of both events and the date range using the format 'from [Date] till [Date]'.",
+    "event_ordering": "EVENT ORDERING:\n- Speech-Act vs. Event-Date Ordering: When asked for the order in which topics or aspects were 'brought up', 'mentioned', or 'discussed', follow the chronological order of dialogue turns across sessions. When asked about real-world occurrences, order by the mentioned event dates.\n- Focus on the primary distinct milestones or topics discussed across conversations.\n- Number each item sequentially (e.g., 1), 2), 3)...) and strictly adhere to any requested count constraint (e.g., 'Mention ONLY five items' means list exactly five items).",
+    "knowledge_update": "KNOWLEDGE UPDATE:\n- Prioritize the latest, most recent updates or changes in plans, goals, contact info, budgets, or preferences.\n- Report the newest state as the active fact while noting what it superseded if relevant.",
+    "summarization": "SUMMARIZATION:\n- Synthesize how plans, decisions, budgets, or relationships evolved chronologically over time across sessions.\n- Highlight the starting state, key pivot points, and the final resolved state.",
+    "contradiction_resolution": "CONTRADICTION RESOLUTION:\n- You MUST explicitly point out contradictory or conflicting information in the transcripts.\n- Clearly state both conflicting statements or claims from the context.\n- Conclude by identifying the cause of contradiction and clarifying the correct or updated position.",
+    "abstention": "ABSTENTION:\n- If the requested information is not mentioned or found in the context, you MUST reply exactly: 'There is no information related to [subject of the question]'. Do not confabulate or extrapolate facts."
   },
   "temporal_reasoning_guidelines": [
     "## Temporal Reasoning Guidelines",
@@ -128,9 +134,9 @@
   ],
   "response_guidelines": [
     "## Response Guidelines",
+    "- Answer directly, concisely, and factually without conversational filler, unprompted background history, or speculative commentary.",
     "- Rely ONLY on facts and quotes explicitly stated in the provided GLLAM Context.",
-    "- If the context does not contain the answer, state 'Based on the provided context, this is not mentioned.' DO NOT invent or extrapolate facts.",
-    "- Be detailed and explanatory in your response: explain the reasons behind your answers, break down problems into sequential steps, and demonstrate your thorough understanding of the topics.",
-    "- Pay absolute attention to any user preferences, style guidelines, rules, formatting instructions, or constraints mentioned in the conversation history, and satisfy them in your response. For example, if a prior turn indicates you should explain genre characteristics, themes, or use a specific format, you MUST do so."
+    "- Fully satisfy all structural and explanatory requirements of the prompt and past conversational instructions (such as step-by-step mathematical/logical breakdowns, multi-item chronological lists, or requested explanations of characteristics).",
+    "- If the context does not contain the answer, state 'Based on the provided context, this is not mentioned.' DO NOT invent or extrapolate facts."
   ]
 }
