@@ -42,11 +42,11 @@
                         "First, inside <thinking>...</thinking> tags, perform a step-by-step analysis:",
                         "  a. Determine if the question has a temporal sequencing, ordering, date offset, or duration calculation component (e.g. asking whether an event happened 'before' or 'after' another, calculating elapsed days/time between events, or requesting a specific chronological sequence/order of events).",
                         "  b. Scan the transcript for any active user instructions, recurring preferences (e.g., 'Always do X', 'Never do Y'), or formatting rules that apply to answering this type of question.",
-                        "  c. If not temporal, verify if the provided transcript contains the direct answer to the question.",
+                        "  c. Strict Constraint Verification: Check whether ALL entities, conditions, qualifiers, dates, deadlines, and requirements specified in the question are directly mentioned and satisfied in the transcript. DO NOT relax, assume, or ignore any constraint (e.g., if asked about advice 'beyond a specific date' or 'under a specific condition', verify that the condition is explicitly present). NEVER substitute general advice or 'closest matches' if a specific qualifier in the question is absent or unmentioned.",
                         "Then, outside the thinking tags, output ONLY one of the following:",
                         "1. If the question has a temporal sequencing, ordering, date offset, or duration calculation component, write exactly: TEMPORAL",
-                        "2. If it is not temporal and the transcript contains the answer, write the complete, detailed answer using the facts directly stated in the transcript, strictly obeying any user instructions, style rules, or formatting preferences identified in the context.",
-                        "3. If the transcript does not contain the answer, write exactly: ANSWER_NOT_FOUND"
+                        "2. If it is not temporal and the transcript explicitly contains the answer satisfying ALL constraints of the question, write the complete, detailed answer using the facts directly stated in the transcript, strictly obeying any user instructions, style rules, or formatting preferences identified in the context.",
+                        "3. If the transcript does not contain the answer, or if any specific constraint, condition, or qualifier asked about in the question is not mentioned, write exactly: ANSWER_NOT_FOUND"
                        ],
   "simple_temporal_retrieval": ["You will be provided with a conversation transcript and a question.",
                                 "First, inside <thinking>...</thinking> tags, perform a step-by-step chronological analysis of the dialogue sequence and events:",
@@ -123,7 +123,7 @@
     "knowledge_update": "KNOWLEDGE UPDATE:\n- Prioritize the latest, most recent updates or changes in plans, goals, contact info, budgets, or preferences.\n- Report the newest state as the active fact while noting what it superseded if relevant.",
     "summarization": "SUMMARIZATION:\n- Synthesize how plans, decisions, budgets, or relationships evolved chronologically over time across sessions.\n- Highlight the starting state, key pivot points, and the final resolved state.",
     "contradiction_resolution": "CONTRADICTION RESOLUTION:\n- You MUST explicitly point out contradictory or conflicting information in the transcripts.\n- Clearly state both conflicting statements or claims from the context.\n- Conclude by identifying the cause of contradiction and clarifying the correct or updated position.",
-    "abstention": "ABSTENTION:\n- If the requested information is not mentioned or found in the context, you MUST reply exactly: 'There is no information related to [subject of the question]'. Do not confabulate or extrapolate facts."
+    "abstention": "ABSTENTION:\n- If the requested information, condition, or deadline is not mentioned or found in the context, you MUST reply: 'Based on the provided chat, there is no information related to [subject of the question]'. Do not confabulate, extrapolate facts, or offer tangential advice."
   },
   "temporal_reasoning_guidelines": [
     "## Temporal Reasoning Guidelines",
@@ -141,6 +141,6 @@
     "- Answer directly, concisely, and factually without conversational filler, unprompted background history, or speculative commentary.",
     "- Rely ONLY on facts and quotes explicitly stated in the provided GLLAM Context.",
     "- Fully satisfy all structural and explanatory requirements of the prompt and past conversational instructions (such as step-by-step mathematical/logical breakdowns, multi-item chronological lists, or requested explanations of characteristics).",
-    "- If the context does not contain the answer, state 'Based on the provided context, this is not mentioned.' DO NOT invent or extrapolate facts."
+    "- If the context does not contain the answer, or if a specific condition in the question is absent, state: 'Based on the provided chat, there is no information related to [subject of the question].' DO NOT invent, extrapolate facts, or offer closest-match substitutes."
   ]
 }

@@ -207,6 +207,30 @@ var nonExpandableTerms = map[string]bool{
     "key": true, "points": true, "conversation": true,
 }
 
+var metaRequestWords = map[string]bool{
+	// Recommendations & suggestions
+	"recommendation": true, "recommendations": true, "recommend": true, "recommended": true, "recommending": true, "recommenders": true,
+	"suggestion": true, "suggestions": true, "suggest": true, "suggested": true, "suggesting": true, "suggests": true,
+	// Advice & guidance
+	"advice": true, "advise": true, "advised": true, "advises": true, "advising": true,
+	"guidance": true, "guideline": true, "guidelines": true, "guide": true, "guides": true,
+	"tip": true, "tips": true, "feedback": true, "opinion": true, "opinions": true,
+	// Conversational request / prompt wrappers
+	"tell": true, "mention": true, "mentioned": true, "mentions": true, "mentioning": true,
+	"explain": true, "explained": true, "explaining": true, "explanation": true,
+	"discuss": true, "discussed": true, "discusses": true, "discussing": true, "discussion": true,
+	"walk": true, "help": true, "helpful": true, "helping": true, "helps": true,
+	"check": true, "checkout": true, "look": true, "looking": true, "find": true, "finding": true,
+	"give": true, "gives": true, "given": true, "giving": true, "know": true,
+	// Generic qualifiers & fillers
+	"specific": true, "specifically": true, "particular": true, "particularly": true,
+	"detail": true, "details": true, "detailed": true, "info": true, "information": true,
+	"good": true, "great": true, "best": true, "better": true,
+	"some": true, "any": true, "all": true, "few": true, "many": true,
+	"should": true, "would": true, "could": true, "can": true, "please": true,
+	"out": true, "up": true, "about": true,
+}
+
 func clearSemanticTables(ctx context.Context, db *sql.DB) {
 	_, _ = db.ExecContext(ctx, "DELETE FROM semantic_links")
 	_, _ = db.ExecContext(ctx, "DELETE FROM semantic_nodes")
@@ -490,7 +514,7 @@ func main() {
 		if *decomposeQueryFlag {
 			logTimestamp("query decomposition")
 			subQueries = decomposeQuery(ctx, getClientForTask("QUERY_DECOMPOSITION", "STRONG_TEXT_SERVER", strongClient, fastClient, defaultClient), qa.Query)
-			logMain("   ├─ Decomposed query into sub-queries: %v\n", subQueries)
+			logMain("   ├─ Decomposed query into sub-queries: %q\n", subQueries)
 			structuredLog.DecomposedQueries = subQueries
 		} else {
 			subQueries = []string{qa.Query}
@@ -649,6 +673,12 @@ func main() {
 			logTimestamp("first-pass Direct QA")
 			logMain("   ├─ Attempting Direct QA first-pass...\n")
 			directSystemPrompt := gllam.SystemPrompts.DirectQAPrompt
+			if gllam.SystemPrompts != nil && gllam.SystemPrompts.CustomCategoryPrompts != nil {
+				if catPrompt, ok := gllam.SystemPrompts.CustomCategoryPrompts[qa.Category]; ok && catPrompt != "" {
+					directSystemPrompt = directSystemPrompt + "\n\n" + catPrompt
+					logMain("   ├─ Appended category-specific guidelines to Direct QA for: %s\n", qa.Category)
+				}
+			}
 
 			directAnswer, err := tryDirectQA(ctx, getClientForTask("ZERO_SHOT_ANSWER", "STRONG_TEXT_SERVER", strongClient, fastClient, defaultClient), directSystemPrompt, transcriptText, qa.Query)
 			directQADur := time.Since(tDirectQA0)
@@ -1580,11 +1610,20 @@ func pruneIrrelevantChunks(ctx context.Context, text string, query string, searc
 }
 
 func decomposeQuery(ctx context.Context, llmClient *engine.LLMClient, query string) []string {
-	systemPrompt := `You are an information retrieval expert. Your task is to decompose a complex, multi-hop user question into 2 or 3 distinct, simple search queries or points of focus (phrases or keywords) that must be retrieved from a dialogue database. 
-Focus strictly on the specific entities, events, dates, or actions mentioned. Do not include question words like "how many", "what", "when", or structural logic.
-Output each query on a new line. Do not add numbering, explanations, thinking tags, or introductory commentary.`
+	systemPrompt := `You are an expert search specialist for conversational dialogue databases.
+Your task is to identify 1 to 3 distinct search focus queries targeting the ACTUAL DIALOGUE PASSAGES THAT CONTAIN THE ANSWER.
 
-	userPrompt := fmt.Sprintf("Question: %q\n\nSearch Queries:", query)
+Key Search Directives:
+1. Target Evidence, Not Request Framing:
+   - Identify the concrete subject matter, entities, events, dates, and actions that speakers in the conversation will use when discussing the answer.
+   - Strictly DO NOT include request meta-words such as "recommendations", "suggestions", "advice", "guidance", "feedback", "opinions", "check out", "tell me", "explain". People in dialogue do not label their speech with these request words!
+   - Examples:
+     - Question: "What are some good books I should check out?" -> Focus: "books reading novel author", "favorite book series" (NOT "book recommendations").
+     - Question: "What specific advice did Jake give me about documenting prototype tests beyond the April 15 deadline?" -> Focus: "Jake prototype testing logbook", "April 15 deadline prototype" (NOT "Jake advice").
+2. Multi-hop decomposition: If the question compares two events, milestones, or people, create a separate focus line for each distinct event/entity.
+3. Output each search focus query on a new line. Do not add numbering, bullet points, thinking tags, or introductory commentary.`
+
+	userPrompt := fmt.Sprintf("Question: %q\n\nSearch Focus Queries:", query)
 	
 	var response string
 	var err error
@@ -1629,39 +1668,74 @@ Output each query on a new line. Do not add numbering, explanations, thinking ta
 		return []string{query}
 	}
 	if len(subQueries) > 4 {
-		subQueries = subQueries[:4]
+	subQueries = subQueries[:4]
 	}
 	return subQueries
 }
 
+func isCleanNaturalWord(w string) bool {
+	if len(w) < 3 || len(w) > 20 {
+		return false
+	}
+	for _, r := range w {
+		if r < 'a' || r > 'z' {
+			return false
+		}
+	}
+	// Filter out common code suffixes/substrings
+	codeSuffixes := []string{"file", "list", "func", "test", "null", "elem", "var", "pkg", "const", "spec", "stmt"}
+	for _, suf := range codeSuffixes {
+		if strings.HasSuffix(w, suf) && len(w) > len(suf)+2 {
+			return false
+		}
+	}
+	return true
+}
+
+func isCleanPhrase(phrase string) bool {
+	parts := strings.Fields(phrase)
+	if len(parts) < 2 || len(parts) > 3 {
+		return false
+	}
+	for _, p := range parts {
+		if !isCleanNaturalWord(p) || metaRequestWords[p] || stopWords[p] {
+			return false
+		}
+	}
+	return true
+}
+
 func retrieveCandidatesForQuery(ctx context.Context, query string, targetSpeakers []string, idx *engine.InvertedIndex, embedder engine.Embedder, gllam *engine.GllamEngine, topK int, useUtterancesVectors, useTermsVectors bool, conversationID string, llmClient *engine.LLMClient) ([]string, []string) {
-	var searchTerms []string
+	var unigramTerms []string
+	var bigramPhrases []string
+
 	queryTokens := engine.Tokenize(query)
-	seenTerms := make(map[string]bool)
+	seenUnigrams := make(map[string]bool)
 	for _, tok := range queryTokens {
-		if !stopWords[tok] && !seenTerms[tok] {
-			seenTerms[tok] = true
-			searchTerms = append(searchTerms, tok)
+		if len(tok) > 1 && !stopWords[tok] && !metaRequestWords[tok] && !seenUnigrams[tok] {
+			seenUnigrams[tok] = true
+			unigramTerms = append(unigramTerms, tok)
 		}
 	}
 
-	// Add adjacent non-stopword bigrams (e.g. "cover letter", "zoom call")
+	// Add adjacent non-stopword bigrams (e.g. "cover letter", "zoom call", "prototype tests")
+	seenBigrams := make(map[string]bool)
 	for i := 0; i < len(queryTokens)-1; i++ {
 		tok1 := queryTokens[i]
 		tok2 := queryTokens[i+1]
-		if !stopWords[tok1] && !stopWords[tok2] {
+		if len(tok1) > 1 && len(tok2) > 1 && !stopWords[tok1] && !metaRequestWords[tok1] && !stopWords[tok2] && !metaRequestWords[tok2] {
 			bigram := tok1 + " " + tok2
-			if !seenTerms[bigram] {
-				seenTerms[bigram] = true
-				searchTerms = append(searchTerms, bigram)
+			if !seenBigrams[bigram] {
+				seenBigrams[bigram] = true
+				bigramPhrases = append(bigramPhrases, bigram)
 			}
 		}
 	}
 
 	if useTermsVectors {
 		var expandedTerms []string
-		for _, term := range searchTerms {
-			if nonExpandableTerms[term] {
+		for _, term := range unigramTerms {
+			if nonExpandableTerms[term] || metaRequestWords[term] {
 				continue
 			}
 			tEmb, err := embedder.Embed(ctx, term)
@@ -1671,20 +1745,29 @@ func retrieveCandidatesForQuery(ctx context.Context, query string, targetSpeaker
 			similar, err := gllam.SearchSimilarTerms(ctx, tEmb, 4)
 			if err == nil {
 				for _, sim := range similar {
-					expandedTerms = append(expandedTerms, sim.Term)
+					if isCleanNaturalWord(sim.Term) && !metaRequestWords[sim.Term] && !stopWords[sim.Term] && len(idx.Postings[sim.Term]) >= 2 {
+						expandedTerms = append(expandedTerms, sim.Term)
+					}
 				}
 			}
 		}
 		for _, t := range expandedTerms {
-			if !seenTerms[t] {
-				seenTerms[t] = true
-				searchTerms = append(searchTerms, t)
+			if !seenUnigrams[t] {
+				seenUnigrams[t] = true
+				unigramTerms = append(unigramTerms, t)
 			}
 		}
 	}
 
 	if llmClient != nil {
-		searchTerms = filterTermsWithLLM(ctx, llmClient, query, searchTerms)
+		var combinedCandidates []string
+		combinedCandidates = append(combinedCandidates, unigramTerms...)
+		combinedCandidates = append(combinedCandidates, bigramPhrases...)
+		llmUnigrams, llmPhrases := filterTermsWithLLM(ctx, llmClient, query, combinedCandidates)
+		if len(llmUnigrams) > 0 || len(llmPhrases) > 0 {
+			unigramTerms = llmUnigrams
+			bigramPhrases = llmPhrases
+		}
 	}
 
 	// Build map of allowed session IDs belonging to this conversationID
@@ -1697,10 +1780,10 @@ func retrieveCandidatesForQuery(ctx context.Context, query string, targetSpeaker
 	}
 
 	if useUtterancesVectors {
-		// 1. TF-IDF scoring
+		// 1. TF-IDF scoring on unigrams
 		uttScores := make(map[string]float64)
 		totalUtterances := float64(len(idx.Utterances))
-		for _, term := range searchTerms {
+		for _, term := range unigramTerms {
 			postings, ok := idx.Postings[term]
 			if !ok {
 				continue
@@ -1714,6 +1797,17 @@ func retrieveCandidatesForQuery(ctx context.Context, query string, targetSpeaker
 				u, ok := idx.Utterances[p.UtteranceID]
 				if ok && allowedSessions[u.SessionID] {
 					uttScores[p.UtteranceID] += float64(p.Frequency) * idf
+				}
+			}
+		}
+
+		// Exact phrase matching boost for bigrams / multi-word phrases
+		for _, phrase := range bigramPhrases {
+			phraseMatches := idx.PhraseSearch(phrase)
+			for _, uttID := range phraseMatches {
+				u, ok := idx.Utterances[uttID]
+				if ok && allowedSessions[u.SessionID] {
+					uttScores[uttID] += 15.0
 				}
 			}
 		}
@@ -1787,12 +1881,16 @@ func retrieveCandidatesForQuery(ctx context.Context, query string, targetSpeaker
 		for i := 0; i < len(rrfList) && i < topK; i++ {
 			candidates = append(candidates, rrfList[i].id)
 		}
-		return candidates, searchTerms
+
+		var combinedTerms []string
+		combinedTerms = append(combinedTerms, unigramTerms...)
+		combinedTerms = append(combinedTerms, bigramPhrases...)
+		return candidates, combinedTerms
 	} else {
 		// Only TF-IDF
 		uttScores := make(map[string]float64)
 		totalUtterances := float64(len(idx.Utterances))
-		for _, term := range searchTerms {
+		for _, term := range unigramTerms {
 			postings, ok := idx.Postings[term]
 			if !ok {
 				continue
@@ -1814,6 +1912,21 @@ func retrieveCandidatesForQuery(ctx context.Context, query string, targetSpeaker
 			}
 		}
 
+		// Exact phrase matching boost for bigrams / multi-word phrases
+		for _, phrase := range bigramPhrases {
+			phraseMatches := idx.PhraseSearch(phrase)
+			for _, uttID := range phraseMatches {
+				u, ok := idx.Utterances[uttID]
+				if ok && allowedSessions[u.SessionID] {
+					score := 15.0
+					if matchesAnySpeaker(u.SpeakerID, targetSpeakers) {
+						score *= 10.0
+					}
+					uttScores[uttID] += score
+				}
+			}
+		}
+
 		type scoreEntry struct {
 			id    string
 			score float64
@@ -1830,23 +1943,43 @@ func retrieveCandidatesForQuery(ctx context.Context, query string, targetSpeaker
 		for i := 0; i < len(scoredList) && i < topK; i++ {
 			candidates = append(candidates, scoredList[i].id)
 		}
-		return candidates, searchTerms
+
+		var combinedTerms []string
+		combinedTerms = append(combinedTerms, unigramTerms...)
+		combinedTerms = append(combinedTerms, bigramPhrases...)
+		return candidates, combinedTerms
 	}
 }
 
-func filterTermsWithLLM(ctx context.Context, llmClient *engine.LLMClient, query string, terms []string) []string {
-	if len(terms) == 0 {
-		return terms
+func filterTermsWithLLM(ctx context.Context, llmClient *engine.LLMClient, query string, candidateTerms []string) ([]string, []string) {
+	if len(candidateTerms) == 0 && strings.TrimSpace(query) == "" {
+		return candidateTerms, nil
 	}
 	
-	systemPrompt := `You are an information retrieval expert. Review the candidate search terms/phrases for relevance in text that answers the question.
-1. Filter out ONLY terms that are extremely generic (such as "some", "should", "check", "out", "call", "planned", "finish", "day", "many", "user", "assistant", "what", "how", "when", "days", "there", "between") because their presence in text does not make that text relevant.
-2. Retain all specific terms, synonyms, bigrams, or related concepts that are relevant to the subject matter of the question.
-3. Suggest 2-4 highly specific additional terms, synonyms, or related conceptual phrases (e.g. specific entity names, product brands, software platforms, or action verbs) inferred from the text of the question that would help retrieve the correct parts of the discussion to answer the question.
-Add these suggested terms to the final list. Output the combined terms as a JSON array of strings. Do not include any explanations, bullet points, or markdown formatting (like code blocks). Just output the JSON array.`
+	systemPrompt := `You are an expert search specialist for conversational dialogue retrieval.
+Your objective is to produce search terms (keywords and 2-word phrases) that will match dialogue utterances containing the ACTUAL FACTS, OPINIONS, or ANSWERS, rather than turns that merely echo or re-ask the user question.
 
-	termsJSON, _ := json.Marshal(terms)
-	userPrompt := fmt.Sprintf("Question: %q\nCandidate Search Terms: %s\nFiltered Search Terms:", query, termsJSON)
+CRITICAL RETRIEVAL PRINCIPLES:
+1. FILTER OUT ALL REQUEST & META-INTENT VOCABULARY:
+   Speakers answering in dialogue discuss facts, entities, and opinions—they do NOT label their speech with request meta-words.
+   Strictly EXCLUDE:
+   - Request & meta-intent words: "recommendation", "recommendations", "recommend", "suggest", "suggestions", "suggestion", "advice", "advise", "tips", "feedback", "opinion", "guidance".
+   - Conversational wrappers: "check", "check out", "tell", "mention", "walk", "explain", "discuss", "help".
+   - Generic filler: "good", "best", "some", "specific", "details", "information".
+   - Programming artifacts or typos (e.g. "readfile", "suggestionlist", "ngood", "testdata").
+
+2. BROAD RETENTION OF RELEVANT EVIDENCE VOCABULARY:
+   DO NOT aggressively prune valid morphological variations, inflections, or related domain concepts.
+   Retain all relevant terms and inflections from the candidate list (e.g. read, reads, reading, reader; novel, novels, novella; book, books; love, loved, loving, beloved; series, sequence; genre, genres; library, bookstore).
+   Only prune terms that are genuinely off-topic, noisy/irrelevant stopwords, code artifacts, or request meta-words.
+
+3. COMPREHENSIVE ANSWER VOCABULARY EXPANSION:
+   Include both the valid candidate terms and additional likely answer vocabulary (e.g. domain entities, actions, synonyms, and attributes that answering speakers would use).
+   Aim for a rich, inclusive set of 15 to 30 relevant search terms and key 2-word phrases.
+   Output ONLY a JSON array of strings (e.g. ["term1", "term2", ...]). Do not include explanations, thinking tags, or markdown blocks.`
+
+	candJSON, _ := json.Marshal(candidateTerms)
+	userPrompt := fmt.Sprintf("User Question: %q\nCandidate Terms: %s\nTarget Answer Search Terms:", query, string(candJSON))
 	
 	var response string
 	var err error
@@ -1859,13 +1992,20 @@ Add these suggested terms to the final list. Output the combined terms as a JSON
 	}
 	
 	if err != nil {
-		return terms // Fallback to unfiltered terms on error
+		var fallbackUnigrams []string
+		var fallbackPhrases []string
+		for _, t := range candidateTerms {
+			if strings.Contains(t, " ") {
+				fallbackPhrases = append(fallbackPhrases, t)
+			} else {
+				fallbackUnigrams = append(fallbackUnigrams, t)
+			}
+		}
+		return fallbackUnigrams, fallbackPhrases
 	}
 	
-	// Parse JSON array
 	var filtered []string
 	cleanedResponse := stripThinkingTags(response)
-	// Remove markdown code block wraps if present
 	if idx := strings.Index(cleanedResponse, "```json"); idx != -1 {
 		cleanedResponse = cleanedResponse[idx+7:]
 	} else if idx := strings.Index(cleanedResponse, "```"); idx != -1 {
@@ -1881,14 +2021,48 @@ Add these suggested terms to the final list. Output the combined terms as a JSON
 		}
 	}
 	
+	var unigrams []string
+	var phrases []string
+	seenU := make(map[string]bool)
+	seenP := make(map[string]bool)
+
 	if err := json.Unmarshal([]byte(cleanedResponse), &filtered); err == nil && len(filtered) > 0 {
-		origJSON, _ := json.Marshal(terms)
-		filtJSON, _ := json.Marshal(filtered)
-		fmt.Printf("   ├─ LLM filtered search terms: original %d %s -> filtered %d %s\n", len(terms), string(origJSON), len(filtered), string(filtJSON))
-		return filtered
+		for _, ft := range filtered {
+			ft = strings.ToLower(strings.TrimSpace(ft))
+			if strings.Contains(ft, " ") {
+				if isCleanPhrase(ft) && !seenP[ft] {
+					seenP[ft] = true
+					phrases = append(phrases, ft)
+				}
+			} else {
+				if isCleanNaturalWord(ft) && !metaRequestWords[ft] && !stopWords[ft] && !seenU[ft] {
+					seenU[ft] = true
+					unigrams = append(unigrams, ft)
+				}
+			}
+		}
 	}
 	
-	return terms
+	if len(unigrams) > 0 || len(phrases) > 0 {
+		var allFilt []string
+		allFilt = append(allFilt, unigrams...)
+		allFilt = append(allFilt, phrases...)
+		origJSON, _ := json.Marshal(candidateTerms)
+		filtJSON, _ := json.Marshal(allFilt)
+		fmt.Printf("   ├─ LLM identified answer search terms: original %d %s -> answer terms %d %s\n", len(candidateTerms), string(origJSON), len(allFilt), string(filtJSON))
+		return unigrams, phrases
+	}
+	
+	var fallbackUnigrams []string
+	var fallbackPhrases []string
+	for _, t := range candidateTerms {
+		if strings.Contains(t, " ") {
+			fallbackPhrases = append(fallbackPhrases, t)
+		} else {
+			fallbackUnigrams = append(fallbackUnigrams, t)
+		}
+	}
+	return fallbackUnigrams, fallbackPhrases
 }
 
 func getClientForTask(taskName string, defaultTier string, strongClient, fastClient, defaultClient *engine.LLMClient) *engine.LLMClient {

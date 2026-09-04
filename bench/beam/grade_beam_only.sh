@@ -11,9 +11,19 @@ TEXT_SERVER="${TEXT_SERVER:-http://100.96.179.19:8888}"
 # Resolve the default results input file using the latest run logs directory
 DEFAULT_RESULTS="./bench/beam/beam_100k_results_selective.jsonl"
 if [ -d "./bench/beam/run_logs" ]; then
-    LATEST_RUN_DIR=$(find ./bench/beam/run_logs -mindepth 1 -maxdepth 1 -type d | sort -r | head -n 1)
+    LATEST_RUN_DIR=$(find ./bench/beam/run_logs -mindepth 1 -maxdepth 1 -type d | sed -E 's/(.*\/)(run_log_)?([0-9]{8}_[0-9]{6})/\3 \1\2\3/' | sort -r | awk '{print $2}' | while read -r d; do
+        if ls "$d"/*.jsonl >/dev/null 2>&1; then
+            echo "$d"
+            break
+        fi
+    done)
     if [ ! -z "$LATEST_RUN_DIR" ]; then
-        DEFAULT_RESULTS="${LATEST_RUN_DIR}/beam_100k_results_selective.jsonl"
+        JSONL_IN_DIR=$(find "$LATEST_RUN_DIR" -maxdepth 1 -name "beam_100k_results_selective.jsonl" -o -name "*.jsonl" | head -n 1)
+        if [ -f "$JSONL_IN_DIR" ]; then
+            DEFAULT_RESULTS="$JSONL_IN_DIR"
+        else
+            DEFAULT_RESULTS="${LATEST_RUN_DIR}/beam_100k_results_selective.jsonl"
+        fi
     fi
 fi
 RESULTS_INPUT="${1:-$DEFAULT_RESULTS}"
