@@ -193,18 +193,38 @@ var stopWords = map[string]bool{
 	"revisit": true, "earlier": true, "conversation": true, "you": true, "i": true, "he": true,
 	"she": true, "they": true, "we": true, "me": true, "him": true, "her": true, "us": true, "them": true,
 	"my": true, "myself": true, "your": true, "yours": true, "our": true, "ours": true, "their": true, "theirs": true, "its": true,
+	"down": true, "up": true, "out": true, "off": true, "over": true, "under": true,
+	"can": true, "cant": true, "cannot": true, "could": true, "would": true, "should": true, "will": true, "wont": true,
+	"shall": true, "may": true, "might": true, "must": true,
+	"put": true, "get": true, "got": true, "take": true, "took": true, "make": true, "made": true,
+	"go": true, "went": true, "come": true, "came": true, "see": true, "saw": true, "say": true, "said": true,
+	"let": true, "set": true, "also": true, "just": true, "now": true, "then": true, "even": true,
+	"more": true, "most": true, "less": true, "least": true, "back": true, "away": true, "again": true, "still": true, "yet": true, "already": true, "well": true,
 }
 
 var nonExpandableTerms = map[string]bool{
-    "you": true, "i": true, "he": true, "she": true, "they": true, "we": true, "me": true,
-    "him": true, "her": true, "us": true, "them": true, "myself": true, "your": true, "my": true,
-    "our": true, "their": true, "any": true, "some": true, "there": true, "here": true,
-    "this": true, "that": true, "these": true, "those": true,
-    "many": true, "both": true, "either": true, "about": true, "for": true, "to": true,
-    "with": true, "and": true, "or": true, "of": true, "it": true, "as": true, "an": true,
-    "a": true, "the": true, "who": true, "what": true, "where": true, "how": true, "why": true,
-    "which": true, "do": true, "does": true, "done": true,
-    "key": true, "points": true, "conversation": true,
+	"you": true, "i": true, "he": true, "she": true, "they": true, "we": true, "me": true,
+	"him": true, "her": true, "us": true, "them": true, "myself": true, "your": true, "my": true,
+	"our": true, "their": true, "any": true, "some": true, "there": true, "here": true,
+	"this": true, "that": true, "these": true, "those": true,
+	"many": true, "both": true, "either": true, "about": true, "for": true, "to": true,
+	"with": true, "and": true, "or": true, "of": true, "it": true, "as": true, "an": true,
+	"a": true, "the": true, "who": true, "what": true, "where": true, "how": true, "why": true,
+	"which": true, "do": true, "does": true, "done": true,
+	"key": true, "points": true, "conversation": true,
+	"put": true, "down": true, "up": true, "out": true, "off": true, "back": true, "away": true, "over": true, "under": true,
+	"get": true, "got": true, "take": true, "took": true, "make": true, "made": true,
+	"go": true, "went": true, "come": true, "came": true, "see": true, "saw": true, "say": true, "said": true,
+	"let": true, "set": true, "use": true, "used": true, "want": true, "wanted": true, "like": true, "liked": true,
+	"need": true, "needed": true, "give": true, "given": true, "gave": true, "find": true, "found": true,
+	"look": true, "looked": true, "keep": true, "kept": true, "turn": true, "turned": true,
+	"call": true, "called": true, "ask": true, "asked": true, "seem": true, "seemed": true,
+	"feel": true, "felt": true, "try": true, "tried": true, "start": true, "started": true, "stop": true, "stopped": true,
+	"work": true, "worked": true, "run": true, "ran": true,
+	"can": true, "cant": true, "cannot": true, "could": true, "would": true, "should": true, "will": true, "wont": true,
+	"may": true, "might": true, "must": true,
+	"also": true, "just": true, "now": true, "then": true, "even": true, "more": true, "most": true, "less": true, "least": true,
+	"again": true, "still": true, "yet": true, "already": true, "well": true,
 }
 
 var metaRequestWords = map[string]bool{
@@ -228,7 +248,7 @@ var metaRequestWords = map[string]bool{
 	"good": true, "great": true, "best": true, "better": true,
 	"some": true, "any": true, "all": true, "few": true, "many": true,
 	"should": true, "would": true, "could": true, "can": true, "please": true,
-	"out": true, "up": true, "about": true,
+	"out": true, "up": true, "down": true, "about": true,
 }
 
 func clearSemanticTables(ctx context.Context, db *sql.DB) {
@@ -2043,6 +2063,22 @@ CRITICAL RETRIEVAL PRINCIPLES:
 		}
 	}
 	
+	// Allow valid candidate terms to filter through as well (preserving domain vocabulary, inflections, and relevant bigrams)
+	for _, ct := range candidateTerms {
+		ct = strings.ToLower(strings.TrimSpace(ct))
+		if strings.Contains(ct, " ") {
+			if isCleanPhrase(ct) && !seenP[ct] {
+				seenP[ct] = true
+				phrases = append(phrases, ct)
+			}
+		} else {
+			if isCleanNaturalWord(ct) && !metaRequestWords[ct] && !stopWords[ct] && !nonExpandableTerms[ct] && len(ct) > 1 && !seenU[ct] {
+				seenU[ct] = true
+				unigrams = append(unigrams, ct)
+			}
+		}
+	}
+
 	if len(unigrams) > 0 || len(phrases) > 0 {
 		var allFilt []string
 		allFilt = append(allFilt, unigrams...)
