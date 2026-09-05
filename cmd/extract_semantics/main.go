@@ -85,6 +85,7 @@ func main() {
 
 	ctx := context.Background()
 	llmClient := engine.NewLLMClient(*textServer)
+	llmClient.Tier = "fast"
 
 	embedder := engine.NewLlamaEmbedder(*embeddingServer)
 	gllam, err := engine.NewGllamEngine(*dbPath, embedder)
@@ -576,7 +577,7 @@ func main() {
 		elapsed.Round(time.Second), grandTotalNodes, grandTotalLinks, len(episodes))
 }
 
-// SanitizeLLMJSON removes non-breaking spaces and extracts outermost JSON block
+// SanitizeLLMJSON removes non-breaking spaces, extracts JSON block, and auto-repairs truncated JSON
 func SanitizeLLMJSON(s string) string {
 	raw := []byte(s)
 	// Replace non-breaking spaces (\u00a0) with regular ASCII space
@@ -595,9 +596,85 @@ func SanitizeLLMJSON(s string) string {
 	s = strings.TrimSpace(s)
 
 	start := strings.Index(s, "{")
-	end := strings.LastIndex(s, "}")
-	if start != -1 && end != -1 && end > start {
-		s = s[start : end+1]
+	if start == -1 {
+		return s
 	}
-	return strings.TrimSpace(s)
+	end := strings.LastIndex(s, "}")
+	if end != -1 && end > start {
+		candidate := s[start : end+1]
+		var dummy interface{}
+		if json.Unmarshal([]byte(candidate), &dummy) == nil {
+			return candidate
+		}
+	}
+
+	// Truncated JSON recovery: attempt auto-repair by closing open strings and brackets
+	return repairTruncatedJSON(s[start:])
+}
+
+func repairTruncatedJSON(s string) string {
+	var dummy interface{}
+	if json.Unmarshal([]byte(s), &dummy) == nil {
+		return s
+	}
+
+	for i := len(s) - 1; i >= 0; i-- {
+		ch := s[i]
+		if ch == '}' || ch == ']' || ch == ',' {
+			candidate := s[:i]
+			if ch != ',' {
+				candidate = s[:i+1]
+			}
+
+			var stack []rune
+			inString := false
+			escaped := false
+			for _, r := range candidate {
+				if escaped {
+					escaped = false
+					continue
+				}
+				if r == '\\' {
+					escaped = true
+					continue
+				}
+				if r == '"' {
+					inString = !inString
+					continue
+				}
+				if inString {
+					continue
+				}
+				if r == '{' || r == '[' {
+					stack = append(stack, r)
+				} else if r == '}' {
+					if len(stack) > 0 && stack[len(stack)-1] == '{' {
+						stack = stack[:len(stack)-1]
+					}
+				} else if r == ']' {
+					if len(stack) > 0 && stack[len(stack)-1] == '[' {
+						stack = stack[:len(stack)-1]
+					}
+				}
+			}
+
+			if inString {
+				candidate += "\""
+			}
+
+			for j := len(stack) - 1; j >= 0; j-- {
+				if stack[j] == '{' {
+					candidate += "}"
+				} else if stack[j] == '[' {
+					candidate += "]"
+				}
+			}
+
+			if json.Unmarshal([]byte(candidate), &dummy) == nil {
+				return candidate
+			}
+		}
+	}
+
+	return s
 }

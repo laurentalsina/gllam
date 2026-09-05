@@ -125,6 +125,89 @@ func (c *LLMClient) resolveChatURL() string {
 	return url
 }
 
+// GetTimeout returns the configured timeout duration based on the client's Tier and environment variables
+func (c *LLMClient) GetTimeout() time.Duration {
+	// 1. Check tier-specific environment variables
+	if c.Tier == "strong" {
+		if tStr := os.Getenv("STRONG_MODEL_TIMEOUT"); tStr != "" {
+			if sec, err := strconv.Atoi(tStr); err == nil && sec > 0 {
+				return time.Duration(sec) * time.Second
+			}
+		}
+	} else if c.Tier == "fast" {
+		if tStr := os.Getenv("FAST_MODEL_TIMEOUT"); tStr != "" {
+			if sec, err := strconv.Atoi(tStr); err == nil && sec > 0 {
+				return time.Duration(sec) * time.Second
+			}
+		}
+	}
+
+	// 2. Global fallback environment variable
+	if tStr := os.Getenv("GLLAM_LLM_TIMEOUT"); tStr != "" {
+		if sec, err := strconv.Atoi(tStr); err == nil && sec > 0 {
+			return time.Duration(sec) * time.Second
+		}
+	}
+
+	// 3. Defaults based on tier
+	if c.Tier == "strong" {
+		return 180 * time.Second
+	} else if c.Tier == "fast" {
+		return 120 * time.Second
+	}
+
+	// Default tier: check both env variables if present
+	if tStr := os.Getenv("STRONG_MODEL_TIMEOUT"); tStr != "" {
+		if sec, err := strconv.Atoi(tStr); err == nil && sec > 0 {
+			return time.Duration(sec) * time.Second
+		}
+	}
+	if tStr := os.Getenv("FAST_MODEL_TIMEOUT"); tStr != "" {
+		if sec, err := strconv.Atoi(tStr); err == nil && sec > 0 {
+			return time.Duration(sec) * time.Second
+		}
+	}
+
+	return 180 * time.Second
+}
+
+// GetContextSize returns the configured context window token limit based on client Tier and environment variables
+func (c *LLMClient) GetContextSize() int {
+	if c.Tier == "strong" {
+		if cStr := os.Getenv("STRONG_MODEL_CONTEXT"); cStr != "" {
+			if tokens, err := strconv.Atoi(cStr); err == nil && tokens > 0 {
+				return tokens
+			}
+		}
+		return 131072
+	} else if c.Tier == "fast" {
+		if cStr := os.Getenv("FAST_MODEL_CONTEXT"); cStr != "" {
+			if tokens, err := strconv.Atoi(cStr); err == nil && tokens > 0 {
+				return tokens
+			}
+		}
+		return 65536
+	}
+
+	// Default tier
+	if cStr := os.Getenv("GLLAM_MODEL_CONTEXT"); cStr != "" {
+		if tokens, err := strconv.Atoi(cStr); err == nil && tokens > 0 {
+			return tokens
+		}
+	}
+	if cStr := os.Getenv("STRONG_MODEL_CONTEXT"); cStr != "" {
+		if tokens, err := strconv.Atoi(cStr); err == nil && tokens > 0 {
+			return tokens
+		}
+	}
+	if cStr := os.Getenv("FAST_MODEL_CONTEXT"); cStr != "" {
+		if tokens, err := strconv.Atoi(cStr); err == nil && tokens > 0 {
+			return tokens
+		}
+	}
+	return 65536
+}
+
 // Generate responds to a user prompt given a system prompt context
 func (c *LLMClient) Generate(ctx context.Context, systemPrompt, userPrompt string) (string, error) {
 	return c.GenerateWithFormat(ctx, systemPrompt, userPrompt, nil)
@@ -198,6 +281,18 @@ func (c *LLMClient) GenerateWithFormat(ctx context.Context, systemPrompt, userPr
 
 func (c *LLMClient) generateWithFormatNoCache(ctx context.Context, systemPrompt, userPrompt string, responseFormat map[string]interface{}) (string, error) {
 	url := c.resolveChatURL()
+	timeout := c.GetTimeout()
+	ctxSize := c.GetContextSize()
+
+	// Dynamically calculate maxTokens so prompt + maxTokens never exceeds context window
+	estimatedPromptTokens := (len(systemPrompt) + len(userPrompt)) / 3
+	maxTokens := 16384
+	if ctxSize > 0 && estimatedPromptTokens+maxTokens > ctxSize {
+		maxTokens = ctxSize - estimatedPromptTokens - 512
+		if maxTokens < 2048 {
+			maxTokens = 2048
+		}
+	}
 
 	// If response format is provided, perform a non-streaming constrained request
 	if responseFormat != nil {
@@ -210,7 +305,7 @@ func (c *LLMClient) generateWithFormatNoCache(ctx context.Context, systemPrompt,
 			ResponseFormat: c.adaptResponseFormat(responseFormat),
 			Temperature:    0.1,
 			Stream:         false,
-			MaxTokens:      16384,
+			MaxTokens:      maxTokens,
 			CachePrompt:    true,
 		}
 
@@ -219,17 +314,10 @@ func (c *LLMClient) generateWithFormatNoCache(ctx context.Context, systemPrompt,
 			return "", fmt.Errorf("failed to marshal request: %w", err)
 		}
 
-		timeoutSec := 120
-		if tStr := os.Getenv("GLLAM_LLM_TIMEOUT"); tStr != "" {
-			if parsed, err := strconv.Atoi(tStr); err == nil && parsed >= 0 {
-				timeoutSec = parsed
-			}
-		}
-
 		var reqCtx context.Context
 		var cancel context.CancelFunc
-		if timeoutSec > 0 {
-			reqCtx, cancel = context.WithTimeout(ctx, time.Duration(timeoutSec)*time.Second)
+		if timeout > 0 {
+			reqCtx, cancel = context.WithTimeout(ctx, timeout)
 			defer cancel()
 		} else {
 			reqCtx = ctx
@@ -283,7 +371,7 @@ func (c *LLMClient) generateWithFormatNoCache(ctx context.Context, systemPrompt,
 		},
 		Temperature: 0.1,
 		Stream:      true,
-		MaxTokens:   16384,
+		MaxTokens:   maxTokens,
 		CachePrompt: true,
 	}
 
@@ -294,10 +382,21 @@ func (c *LLMClient) generateWithFormatNoCache(ctx context.Context, systemPrompt,
 
 	var resp *http.Response
 	var lastErr error
+	var streamCancel context.CancelFunc
 
 	for attempt := 1; attempt <= 3; attempt++ {
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+		var reqCtx context.Context
+		if timeout > 0 {
+			reqCtx, streamCancel = context.WithTimeout(ctx, timeout)
+		} else {
+			reqCtx = ctx
+		}
+
+		req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, url, bytes.NewReader(body))
 		if err != nil {
+			if streamCancel != nil {
+				streamCancel()
+			}
 			return "", fmt.Errorf("failed to create request: %w", err)
 		}
 		req.Header.Set("Content-Type", "application/json")
@@ -311,10 +410,16 @@ func (c *LLMClient) generateWithFormatNoCache(ctx context.Context, systemPrompt,
 
 		resp, err = c.client.Do(req)
 		if err != nil {
+			if streamCancel != nil {
+				streamCancel()
+			}
 			lastErr = fmt.Errorf("LLM server unreachable at %s: %w", url, err)
 		} else if resp.StatusCode != http.StatusOK {
 			respBody, _ := io.ReadAll(resp.Body)
 			resp.Body.Close()
+			if streamCancel != nil {
+				streamCancel()
+			}
 			lastErr = fmt.Errorf("LLM server returned %d: %s", resp.StatusCode, string(respBody))
 		} else {
 			lastErr = nil
@@ -329,6 +434,11 @@ func (c *LLMClient) generateWithFormatNoCache(ctx context.Context, systemPrompt,
 	if lastErr != nil {
 		return "", lastErr
 	}
+	defer func() {
+		if streamCancel != nil {
+			streamCancel()
+		}
+	}()
 	defer resp.Body.Close()
 
 	scanner := bufio.NewScanner(resp.Body)
@@ -477,4 +587,105 @@ func computeCacheKey(systemPrompt string, userPrompt string, responseFormat map[
 		h.Write(fmtBytes)
 	}
 	return hex.EncodeToString(h.Sum(nil))
+}
+
+// SanitizeJSON cleans LLM markdown codeblocks, non-breaking spaces, and repairs truncated JSON
+func SanitizeJSON(s string) string {
+	raw := []byte(s)
+	raw = bytes.ReplaceAll(raw, []byte{0xc2, 0xa0}, []byte(" "))
+	s = string(raw)
+
+	s = strings.TrimSpace(s)
+	if idx := strings.Index(s, "```json"); idx != -1 {
+		s = s[idx+7:]
+	} else if idx := strings.Index(s, "```"); idx != -1 {
+		s = s[idx+3:]
+	}
+	if idx := strings.LastIndex(s, "```"); idx != -1 {
+		s = s[:idx]
+	}
+	s = strings.TrimSpace(s)
+
+	start := strings.Index(s, "{")
+	if start == -1 {
+		return s
+	}
+	end := strings.LastIndex(s, "}")
+	if end != -1 && end > start {
+		candidate := s[start : end+1]
+		var dummy interface{}
+		if json.Unmarshal([]byte(candidate), &dummy) == nil {
+			return candidate
+		}
+	}
+
+	return RepairTruncatedJSON(s[start:])
+}
+
+// RepairTruncatedJSON recovers partial JSON outputs that were truncated due to token or context limits
+func RepairTruncatedJSON(s string) string {
+	var dummy interface{}
+	if json.Unmarshal([]byte(s), &dummy) == nil {
+		return s
+	}
+
+	for i := len(s) - 1; i >= 0; i-- {
+		ch := s[i]
+		if ch == '}' || ch == ']' || ch == ',' {
+			candidate := s[:i]
+			if ch != ',' {
+				candidate = s[:i+1]
+			}
+
+			var stack []rune
+			inString := false
+			escaped := false
+			for _, r := range candidate {
+				if escaped {
+					escaped = false
+					continue
+				}
+				if r == '\\' {
+					escaped = true
+					continue
+				}
+				if r == '"' {
+					inString = !inString
+					continue
+				}
+				if inString {
+					continue
+				}
+				if r == '{' || r == '[' {
+					stack = append(stack, r)
+				} else if r == '}' {
+					if len(stack) > 0 && stack[len(stack)-1] == '{' {
+						stack = stack[:len(stack)-1]
+					}
+				} else if r == ']' {
+					if len(stack) > 0 && stack[len(stack)-1] == '[' {
+						stack = stack[:len(stack)-1]
+					}
+				}
+			}
+
+			if inString {
+				candidate += "\""
+			}
+
+			for j := len(stack) - 1; j >= 0; j-- {
+				if stack[j] == '{' {
+					candidate += "}"
+				} else if stack[j] == '[' {
+					candidate += "]"
+				}
+			}
+
+			if json.Unmarshal([]byte(candidate), &dummy) == nil {
+				return candidate
+			}
+		}
+	}
+
+	return s
 }

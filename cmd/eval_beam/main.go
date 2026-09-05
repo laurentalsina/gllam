@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/laurentalsina/gllam/pkg/engine"
 )
@@ -45,6 +46,8 @@ func main() {
 	textServer := flag.String("text-server", getEnv("TEXT_SERVER", "http://127.0.0.1:8888"), "LLM text server endpoint")
 	embeddingServer := flag.String("embeddings-server", getEnv("EMBEDDINGS_SERVER", "http://127.0.0.1:8800"), "Embeddings server endpoint")
 	promptsPath := flag.String("prompts-config", getEnv("PROMPTS_CONFIG", "config/agentic_memory.json"), "Path to agentic memory config and prompts")
+	categories := flag.String("categories", "", "Filter by category (comma-separated or single)")
+	instanceID := flag.String("instance-id", "", "Filter by specific instance_id (e.g. 8_temporal_reasoning_0)")
 	flag.Parse()
 
 	ctx := context.Background()
@@ -94,6 +97,23 @@ func main() {
 		if err := json.Unmarshal(line, &qa); err != nil {
 			fmt.Fprintf(os.Stderr, "Failed to parse JSON: %v\n", err)
 			continue
+		}
+
+		if *instanceID != "" && qa.InstanceID != *instanceID {
+			continue
+		}
+		if *categories != "" {
+			matched := false
+			for _, cat := range strings.Split(*categories, ",") {
+				cat = strings.TrimSpace(cat)
+				if cat == "all" || cat == qa.Category {
+					matched = true
+					break
+				}
+			}
+			if !matched {
+				continue
+			}
 		}
 
 		fmt.Printf("Evaluating [%s] Category: %s\n", qa.InstanceID, qa.Category)

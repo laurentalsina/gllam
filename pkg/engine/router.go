@@ -523,8 +523,8 @@ func FormatSystemPrompt(ctx *memory.CompiledContext) string {
         sb.WriteString("\n")
     }
 
-    // Episodic summaries & grounded dialogue evidence (budget capped to prevent context overflow)
-    maxBudget := 80000
+    // Episodic summaries & grounded dialogue evidence (budget capped dynamically from STRONG_MODEL_CONTEXT / FAST_MODEL_CONTEXT)
+    maxBudget := GetContextCharBudget()
     if len(ctx.Episodic) > 0 {
         hasGroundedEvidence := false
         for _, ep := range ctx.Episodic {
@@ -829,5 +829,32 @@ func (e *GllamEngine) extractGroundedEpisodesFromCreatedFrom(ctx context.Context
 	})
 
 	return groundedEpisodes
+}
+
+// GetContextCharBudget dynamically computes the character budget for context based on environment variables
+func GetContextCharBudget() int {
+	if bStr := os.Getenv("GLLAM_MAX_BUDGET"); bStr != "" {
+		if val, err := strconv.Atoi(bStr); err == nil && val > 0 {
+			return val
+		}
+	}
+	ctxTokens := 65536
+	if sStr := os.Getenv("STRONG_MODEL_CONTEXT"); sStr != "" {
+		if val, err := strconv.Atoi(sStr); err == nil && val > 0 {
+			ctxTokens = val
+		}
+	} else if fStr := os.Getenv("FAST_MODEL_CONTEXT"); fStr != "" {
+		if val, err := strconv.Atoi(fStr); err == nil && val > 0 {
+			ctxTokens = val
+		}
+	}
+	budget := int(float64(ctxTokens) * 3.2 * 0.6)
+	if budget < 50000 {
+		budget = 50000
+	}
+	if budget > 350000 {
+		budget = 350000
+	}
+	return budget
 }
 

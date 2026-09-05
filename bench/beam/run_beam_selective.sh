@@ -8,6 +8,12 @@ export CGO_ENABLED=1
 export CGO_CFLAGS="-I/home/laurent/vllm/.venv/lib/python3.13/site-packages/_rocm_sdk_devel/lib/rocm_sysdeps/include"
 export GLLAM_PLANNER_EXECUTABLE_PATH="/home/laurent/Projects/downward/fast-downward.py"
 
+# Model Context Window & Timeout Environment Variables
+export STRONG_MODEL_CONTEXT="${STRONG_MODEL_CONTEXT:-131072}"
+export FAST_MODEL_CONTEXT="${FAST_MODEL_CONTEXT:-65536}"
+export STRONG_MODEL_TIMEOUT="${STRONG_MODEL_TIMEOUT:-180}"
+export FAST_MODEL_TIMEOUT="${FAST_MODEL_TIMEOUT:-120}"
+
 # Configurable endpoints and files
 TEXT_SERVER="${TEXT_SERVER:-http://100.96.179.19:8888}"
 EMBEDDINGS_SERVER="${EMBEDDINGS_SERVER:-http://127.0.0.1:8800}"
