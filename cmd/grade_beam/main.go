@@ -13,18 +13,18 @@ import (
 )
 
 type BEAMResult struct {
+	Query        string   `json:"query"`
 	InstanceID   string   `json:"instance_id"`
 	Category     string   `json:"category"`
-	Query        string   `json:"query"`
 	ModelAnswer  string   `json:"model_answer"`
 	GroundTruth  string   `json:"ground_truth"`
 	Rubric       []string `json:"rubric"`
 }
 
 type EvaluationDetail struct {
+	Query       string   `json:"query"`
 	InstanceID  string   `json:"instance_id"`
 	Category    string   `json:"category"`
-	Query       string   `json:"query"`
 	ModelAnswer string   `json:"model_answer"`
 	GroundTruth string   `json:"ground_truth"`
 	Rubric      []string `json:"rubric"`
