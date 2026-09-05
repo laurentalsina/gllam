@@ -57,7 +57,7 @@ func main() {
 	prefix := flag.String("prefix", "sess_", "Prefix of episodic sessions to process")
 	qaPath := flag.String("qa-file", "", "Optional path to QA jsonl to extract target benchmark sessions")
 	sourceURI := flag.String("source-uri", "file://corpus_sessions.jsonl", "Base URI of the raw source data (e.g. file://corpus_sessions.jsonl or dataset://memarena)")
-	concurrency := flag.Int("concurrency", 4, "Number of concurrent LLM extraction workers")
+	concurrency := flag.Int("concurrency", 1, "Number of concurrent LLM extraction workers")
 	cleanSemantics := flag.Bool("clean", false, "Purge existing semantic data before extraction")
 	resumeExtraction := flag.Bool("resume", true, "Skip sessions that have already been extracted")
 	trialMode := flag.Bool("trial", false, "Trial run on 1 chunk without database modifications")
