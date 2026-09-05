@@ -22,9 +22,9 @@ type BEAMQAInstance struct {
 }
 
 type BEAMResult struct {
+	Query        string   `json:"query"`
 	InstanceID   string   `json:"instance_id"`
 	Category     string   `json:"category"`
-	Query        string   `json:"query"`
 	ModelAnswer  string   `json:"model_answer"`
 	GroundTruth  string   `json:"ground_truth"`
 	Rubric       []string `json:"rubric"`
@@ -132,6 +132,11 @@ func main() {
 			answer = "ERROR"
 		} else {
 			prompt := engine.FormatSystemPrompt(compiled)
+			if gllam.SystemPrompts != nil && gllam.SystemPrompts.CustomCategoryPrompts != nil {
+				if catPrompt, ok := gllam.SystemPrompts.CustomCategoryPrompts[qa.Category]; ok && catPrompt != "" {
+					prompt = prompt + "\n\n" + catPrompt
+				}
+			}
 			answer, err = getClientForTask("BENCH_RESULT_EVALUATION", "STRONG_TEXT_SERVER", strongClient, fastClient, defaultClient).Generate(ctx, prompt, qa.Query)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Error generating answer for %s: %v\n", qa.InstanceID, err)

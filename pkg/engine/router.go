@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -180,86 +182,92 @@ func (e *GllamEngine) RouteAndAssemble(ctx context.Context, userPrompt string, e
 
 
 
-    // Append relevant episodic summaries
-    var episodes []memory.EpisodicSummary
-    if e.embedder != nil {
-        eps, err := e.SearchSimilarEpisodes(ctx, userPrompt, 5)
-        if err == nil {
-            for _, ep := range eps {
-                if prefixFilter != "" && !strings.HasPrefix(ep.ID, prefixFilter) && !strings.HasPrefix(ep.SessionID, prefixFilter) {
-                    continue
-                }
-                episodes = append(episodes, ep)
-            }
-        }
+    // 3. Right-Sized Grounded Episodic Retrieval from Retrieved Nodes & Links (CreatedFrom)
+    groundedEpisodes := e.extractGroundedEpisodesFromCreatedFrom(ctx, ctxResult.SemanticNodes, ctxResult.SemanticLinks, prefixFilter)
+    if len(groundedEpisodes) > 0 {
+        ctxResult.Episodic = groundedEpisodes
     } else {
-        eps, err := e.GetRecentEpisodes(ctx, 5)
-        if err == nil {
-            for _, ep := range eps {
-                if prefixFilter != "" && !strings.HasPrefix(ep.ID, prefixFilter) && !strings.HasPrefix(ep.SessionID, prefixFilter) {
+        // Fallback: Append relevant episodic summaries when no chunked CreatedFrom references exist
+        var episodes []memory.EpisodicSummary
+        if e.embedder != nil {
+            eps, err := e.SearchSimilarEpisodes(ctx, userPrompt, 5)
+            if err == nil {
+                for _, ep := range eps {
+                    if prefixFilter != "" && !strings.HasPrefix(ep.ID, prefixFilter) && !strings.HasPrefix(ep.SessionID, prefixFilter) {
+                        continue
+                    }
+                    episodes = append(episodes, ep)
+                }
+            }
+        } else {
+            eps, err := e.GetRecentEpisodes(ctx, 5)
+            if err == nil {
+                for _, ep := range eps {
+                    if prefixFilter != "" && !strings.HasPrefix(ep.ID, prefixFilter) && !strings.HasPrefix(ep.SessionID, prefixFilter) {
+                        continue
+                    }
+                    episodes = append(episodes, ep)
+                }
+            }
+        }
+
+        // FTS5 / Keyword Corpus Back-Search Fallback (PLAN_missing_entity_corpus_fallback_and_trap_detection)
+        if len(ctxResult.SemanticNodes) < 25 || len(episodes) < 5 {
+            words := strings.Fields(userPrompt)
+            stopWords := map[string]bool{
+                "what": true, "does": true, "did": true, "before": true, "after": true, "is": true,
+                "the": true, "a": true, "an": true, "where": true, "why": true, "who": true, "how": true,
+                "mentioned": true, "say": true, "said": true, "about": true, "with": true, "to": true,
+                "mention": true, "type": true, "first": true, "second": true, "between": true, "from": true,
+                "and": true, "of": true, "in": true, "on": true, "at": true, "for": true, "or": true,
+                "many": true, "days": true, "passed": true, "when": true, "had": true, "have": true,
+                "some": true, "good": true, "should": true, "check": true, "out": true, "could": true,
+                "would": true, "will": true, "can": true, "then": true, "than": true, "more": true,
+                "better": true, "best": true, "are": true, "was": true, "were": true, "been": true,
+                "has": true, "into": true, "onto": true, "your": true, "my": true, "their": true,
+                "his": true, "her": true, "our": true, "they": true, "them": true, "him": true,
+                "she": true, "you": true, "me": true, "this": true, "that": true, "these": true,
+                "those": true, "there": true, "here": true, "any": true, "all": true,
+                "please": true, "help": true, "sure": true, "yes": true, "no": true, "not": true,
+                "but": true, "so": true, "very": true, "just": true, "like": true,
+            }
+            for _, rawW := range words {
+                w := strings.Trim(strings.ToLower(rawW), "?!.,'\":;")
+                if len(w) < 3 || stopWords[w] {
                     continue
                 }
-                episodes = append(episodes, ep)
-            }
-        }
-    }
-
-    // FTS5 / Keyword Corpus Back-Search Fallback (PLAN_missing_entity_corpus_fallback_and_trap_detection)
-    if len(ctxResult.SemanticNodes) < 25 || len(episodes) < 5 {
-        words := strings.Fields(userPrompt)
-        stopWords := map[string]bool{
-            "what": true, "does": true, "did": true, "before": true, "after": true, "is": true,
-            "the": true, "a": true, "an": true, "where": true, "why": true, "who": true, "how": true,
-            "mentioned": true, "say": true, "said": true, "about": true, "with": true, "to": true,
-            "mention": true, "type": true, "first": true, "second": true, "between": true, "from": true,
-            "and": true, "of": true, "in": true, "on": true, "at": true, "for": true, "or": true,
-            "many": true, "days": true, "passed": true, "when": true, "had": true, "have": true,
-            "some": true, "good": true, "should": true, "check": true, "out": true, "could": true,
-            "would": true, "will": true, "can": true, "then": true, "than": true, "more": true,
-            "better": true, "best": true, "are": true, "was": true, "were": true, "been": true,
-            "has": true, "into": true, "onto": true, "your": true, "my": true, "their": true,
-            "his": true, "her": true, "our": true, "they": true, "them": true, "him": true,
-            "she": true, "you": true, "me": true, "this": true, "that": true, "these": true,
-            "those": true, "there": true, "here": true, "any": true, "all": true,
-            "please": true, "help": true, "sure": true, "yes": true, "no": true, "not": true,
-            "but": true, "so": true, "very": true, "just": true, "like": true,
-        }
-        for _, rawW := range words {
-            w := strings.Trim(strings.ToLower(rawW), "?!.,'\":;")
-            if len(w) < 3 || stopWords[w] {
-                continue
-            }
-            var query string
-            var args []interface{}
-            if prefixFilter != "" {
-                query = `SELECT id, session_id, summary_text, created_at FROM episodic_summaries WHERE summary_text LIKE ? AND id LIKE ? ORDER BY created_at DESC LIMIT 5`
-                args = []interface{}{"%"+w+"%", prefixFilter+"%"}
-            } else {
-                query = `SELECT id, session_id, summary_text, created_at FROM episodic_summaries WHERE summary_text LIKE ? ORDER BY created_at DESC LIMIT 5`
-                args = []interface{}{"%"+w+"%"}
-            }
-            rows, err := e.dbRO.QueryContext(ctx, query, args...)
-            if err == nil {
-                for rows.Next() {
-                    var ep memory.EpisodicSummary
-                    if err := rows.Scan(&ep.ID, &ep.SessionID, &ep.SummaryText, scanTime(&ep.CreatedAt)); err == nil {
-                        isDup := false
-                        for _, existing := range episodes {
-                            if existing.ID == ep.ID {
-                                isDup = true
-                                break
+                var query string
+                var args []interface{}
+                if prefixFilter != "" {
+                    query = `SELECT id, session_id, summary_text, created_at FROM episodic_summaries WHERE summary_text LIKE ? AND id LIKE ? ORDER BY created_at DESC LIMIT 5`
+                    args = []interface{}{"%"+w+"%", prefixFilter+"%"}
+                } else {
+                    query = `SELECT id, session_id, summary_text, created_at FROM episodic_summaries WHERE summary_text LIKE ? ORDER BY created_at DESC LIMIT 5`
+                    args = []interface{}{"%"+w+"%"}
+                }
+                rows, err := e.dbRO.QueryContext(ctx, query, args...)
+                if err == nil {
+                    for rows.Next() {
+                        var ep memory.EpisodicSummary
+                        if err := rows.Scan(&ep.ID, &ep.SessionID, &ep.SummaryText, scanTime(&ep.CreatedAt)); err == nil {
+                            isDup := false
+                            for _, existing := range episodes {
+                                if existing.ID == ep.ID {
+                                    isDup = true
+                                    break
+                                }
+                            }
+                            if !isDup {
+                                episodes = append(episodes, ep)
                             }
                         }
-                        if !isDup {
-                            episodes = append(episodes, ep)
-                        }
                     }
+                    rows.Close()
                 }
-                rows.Close()
             }
         }
+        ctxResult.Episodic = episodes
     }
-    ctxResult.Episodic = episodes
 
     // 4. Internal Cognitive Procedures
     // Collect unique triggers based on what was retrieved
@@ -515,25 +523,51 @@ func FormatSystemPrompt(ctx *memory.CompiledContext) string {
         sb.WriteString("\n")
     }
 
-    // Episodic summaries (with dynamic budget capping under 120k characters to prevent 131,072 limit errors)
-    maxBudget := 120000
+    // Episodic summaries & grounded dialogue evidence (budget capped to prevent context overflow)
+    maxBudget := 80000
     if len(ctx.Episodic) > 0 {
-        sb.WriteString("## Recent Episodes\n\n")
+        hasGroundedEvidence := false
         for _, ep := range ctx.Episodic {
-            cleanedSummary := cleanTranscriptSAYArtifacts(ep.SummaryText)
-            formattedEpisode := fmt.Sprintf("- [%s] %s\n", ep.CreatedAt.Format(time.RFC3339), cleanedSummary)
-            if sb.Len() + len(formattedEpisode) > maxBudget {
-                remainingSpace := maxBudget - sb.Len()
-                if remainingSpace > 150 {
-                    sb.WriteString(fmt.Sprintf("- [%s] %s... [TRUNCATED DUE TO CONTEXT BUDGET LIMIT]\n", ep.CreatedAt.Format(time.RFC3339), cleanedSummary[:remainingSpace-150]))
-                } else {
-                    sb.WriteString("... [ADDITIONAL EPISODES TRUNCATED DUE TO CONTEXT BUDGET LIMIT]\n")
-                }
+            if strings.Contains(ep.ID, "#chunk-") || strings.Contains(ep.ID, "#line-") {
+                hasGroundedEvidence = true
                 break
             }
-            sb.WriteString(formattedEpisode)
         }
-        sb.WriteString("\n")
+
+        if hasGroundedEvidence {
+            sb.WriteString("## Grounded Dialogue & Episodic Evidence\n\n")
+            for _, ep := range ctx.Episodic {
+                cleanedSummary := cleanTranscriptSAYArtifacts(ep.SummaryText)
+                formattedEpisode := fmt.Sprintf("### Evidence [%s] (Reference: %s)\n%s\n\n", ep.CreatedAt.Format(time.RFC3339), ep.ID, cleanedSummary)
+                if sb.Len()+len(formattedEpisode) > maxBudget {
+                    remainingSpace := maxBudget - sb.Len()
+                    if remainingSpace > 150 {
+                        sb.WriteString(fmt.Sprintf("### Evidence [%s] (Reference: %s)... [TRUNCATED DUE TO CONTEXT BUDGET LIMIT]\n%s\n\n", ep.CreatedAt.Format(time.RFC3339), ep.ID, cleanedSummary[:remainingSpace-150]))
+                    } else {
+                        sb.WriteString("... [ADDITIONAL EVIDENCE TRUNCATED DUE TO CONTEXT BUDGET LIMIT]\n\n")
+                    }
+                    break
+                }
+                sb.WriteString(formattedEpisode)
+            }
+        } else {
+            sb.WriteString("## Recent Episodes\n\n")
+            for _, ep := range ctx.Episodic {
+                cleanedSummary := cleanTranscriptSAYArtifacts(ep.SummaryText)
+                formattedEpisode := fmt.Sprintf("- [%s] %s\n", ep.CreatedAt.Format(time.RFC3339), cleanedSummary)
+                if sb.Len()+len(formattedEpisode) > maxBudget {
+                    remainingSpace := maxBudget - sb.Len()
+                    if remainingSpace > 150 {
+                        sb.WriteString(fmt.Sprintf("- [%s] %s... [TRUNCATED DUE TO CONTEXT BUDGET LIMIT]\n", ep.CreatedAt.Format(time.RFC3339), cleanedSummary[:remainingSpace-150]))
+                    } else {
+                        sb.WriteString("... [ADDITIONAL EPISODES TRUNCATED DUE TO CONTEXT BUDGET LIMIT]\n")
+                    }
+                    break
+                }
+                sb.WriteString(formattedEpisode)
+            }
+            sb.WriteString("\n")
+        }
     }
 
     // PDDL Planner Output
@@ -684,3 +718,116 @@ func cleanTranscriptSAYArtifacts(text string) string {
 	}
 	return strings.Join(lines, "\n")
 }
+
+type groundedChunkRef struct {
+	sessionID string
+	chunkNum  int
+	refKey    string
+}
+
+// extractGroundedEpisodesFromCreatedFrom collects grounded episode chunks referenced by retrieved semantic nodes and links
+func (e *GllamEngine) extractGroundedEpisodesFromCreatedFrom(ctx context.Context, nodes []memory.SemanticNode, links []memory.SemanticLink, prefixFilter string) []memory.EpisodicSummary {
+	seenRefs := make(map[string]bool)
+	var refs []groundedChunkRef
+
+	parseRef := func(createdFromStr string) {
+		if createdFromStr == "" {
+			return
+		}
+		for _, token := range strings.Fields(createdFromStr) {
+			idx := strings.Index(token, "#chunk-")
+			if idx == -1 {
+				continue
+			}
+			sessionID := token[:idx]
+			if slashIdx := strings.LastIndex(sessionID, "/"); slashIdx != -1 {
+				sessionID = sessionID[slashIdx+1:]
+			}
+			chunkNumStr := token[idx+len("#chunk-"):]
+			chunkNum, err := strconv.Atoi(chunkNumStr)
+			if err != nil || chunkNum <= 0 {
+				continue
+			}
+			if prefixFilter != "" && strings.HasPrefix(sessionID, "beam-100k-") && !strings.HasPrefix(sessionID, prefixFilter) {
+				continue
+			}
+			refKey := fmt.Sprintf("%s#chunk-%d", sessionID, chunkNum)
+			if !seenRefs[refKey] {
+				seenRefs[refKey] = true
+				refs = append(refs, groundedChunkRef{
+					sessionID: sessionID,
+					chunkNum:  chunkNum,
+					refKey:    refKey,
+				})
+			}
+		}
+	}
+
+	for _, n := range nodes {
+		parseRef(n.CreatedFrom)
+	}
+	for _, l := range links {
+		parseRef(l.CreatedFrom)
+	}
+
+	if len(refs) == 0 {
+		return nil
+	}
+
+	type sessionData struct {
+		summaryText string
+		createdAt   time.Time
+	}
+	sessionCache := make(map[string]sessionData)
+
+	for _, r := range refs {
+		if _, ok := sessionCache[r.sessionID]; !ok {
+			var text string
+			var createdAt time.Time
+			query := `SELECT summary_text, created_at FROM episodic_summaries WHERE id = ? OR session_id = ? LIMIT 1`
+			row := e.dbRO.QueryRowContext(ctx, query, r.sessionID, r.sessionID)
+			if err := row.Scan(&text, scanTime(&createdAt)); err == nil {
+				sessionCache[r.sessionID] = sessionData{
+					summaryText: text,
+					createdAt:   createdAt,
+				}
+			}
+		}
+	}
+
+	chunkSize := 5000
+	chunkOverlap := 500
+	if e.SystemPrompts != nil && e.SystemPrompts.ChunkSize > 0 {
+		chunkSize = e.SystemPrompts.ChunkSize
+		chunkOverlap = e.SystemPrompts.ChunkOverlap
+	}
+
+	var groundedEpisodes []memory.EpisodicSummary
+	for _, r := range refs {
+		sData, ok := sessionCache[r.sessionID]
+		if !ok || sData.summaryText == "" {
+			continue
+		}
+
+		chunks := ChunkTranscript(sData.summaryText, chunkSize, chunkOverlap)
+		cIdx := r.chunkNum - 1
+		if cIdx >= 0 && cIdx < len(chunks) {
+			groundedEpisodes = append(groundedEpisodes, memory.EpisodicSummary{
+				ID:          r.refKey,
+				SessionID:   r.sessionID,
+				SummaryText: chunks[cIdx].Text,
+				CreatedAt:   sData.createdAt,
+			})
+		}
+	}
+
+	sort.Slice(groundedEpisodes, func(i, j int) bool {
+		if groundedEpisodes[i].CreatedAt.Equal(groundedEpisodes[j].CreatedAt) {
+			return groundedEpisodes[i].ID < groundedEpisodes[j].ID
+		}
+		return groundedEpisodes[i].CreatedAt.Before(groundedEpisodes[j].CreatedAt)
+	})
+
+	return groundedEpisodes
+}
+
