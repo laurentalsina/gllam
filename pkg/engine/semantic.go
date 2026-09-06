@@ -478,59 +478,83 @@ func (e *GllamEngine) IndexNodeVector(ctx context.Context, nodeID string, vec []
 
 // SearchSimilarNodes finds nodes with similar embeddings to the given query text.
 func (e *GllamEngine) SearchSimilarNodes(ctx context.Context, queryText string, limit int) ([]struct {
-    NodeID   string
-    Distance float32
-    Name     string
+	NodeID   string
+	Distance float32
+	Name     string
 }, error) {
-    if e.embedder == nil {
-        return nil, fmt.Errorf("no embedder configured")
-    }
+	return e.SearchSimilarNodesInSilo(ctx, queryText, "", limit)
+}
 
-    // Generate query embedding
-    queryEmbedding, err := e.embedder.Embed(ctx, queryText)
-    if err != nil {
-        return nil, fmt.Errorf("failed to generate query embedding: %w", err)
-    }
+// SearchSimilarNodesInSilo finds nodes with similar embeddings to the given query text, optionally filtered by context silo.
+func (e *GllamEngine) SearchSimilarNodesInSilo(ctx context.Context, queryText string, siloID string, limit int) ([]struct {
+	NodeID   string
+	Distance float32
+	Name     string
+}, error) {
+	if e.embedder == nil {
+		return nil, fmt.Errorf("no embedder configured")
+	}
 
-    // Serialize query embedding
-    queryBlob, err := serializeEmbedding(queryEmbedding)
-    if err != nil {
-        return nil, fmt.Errorf("failed to serialize query embedding: %w", err)
-    }
+	// Generate query embedding
+	queryEmbedding, err := e.embedder.Embed(ctx, queryText)
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate query embedding: %w", err)
+	}
 
-    // Search using vec0 MATCH
-    query := `
-        SELECT e.node_id, e.distance, COALESCE(n.name, '')
-        FROM semantic_embeddings e
-        LEFT JOIN semantic_nodes n ON e.node_id = n.id
-        WHERE e.embedding MATCH vec_f32(?) AND e.k = ?
-        ORDER BY e.distance`
+	// Serialize query embedding
+	queryBlob, err := serializeEmbedding(queryEmbedding)
+	if err != nil {
+		return nil, fmt.Errorf("failed to serialize query embedding: %w", err)
+	}
 
-    rows, err := e.dbRO.QueryContext(ctx, query, queryBlob, limit)
-    if err != nil {
-        fmt.Printf("SQL Error in SearchSimilarNodes: %v\n", err)
-        return nil, fmt.Errorf("failed to search similar nodes: %w", err)
-    }
-    defer rows.Close()
+	var rows *sql.Rows
+	if siloID == "" {
+		query := `
+			SELECT e.node_id, e.distance, COALESCE(n.name, '')
+			FROM semantic_embeddings e
+			LEFT JOIN semantic_nodes n ON e.node_id = n.id
+			WHERE e.embedding MATCH vec_f32(?) AND e.k = ?
+			ORDER BY e.distance`
+		rows, err = e.dbRO.QueryContext(ctx, query, queryBlob, limit)
+	} else {
+		// When filtering by context_silo_id, expand k candidate search window to avoid under-fetching
+		kWindow := limit * 20
+		if kWindow < 200 {
+			kWindow = 200
+		}
+		query := `
+			SELECT e.node_id, e.distance, COALESCE(n.name, '')
+			FROM semantic_embeddings e
+			JOIN semantic_nodes n ON e.node_id = n.id
+			WHERE e.embedding MATCH vec_f32(?) AND e.k = ? AND n.context_silo_id = ?
+			ORDER BY e.distance
+			LIMIT ?`
+		rows, err = e.dbRO.QueryContext(ctx, query, queryBlob, kWindow, siloID, limit)
+	}
+	if err != nil {
+		fmt.Printf("SQL Error in SearchSimilarNodesInSilo: %v\n", err)
+		return nil, fmt.Errorf("failed to search similar nodes: %w", err)
+	}
+	defer rows.Close()
 
-    var results []struct {
-        NodeID   string
-        Distance float32
-        Name     string
-    }
-    for rows.Next() {
-        var r struct {
-            NodeID   string
-            Distance float32
-            Name     string
-        }
-        if err := rows.Scan(&r.NodeID, &r.Distance, &r.Name); err != nil {
-            return nil, fmt.Errorf("failed to scan result: %w", err)
-        }
-        results = append(results, r)
-    }
+	var results []struct {
+		NodeID   string
+		Distance float32
+		Name     string
+	}
+	for rows.Next() {
+		var r struct {
+			NodeID   string
+			Distance float32
+			Name     string
+		}
+		if err := rows.Scan(&r.NodeID, &r.Distance, &r.Name); err != nil {
+			return nil, fmt.Errorf("failed to scan result: %w", err)
+		}
+		results = append(results, r)
+	}
 
-    return results, rows.Err()
+	return results, rows.Err()
 }
 
 // GetActiveLinksAtTime retrieves semantic links active at a specific Unix timestamp (read-only -> dbRO)
@@ -663,26 +687,42 @@ func (e *GllamEngine) resolveAnchorTimestamp(ctx context.Context, anchorID strin
 // ExpandTemporalNeighbors performs N-hop traversal over temporal links and temporal anchors
 // to ensure complete transitive ordering chains (e.g. A -> B -> C) are loaded into context.
 func (e *GllamEngine) ExpandTemporalNeighbors(ctx context.Context, seedNodes []memory.SemanticNode, existingLinks []memory.SemanticLink, maxHops int) ([]memory.SemanticNode, []memory.SemanticLink, error) {
-	return e.ExpandTemporalNeighborsWithTime(ctx, seedNodes, existingLinks, maxHops, nil)
+	return e.ExpandTemporalNeighborsInSiloAndTime(ctx, seedNodes, existingLinks, maxHops, "", nil)
+}
+
+// ExpandTemporalNeighborsInSilo performs N-hop traversal restricted to a specific context silo.
+func (e *GllamEngine) ExpandTemporalNeighborsInSilo(ctx context.Context, seedNodes []memory.SemanticNode, existingLinks []memory.SemanticLink, maxHops int, siloID string) ([]memory.SemanticNode, []memory.SemanticLink, error) {
+	return e.ExpandTemporalNeighborsInSiloAndTime(ctx, seedNodes, existingLinks, maxHops, siloID, nil)
 }
 
 // ExpandTemporalNeighborsWithTime performs N-hop traversal over temporal links active as of a specific evaluation timestamp (evalTimestamp).
 // Passing evalTimestamp enables point-in-time "time travel" RAG queries (e.g. querying active facts as of 2021).
 func (e *GllamEngine) ExpandTemporalNeighborsWithTime(ctx context.Context, seedNodes []memory.SemanticNode, existingLinks []memory.SemanticLink, maxHops int, evalTimestamp *int64) ([]memory.SemanticNode, []memory.SemanticLink, error) {
+	return e.ExpandTemporalNeighborsInSiloAndTime(ctx, seedNodes, existingLinks, maxHops, "", evalTimestamp)
+}
+
+// ExpandTemporalNeighborsInSiloAndTime performs N-hop traversal restricted to a specific context silo and evaluation timestamp.
+func (e *GllamEngine) ExpandTemporalNeighborsInSiloAndTime(ctx context.Context, seedNodes []memory.SemanticNode, existingLinks []memory.SemanticLink, maxHops int, siloID string, evalTimestamp *int64) ([]memory.SemanticNode, []memory.SemanticLink, error) {
 	nodeMap := make(map[string]memory.SemanticNode)
 	linkMap := make(map[string]memory.SemanticLink)
 
 	for _, n := range seedNodes {
+		if siloID != "" && n.ContextSiloID != "" && n.ContextSiloID != siloID {
+			continue
+		}
 		nodeMap[n.ID] = n
 	}
 	for _, l := range existingLinks {
+		if siloID != "" && l.ContextSiloID != "" && l.ContextSiloID != siloID {
+			continue
+		}
 		key := fmt.Sprintf("%s-%s-%s", l.SourceID, l.TargetID, l.Relationship)
 		linkMap[key] = l
 	}
 
 	visitedNodes := make(map[string]bool)
-	frontier := make([]string, 0, len(seedNodes))
-	for _, n := range seedNodes {
+	frontier := make([]string, 0, len(nodeMap))
+	for _, n := range nodeMap {
 		frontier = append(frontier, n.ID)
 		visitedNodes[n.ID] = true
 	}
@@ -695,15 +735,29 @@ func (e *GllamEngine) ExpandTemporalNeighborsWithTime(ctx context.Context, seedN
 			var rows *sql.Rows
 			var err error
 
-			query = `
-				SELECT 
-					l.source_id, l.target_id, l.relationship, l.caveats, l.modality, l.origin_id, 
-					l.resolution_rationale, l.created_from, l.created_at, l.updated_at, l.temporal_link_id,
-					t.valid_from, t.valid_until, t.temporal_anchor_id, t.temporal_relation, t.temporal_note
-				FROM semantic_links l
-				LEFT JOIN semantic_temporal_links t ON l.temporal_link_id = t.id
-				WHERE l.source_id = ? OR l.target_id = ?`
-			rows, err = e.dbRO.QueryContext(ctx, query, currentID, currentID)
+			if siloID == "" {
+				query = `
+					SELECT 
+						l.source_id, l.target_id, l.relationship, l.caveats, l.modality, l.origin_id, 
+						l.resolution_rationale, l.created_from, l.created_at, l.updated_at, l.temporal_link_id,
+						t.valid_from, t.valid_until, t.temporal_anchor_id, t.temporal_relation, t.temporal_note,
+						COALESCE(l.context_silo_id, '')
+					FROM semantic_links l
+					LEFT JOIN semantic_temporal_links t ON l.temporal_link_id = t.id
+					WHERE l.source_id = ? OR l.target_id = ?`
+				rows, err = e.dbRO.QueryContext(ctx, query, currentID, currentID)
+			} else {
+				query = `
+					SELECT 
+						l.source_id, l.target_id, l.relationship, l.caveats, l.modality, l.origin_id, 
+						l.resolution_rationale, l.created_from, l.created_at, l.updated_at, l.temporal_link_id,
+						t.valid_from, t.valid_until, t.temporal_anchor_id, t.temporal_relation, t.temporal_note,
+						COALESCE(l.context_silo_id, '')
+					FROM semantic_links l
+					LEFT JOIN semantic_temporal_links t ON l.temporal_link_id = t.id
+					WHERE (l.source_id = ? OR l.target_id = ?) AND (l.context_silo_id = ? OR l.context_silo_id = '')`
+				rows, err = e.dbRO.QueryContext(ctx, query, currentID, currentID, siloID)
+			}
 
 			if err != nil {
 				continue
@@ -718,6 +772,7 @@ func (e *GllamEngine) ExpandTemporalNeighborsWithTime(ctx context.Context, seedN
 					&l.SourceID, &l.TargetID, &l.Relationship, &l.Caveats, &l.Modality, 
 					&origSource, &resRatVal, &createdFrom, scanTime(&l.CreatedAt), scanTime(&l.UpdatedAt),
 					&temporalLinkID, &validFromVal, &validUntilVal, &tempAnchorID, &tempRelation, &tempNote,
+					&l.ContextSiloID,
 				)
 				if err != nil {
 					continue
@@ -734,7 +789,8 @@ func (e *GllamEngine) ExpandTemporalNeighborsWithTime(ctx context.Context, seedN
 				if temporalLinkID.Valid {
 					l.TemporalLinkID = temporalLinkID.String
 					l.Temporal = &memory.SemanticTemporalAttributes{
-						ID: temporalLinkID.String,
+						ID:            temporalLinkID.String,
+						ContextSiloID: l.ContextSiloID,
 					}
 					if validFromVal.Valid {
 						l.Temporal.ValidFrom = validFromVal.String
@@ -766,9 +822,15 @@ func (e *GllamEngine) ExpandTemporalNeighborsWithTime(ctx context.Context, seedN
 
 						// Fetch Node metadata if missing
 						var node memory.SemanticNode
-						var ctxPrompt, caveatSum, createdFrom sql.NullString
-						nodeQuery := `SELECT id, name, type, context_prompt, caveat_summary, created_from FROM semantic_nodes WHERE id = ?`
-						if err := e.dbRO.QueryRowContext(ctx, nodeQuery, neighborID).Scan(&node.ID, &node.Name, &node.Type, &ctxPrompt, &caveatSum, &createdFrom); err == nil {
+						var ctxPrompt, caveatSum, createdFrom, nodeSilo sql.NullString
+						nodeQuery := `SELECT id, name, type, context_prompt, caveat_summary, created_from, COALESCE(context_silo_id, '') FROM semantic_nodes WHERE id = ?`
+						if err := e.dbRO.QueryRowContext(ctx, nodeQuery, neighborID).Scan(&node.ID, &node.Name, &node.Type, &ctxPrompt, &caveatSum, &createdFrom, &nodeSilo); err == nil {
+							if nodeSilo.Valid {
+								node.ContextSiloID = nodeSilo.String
+							}
+							if siloID != "" && node.ContextSiloID != "" && node.ContextSiloID != siloID {
+								continue
+							}
 							if ctxPrompt.Valid {
 								node.ContextPrompt = ctxPrompt.String
 							}
@@ -1156,27 +1218,43 @@ type NeedleScoredNode struct {
 
 // RetrieveHybridNeedle performs dual-channel RRF hybrid retrieval over vector embeddings and exact graph traversal
 func (e *GllamEngine) RetrieveHybridNeedle(ctx context.Context, query string, entityIDs []string, sourceID string, limit int) ([]NeedleScoredNode, error) {
-	return e.RetrieveHybridNeedleWithTime(ctx, query, entityIDs, sourceID, limit, nil)
+	return e.RetrieveHybridNeedleWithSiloAndTime(ctx, query, entityIDs, sourceID, "", limit, nil)
+}
+
+// RetrieveHybridNeedleWithSilo performs dual-channel RRF hybrid retrieval restricted to a specific context silo.
+func (e *GllamEngine) RetrieveHybridNeedleWithSilo(ctx context.Context, query string, entityIDs []string, sourceID string, siloID string, limit int) ([]NeedleScoredNode, error) {
+	return e.RetrieveHybridNeedleWithSiloAndTime(ctx, query, entityIDs, sourceID, siloID, limit, nil)
 }
 
 // RetrieveHybridNeedleWithTime performs dual-channel RRF hybrid retrieval over vector embeddings and exact graph traversal,
 // filtering active facts as of a specific virtual evaluation timestamp (enabling point-in-time "time travel" RAG queries).
 func (e *GllamEngine) RetrieveHybridNeedleWithTime(ctx context.Context, query string, entityIDs []string, sourceID string, limit int, asOfTime *int64) ([]NeedleScoredNode, error) {
+	return e.RetrieveHybridNeedleWithSiloAndTime(ctx, query, entityIDs, sourceID, "", limit, asOfTime)
+}
+
+// RetrieveHybridNeedleWithSiloAndTime performs point-in-time dual-channel RRF hybrid retrieval restricted to a context silo.
+func (e *GllamEngine) RetrieveHybridNeedleWithSiloAndTime(ctx context.Context, query string, entityIDs []string, sourceID string, siloID string, limit int, asOfTime *int64) ([]NeedleScoredNode, error) {
 	if limit <= 0 {
 		limit = 10
 	}
 	k := 60.0 // RRF standard smoothing constant
 
-	// 1. Vector Channel: SearchSimilarNodes
+	// 1. Vector Channel: SearchSimilarNodesInSilo
 	var vectorNodes []memory.SemanticNode
 	if query != "" {
-		simResults, err := e.SearchSimilarNodes(ctx, query, limit*2)
+		simResults, err := e.SearchSimilarNodesInSilo(ctx, query, siloID, limit*2)
 		if err == nil {
 			for _, res := range simResults {
 				var node memory.SemanticNode
-				var ctxPrompt, caveatSum, createdFrom sql.NullString
-				nodeQuery := `SELECT id, name, type, context_prompt, caveat_summary, created_from FROM semantic_nodes WHERE id = ?`
-				if err := e.dbRO.QueryRowContext(ctx, nodeQuery, res.NodeID).Scan(&node.ID, &node.Name, &node.Type, &ctxPrompt, &caveatSum, &createdFrom); err == nil {
+				var ctxPrompt, caveatSum, createdFrom, nodeSilo sql.NullString
+				nodeQuery := `SELECT id, name, type, context_prompt, caveat_summary, created_from, COALESCE(context_silo_id, '') FROM semantic_nodes WHERE id = ?`
+				if err := e.dbRO.QueryRowContext(ctx, nodeQuery, res.NodeID).Scan(&node.ID, &node.Name, &node.Type, &ctxPrompt, &caveatSum, &createdFrom, &nodeSilo); err == nil {
+					if nodeSilo.Valid {
+						node.ContextSiloID = nodeSilo.String
+					}
+					if siloID != "" && node.ContextSiloID != "" && node.ContextSiloID != siloID {
+						continue
+					}
 					if ctxPrompt.Valid {
 						node.ContextPrompt = ctxPrompt.String
 					}
@@ -1203,13 +1281,19 @@ func (e *GllamEngine) RetrieveHybridNeedleWithTime(ctx context.Context, query st
 		}
 	}
 
-	// 3. Graph Channel: Fetch seed nodes & ExpandTemporalNeighborsWithTime (2 hops)
+	// 3. Graph Channel: Fetch seed nodes & ExpandTemporalNeighborsInSiloAndTime (2 hops)
 	var seedNodes []memory.SemanticNode
 	for _, entID := range resolvedEntities {
 		var node memory.SemanticNode
-		var ctxPrompt, caveatSum, createdFrom sql.NullString
-		nodeQuery := `SELECT id, name, type, context_prompt, caveat_summary, created_from FROM semantic_nodes WHERE id = ?`
-		if err := e.dbRO.QueryRowContext(ctx, nodeQuery, entID).Scan(&node.ID, &node.Name, &node.Type, &ctxPrompt, &caveatSum, &createdFrom); err == nil {
+		var ctxPrompt, caveatSum, createdFrom, nodeSilo sql.NullString
+		nodeQuery := `SELECT id, name, type, context_prompt, caveat_summary, created_from, COALESCE(context_silo_id, '') FROM semantic_nodes WHERE id = ?`
+		if err := e.dbRO.QueryRowContext(ctx, nodeQuery, entID).Scan(&node.ID, &node.Name, &node.Type, &ctxPrompt, &caveatSum, &createdFrom, &nodeSilo); err == nil {
+			if nodeSilo.Valid {
+				node.ContextSiloID = nodeSilo.String
+			}
+			if siloID != "" && node.ContextSiloID != "" && node.ContextSiloID != siloID {
+				continue
+			}
 			if ctxPrompt.Valid {
 				node.ContextPrompt = ctxPrompt.String
 			}
@@ -1223,7 +1307,7 @@ func (e *GllamEngine) RetrieveHybridNeedleWithTime(ctx context.Context, query st
 		}
 	}
 
-	expNodes, expLinks, _ := e.ExpandTemporalNeighborsWithTime(ctx, seedNodes, nil, 2, asOfTime)
+	expNodes, expLinks, _ := e.ExpandTemporalNeighborsInSiloAndTime(ctx, seedNodes, nil, 2, siloID, asOfTime)
 	expLinks = FilterActiveSummaryFactsForTime(expLinks, asOfTime)
 
 	// Map links to source/target nodes

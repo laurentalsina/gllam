@@ -18,6 +18,11 @@ import (
 
 // RouteAndAssemble classifies the user prompt and assembles a structured context (read-only → dbRO)
 func (e *GllamEngine) RouteAndAssemble(ctx context.Context, userPrompt string, entities []string) (*memory.CompiledContext, error) {
+    return e.RouteAndAssembleWithSilo(ctx, userPrompt, entities, "")
+}
+
+// RouteAndAssembleWithSilo classifies the user prompt and assembles a structured context isolated to a specific context silo.
+func (e *GllamEngine) RouteAndAssembleWithSilo(ctx context.Context, userPrompt string, entities []string, siloID string) (*memory.CompiledContext, error) {
     _ = e.DecrementActiveTurnConstraints(ctx)
     ctxResult := &memory.CompiledContext{}
 
@@ -51,7 +56,7 @@ func (e *GllamEngine) RouteAndAssemble(ctx context.Context, userPrompt string, e
 
     // 2. Semantic Entities: Auto-discover from prompt via vector search
     if e.embedder != nil {
-        similarNodes, err := e.SearchSimilarNodes(ctx, userPrompt, 100)
+        similarNodes, err := e.SearchSimilarNodesInSilo(ctx, userPrompt, siloID, 100)
         if err == nil {
             distThreshold := e.SemanticDistanceThreshold
             if distThreshold == 0.0 {
@@ -95,17 +100,23 @@ func (e *GllamEngine) RouteAndAssemble(ctx context.Context, userPrompt string, e
 
     // Retrieve semantic links and nodes via Dual-Channel RRF Hybrid Retrieval
     if len(entities) > 0 || userPrompt != "" {
-        needleResults, err := e.RetrieveHybridNeedle(ctx, userPrompt, entities, "", 50)
+        needleResults, err := e.RetrieveHybridNeedleWithSilo(ctx, userPrompt, entities, "", siloID, 50)
         if err == nil && len(needleResults) > 0 {
             nodeMap := make(map[string]memory.SemanticNode)
             linkMap := make(map[string]memory.SemanticLink)
 
             for _, nr := range needleResults {
+                if siloID != "" && nr.Node.ContextSiloID != "" && nr.Node.ContextSiloID != siloID {
+                    continue
+                }
                 if belongsToDifferentSession(nr.Node.ID, prefixFilter) {
                     continue
                 }
                 nodeMap[nr.Node.ID] = nr.Node
                 for _, l := range nr.Links {
+                    if siloID != "" && l.ContextSiloID != "" && l.ContextSiloID != siloID {
+                        continue
+                    }
                     if belongsToDifferentSession(l.SourceID, prefixFilter) || belongsToDifferentSession(l.TargetID, prefixFilter) {
                         continue
                     }
@@ -135,13 +146,32 @@ func (e *GllamEngine) RouteAndAssemble(ctx context.Context, userPrompt string, e
             }
 
             // Perform temporal graph expansion to capture transitive chains within token budget
-            expandedNodes, expandedLinks, expErr := e.ExpandTemporalNeighbors(ctx, hybridNodes, hybridLinks, maxHops)
+            expandedNodes, expandedLinks, expErr := e.ExpandTemporalNeighborsInSilo(ctx, hybridNodes, hybridLinks, maxHops, siloID)
             if expErr == nil {
                 ctxResult.SemanticNodes = expandedNodes
                 ctxResult.SemanticLinks = expandedLinks
             } else {
                 ctxResult.SemanticNodes = hybridNodes
                 ctxResult.SemanticLinks = hybridLinks
+            }
+
+            // If siloID is specified, strictly filter out any foreign silo nodes or links
+            if siloID != "" {
+                var filteredNodes []memory.SemanticNode
+                for _, n := range ctxResult.SemanticNodes {
+                    if n.ContextSiloID == "" || n.ContextSiloID == siloID {
+                        filteredNodes = append(filteredNodes, n)
+                    }
+                }
+                ctxResult.SemanticNodes = filteredNodes
+
+                var filteredLinks []memory.SemanticLink
+                for _, l := range ctxResult.SemanticLinks {
+                    if l.ContextSiloID == "" || l.ContextSiloID == siloID {
+                        filteredLinks = append(filteredLinks, l)
+                    }
+                }
+                ctxResult.SemanticLinks = filteredLinks
             }
 
             // Cap expanded graph to top 150 nodes and 300 links to prevent prompt payload explosion

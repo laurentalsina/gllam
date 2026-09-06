@@ -520,11 +520,10 @@ func main() {
 		logMain("Processing [%s]: %s\n", qa.InstanceID, qa.Query)
 		logMain("   ├─ Processing Details Log: %s/processing_details_%s.log\n", runLogDir, qa.InstanceID)
 
-		// 1. Clear semantic database tables for fresh query
-		tClear0 := time.Now()
-		clearSemanticTables(ctx, gllam.DB())
-		totalClearTablesTime += time.Since(tClear0)
-		addEvent("Semantic tables cleared")
+		// 1. Context Silo Isolation (partitioning semantic graphs per conversation to allow persistent reuse)
+		siloID := qa.ConversationID
+		logMain("   ├─ Context Silo ID: %s (Conversation %s)\n", siloID, qa.ConversationID)
+		addEvent(fmt.Sprintf("Context Silo set to %s", siloID))
 
 		targetSpeakers := extractTargetSpeakers(qa.Query, idx)
 		if len(targetSpeakers) > 0 {
@@ -784,41 +783,49 @@ func main() {
 			} else {
 				logMain("   ├─ ❌ Direct QA returned %s. Falling back to JIT semantic extraction...\n", directAnswer)
 
-				// 6. Extract semantics just-in-time
+				// 6. Extract semantics just-in-time (or reuse cached graph if previously extracted for this silo)
 				tExtract0 := time.Now()
 				logTimestamp("JIT semantic extraction")
-				extractionPrompt := gllam.SystemPrompts.SemanticExtraction
-				schemaToUse := extractionJSONSchema
-				if isTemporal && gllam.SystemPrompts.SemanticExtractionTemporal != "" {
-					extractionPrompt = gllam.SystemPrompts.SemanticExtractionTemporal
-					logMain("   ├─ Using alternate temporal-ready extraction prompts for JIT extraction.\n")
+				var cachedNodesCount int
+				_ = gllam.DB().QueryRowContext(ctx, "SELECT count(*) FROM semantic_nodes WHERE context_silo_id = ?", siloID).Scan(&cachedNodesCount)
 
-					temporalSchemaPath := "./config/semantic_extraction_temporal_schema.json"
-					tempData, err := os.ReadFile(temporalSchemaPath)
-					if err == nil {
-						var tempSchema map[string]interface{}
-						if uErr := json.Unmarshal(tempData, &tempSchema); uErr == nil {
-							schemaToUse = tempSchema
-							logMain("   ├─ Loaded temporal schema for JSON validation.\n")
+				if cachedNodesCount > 0 {
+					logMain("   ├─ ⚡ Reusing cached semantic graph for Context Silo '%s' (%d existing nodes). Skipping extraction!\n", siloID, cachedNodesCount)
+					addEvent(fmt.Sprintf("Reused cached semantic graph (%d nodes) for silo %s", cachedNodesCount, siloID))
+				} else {
+					extractionPrompt := gllam.SystemPrompts.SemanticExtraction
+					schemaToUse := extractionJSONSchema
+					if isTemporal && gllam.SystemPrompts.SemanticExtractionTemporal != "" {
+						extractionPrompt = gllam.SystemPrompts.SemanticExtractionTemporal
+						logMain("   ├─ Using alternate temporal-ready extraction prompts for JIT extraction.\n")
+
+						temporalSchemaPath := "./config/semantic_extraction_temporal_schema.json"
+						tempData, err := os.ReadFile(temporalSchemaPath)
+						if err == nil {
+							var tempSchema map[string]interface{}
+							if uErr := json.Unmarshal(tempData, &tempSchema); uErr == nil {
+								schemaToUse = tempSchema
+								logMain("   ├─ Loaded temporal schema for JSON validation.\n")
+							}
 						}
 					}
-				}
-				nodes, links, err := extractSemanticsForText(ctx, gllam, embedder, getClientForTask("SEMANTIC_EXTRACTION", "FAST_TEXT_SERVER", strongClient, fastClient, defaultClient), transcriptText, extractionPrompt, schemaToUse, qa.ConversationID, &structuredLog.JITExtractions)
-				extractDur := time.Since(tExtract0)
-				totalExtractionTime += extractDur
-				logMain("   ├─ [%s] [%v] JIT semantic extraction completed.\n", time.Now().Format("2006-01-02 15:04:05"), extractDur.Round(time.Millisecond))
-				addEvent(fmt.Sprintf("JIT semantic extraction completed in %v. Extracted %d nodes, %d links", extractDur.Round(time.Millisecond), nodes, links))
-				if err != nil {
-					logMain("   ❌ Semantic extraction failed: %v\n", err)
-					structuredLog.Error = err.Error()
-				} else {
-					logMain("   ├─ Extracted JIT: %d nodes, %d links\n", nodes, links)
+					nodes, links, err := extractSemanticsForText(ctx, gllam, embedder, getClientForTask("SEMANTIC_EXTRACTION", "FAST_TEXT_SERVER", strongClient, fastClient, defaultClient), transcriptText, extractionPrompt, schemaToUse, siloID, &structuredLog.JITExtractions)
+					extractDur := time.Since(tExtract0)
+					totalExtractionTime += extractDur
+					logMain("   ├─ [%s] [%v] JIT semantic extraction completed.\n", time.Now().Format("2006-01-02 15:04:05"), extractDur.Round(time.Millisecond))
+					addEvent(fmt.Sprintf("JIT semantic extraction completed in %v. Extracted %d nodes, %d links", extractDur.Round(time.Millisecond), nodes, links))
+					if err != nil {
+						logMain("   ❌ Semantic extraction failed: %v\n", err)
+						structuredLog.Error = err.Error()
+					} else {
+						logMain("   ├─ Extracted JIT: %d nodes, %d links\n", nodes, links)
+					}
 				}
 
 				// 7. Route and Assemble semantic context & answer query
 				tRoute0 := time.Now()
 				logTimestamp("Route & Assemble")
-				compiled, err := gllam.RouteAndAssemble(ctx, qa.Query, nil)
+				compiled, err := gllam.RouteAndAssembleWithSilo(ctx, qa.Query, nil, siloID)
 				routeDur := time.Since(tRoute0)
 				totalRouteAssembleTime += routeDur
 				logMain("   ├─ [%s] [%v] Route & Assemble completed.\n", time.Now().Format("2006-01-02 15:04:05"), routeDur.Round(time.Millisecond))
@@ -1021,33 +1028,45 @@ func extractSemanticsForText(ctx context.Context, gllam *engine.GllamEngine, emb
 
 		var canonicalizationLogs []string
 
+		scopeID := func(rawID string) string {
+			if rawID == "" {
+				return ""
+			}
+			prefix := fmt.Sprintf("silo_%s_", sourceName)
+			if strings.HasPrefix(rawID, prefix) {
+				return rawID
+			}
+			return prefix + rawID
+		}
+
 		// Build ID mapping to canonicalize nodes and resolve duplicates
 		nodeIDMapping := make(map[string]string)
 		for _, node := range extraction.Nodes {
 			if node.ID == "" {
 				continue
 			}
+			scopedRawID := scopeID(node.ID)
 
-			// 1. Check if ID already exists in DB
+			// 1. Check if ID already exists in DB within this silo
 			var dbID string
-			err := gllam.DB().QueryRowContext(ctx, "SELECT id FROM semantic_nodes WHERE id = ?", node.ID).Scan(&dbID)
+			err := gllam.DB().QueryRowContext(ctx, "SELECT id FROM semantic_nodes WHERE id = ? AND (context_silo_id = ? OR context_silo_id = '')", scopedRawID, sourceName).Scan(&dbID)
 			if err == nil {
 				nodeIDMapping[node.ID] = dbID
 				continue
 			}
 
-			// 2. Check if name already exists (exact case-insensitive match)
+			// 2. Check if name already exists in this silo (exact case-insensitive match)
 			var dbIDByName string
-			err = gllam.DB().QueryRowContext(ctx, "SELECT id FROM semantic_nodes WHERE LOWER(name) = LOWER(?) LIMIT 1", node.Name).Scan(&dbIDByName)
+			err = gllam.DB().QueryRowContext(ctx, "SELECT id FROM semantic_nodes WHERE LOWER(name) = LOWER(?) AND (context_silo_id = ? OR context_silo_id = '') LIMIT 1", node.Name, sourceName).Scan(&dbIDByName)
 			if err == nil {
 				nodeIDMapping[node.ID] = dbIDByName
 				canonicalizationLogs = append(canonicalizationLogs, fmt.Sprintf("🔄 Canonicalized Node ID: '%s' -> '%s' (exact Name match: '%s')", node.ID, dbIDByName, node.Name))
 				continue
 			}
 
-			// 3. Check for vector similarity match
+			// 3. Check for vector similarity match within this silo
 			if embedder != nil {
-				similar, err := gllam.SearchSimilarNodes(ctx, node.Name, 1)
+				similar, err := gllam.SearchSimilarNodesInSilo(ctx, node.Name, sourceName, 1)
 				if err == nil && len(similar) > 0 {
 					// Cosine distance threshold: < 0.12 (highly similar)
 					if similar[0].Distance < 0.12 {
@@ -1058,8 +1077,8 @@ func extractSemanticsForText(ctx context.Context, gllam *engine.GllamEngine, emb
 				}
 			}
 
-			// Keep original ID if no match
-			nodeIDMapping[node.ID] = node.ID
+			// Keep scoped ID if no match
+			nodeIDMapping[node.ID] = scopedRawID
 		}
 
 		// Apply mapping to Nodes and filter duplicates
@@ -1071,7 +1090,7 @@ func extractSemanticsForText(ctx context.Context, gllam *engine.GllamEngine, emb
 			}
 			mappedID := nodeIDMapping[node.ID]
 			if mappedID == "" {
-				mappedID = node.ID
+				mappedID = scopeID(node.ID)
 			}
 			if seenNodeIDs[mappedID] {
 				continue
@@ -1079,6 +1098,7 @@ func extractSemanticsForText(ctx context.Context, gllam *engine.GllamEngine, emb
 			seenNodeIDs[mappedID] = true
 
 			node.ID = mappedID
+			node.ContextSiloID = sourceName
 			canonicalNodes = append(canonicalNodes, node)
 		}
 
@@ -1091,24 +1111,33 @@ func extractSemanticsForText(ctx context.Context, gllam *engine.GllamEngine, emb
 
 			if mSrc, ok := nodeIDMapping[link.SourceID]; ok {
 				link.SourceID = mSrc
+			} else {
+				link.SourceID = scopeID(link.SourceID)
 			}
 			if mTgt, ok := nodeIDMapping[link.TargetID]; ok {
 				link.TargetID = mTgt
+			} else {
+				link.TargetID = scopeID(link.TargetID)
 			}
 			if link.OriginID != "" {
 				if mOrig, ok := nodeIDMapping[link.OriginID]; ok {
 					link.OriginID = mOrig
+				} else {
+					link.OriginID = scopeID(link.OriginID)
 				}
 			}
 			if link.Temporal != nil && link.Temporal.TemporalAnchorID != "" {
 				if mAnchor, ok := nodeIDMapping[link.Temporal.TemporalAnchorID]; ok {
 					link.Temporal.TemporalAnchorID = mAnchor
+				} else {
+					link.Temporal.TemporalAnchorID = scopeID(link.Temporal.TemporalAnchorID)
 				}
 			}
 
 			if link.SourceID == link.TargetID {
 				continue
 			}
+			link.ContextSiloID = sourceName
 			canonicalLinks = append(canonicalLinks, link)
 		}
 
@@ -1136,6 +1165,7 @@ func extractSemanticsForText(ctx context.Context, gllam *engine.GllamEngine, emb
 
 		for _, node := range canonicalNodes {
 			node.CreatedFrom = nodeSource
+			node.ContextSiloID = sourceName
 			if err := gllam.UpsertNode(ctx, node); err == nil {
 				nodesCount++
 				addLineage(node.ID)
@@ -1147,11 +1177,12 @@ func extractSemanticsForText(ctx context.Context, gllam *engine.GllamEngine, emb
 
 		for _, link := range canonicalLinks {
 			link.CreatedFrom = nodeSource
+			link.ContextSiloID = sourceName
 			if err := gllam.AddEdge(ctx, link); err != nil {
 				canonicalizationLogs = append(canonicalizationLogs, fmt.Sprintf("⚠️ AddEdge first pass failed for link %s -> %s (%s): %v", link.SourceID, link.TargetID, link.Relationship, err))
-				_ = gllam.UpsertNode(ctx, memory.SemanticNode{ID: link.SourceID, Name: link.SourceID, Type: "inferred", CreatedFrom: link.CreatedFrom})
+				_ = gllam.UpsertNode(ctx, memory.SemanticNode{ID: link.SourceID, Name: link.SourceID, Type: "inferred", CreatedFrom: link.CreatedFrom, ContextSiloID: sourceName})
 				addLineage(link.SourceID)
-				_ = gllam.UpsertNode(ctx, memory.SemanticNode{ID: link.TargetID, Name: link.TargetID, Type: "inferred", CreatedFrom: link.CreatedFrom})
+				_ = gllam.UpsertNode(ctx, memory.SemanticNode{ID: link.TargetID, Name: link.TargetID, Type: "inferred", CreatedFrom: link.CreatedFrom, ContextSiloID: sourceName})
 				addLineage(link.TargetID)
 				if retryErr := gllam.AddEdge(ctx, link); retryErr == nil {
 					linksCount++
