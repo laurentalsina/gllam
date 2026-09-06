@@ -253,40 +253,15 @@ func (e *GllamEngine) InitSchema() error {
 	}
 
 
-	if _, err := e.db.Exec(string(schemaBytes)); err != nil {
-		return fmt.Errorf("failed to execute schema.sql: %w", err)
-	}
-
-	// Schema Migration: Check and add temporal_link_id to semantic_links if missing from older DB files
-	var hasTemporalLinkID bool
-	rows, err := e.db.Query("PRAGMA table_info(semantic_links)")
-	if err == nil {
-		for rows.Next() {
-			var cid int
-			var name string
-			var typeStr string
-			var notnull int
-			var dfltValNull sql.NullString
-			var pk int
-			if scanErr := rows.Scan(&cid, &name, &typeStr, &notnull, &dfltValNull, &pk); scanErr == nil {
-				if name == "temporal_link_id" {
-					hasTemporalLinkID = true
-					break
-				}
-			}
-		}
-		rows.Close()
-	}
-	if !hasTemporalLinkID {
-		_, alterErr := e.db.Exec("ALTER TABLE semantic_links ADD COLUMN temporal_link_id TEXT REFERENCES semantic_temporal_links(id) ON DELETE SET NULL")
-		if alterErr != nil {
-			return fmt.Errorf("failed to migrate schema (add temporal_link_id to semantic_links): %w", alterErr)
-		}
-		fmt.Println("   🔧 Successfully migrated database schema: added temporal_link_id column to semantic_links table.")
-	}
-
-	// Schema Migration: Check and add context_silo_id to semantic_nodes, semantic_links, and semantic_temporal_links
+	// Schema Migration: Check and add missing columns to existing tables BEFORE running schema.sql
+	// so that index creation on newly added columns in schema.sql does not fail on existing DBs.
 	ensureColumnExists := func(table, column, colDef string) error {
+		var tableExists int
+		_ = e.db.QueryRow("SELECT count(*) FROM sqlite_master WHERE type='table' AND name=?", table).Scan(&tableExists)
+		if tableExists == 0 {
+			return nil
+		}
+
 		hasCol := false
 		tRows, qErr := e.db.Query(fmt.Sprintf("PRAGMA table_info(%s)", table))
 		if qErr != nil {
@@ -314,6 +289,9 @@ func (e *GllamEngine) InitSchema() error {
 		return nil
 	}
 
+	if err := ensureColumnExists("semantic_links", "temporal_link_id", "TEXT REFERENCES semantic_temporal_links(id) ON DELETE SET NULL"); err != nil {
+		return err
+	}
 	if err := ensureColumnExists("semantic_nodes", "context_silo_id", "TEXT NOT NULL DEFAULT ''"); err != nil {
 		return err
 	}
@@ -322,6 +300,10 @@ func (e *GllamEngine) InitSchema() error {
 	}
 	if err := ensureColumnExists("semantic_temporal_links", "context_silo_id", "TEXT NOT NULL DEFAULT ''"); err != nil {
 		return err
+	}
+
+	if _, err := e.db.Exec(string(schemaBytes)); err != nil {
+		return fmt.Errorf("failed to execute schema.sql: %w", err)
 	}
 
 	_, _ = e.db.Exec("CREATE INDEX IF NOT EXISTS idx_semantic_nodes_silo ON semantic_nodes(context_silo_id)")
