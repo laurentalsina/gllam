@@ -1012,7 +1012,7 @@ func extractSemanticsForText(ctx context.Context, gllam *engine.GllamEngine, emb
 		response, err := llmClient.GenerateWithFormat(ctx, systemPrompt, userPrompt, extractionJSONSchema)
 		if err != nil {
 			lastErr = err
-			logMain("   ⚠️ Chunk %d/%d extraction failed: %v\n", cIdx+1, len(chunks), err)
+			fmt.Printf("   ⚠️ Chunk %d/%d extraction failed: %v\n", cIdx+1, len(chunks), err)
 			continue
 		}
 
