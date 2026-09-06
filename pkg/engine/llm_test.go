@@ -57,3 +57,79 @@ func TestRepairTruncatedJSON(t *testing.T) {
 		t.Errorf("Expected complete JSON to remain unchanged")
 	}
 }
+
+func TestLLMClientSamplingParameters(t *testing.T) {
+	os.Setenv("FAST_MODEL_TEMPERATURE", "0.3")
+	os.Setenv("FAST_MODEL_MINP", "0.05")
+	os.Setenv("FAST_MODEL_TOPP", "0.95")
+	os.Setenv("FAST_MODEL_REPEATPENALTY", "1.1")
+	os.Setenv("FAST_MODEL_PRESENCEPENALTY", "0.3")
+	os.Setenv("FAST_MODEL_FREQUENCYPENALTY", "0.3")
+
+	os.Setenv("STRONG_MODEL_TEMPERATURE", "0.2")
+	os.Setenv("STRONG_MODEL_MINP", "0.08")
+	os.Setenv("STRONG_MODEL_TOPP", "0.90")
+	os.Setenv("STRONG_MODEL_REPEATPENALTY", "1.15")
+	os.Setenv("STRONG_MODEL_PRESENCEPENALTY", "0.25")
+	os.Setenv("STRONG_MODEL_FREQUENCYPENALTY", "0.25")
+
+	fastClient := NewLLMClient("http://127.0.0.1:8888")
+	fastClient.Tier = "fast"
+
+	strongClient := NewLLMClient("http://127.0.0.1:8888")
+	strongClient.Tier = "strong"
+
+	if fastClient.GetTemperature() != 0.3 {
+		t.Errorf("Expected fast temperature 0.3, got %f", fastClient.GetTemperature())
+	}
+	if *fastClient.GetMinP() != 0.05 {
+		t.Errorf("Expected fast min_p 0.05, got %f", *fastClient.GetMinP())
+	}
+	if *fastClient.GetTopP() != 0.95 {
+		t.Errorf("Expected fast top_p 0.95, got %f", *fastClient.GetTopP())
+	}
+	if *fastClient.GetRepeatPenalty() != 1.1 {
+		t.Errorf("Expected fast repeat_penalty 1.1, got %f", *fastClient.GetRepeatPenalty())
+	}
+	if *fastClient.GetPresencePenalty() != 0.3 {
+		t.Errorf("Expected fast presence_penalty 0.3, got %f", *fastClient.GetPresencePenalty())
+	}
+	if *fastClient.GetFrequencyPenalty() != 0.3 {
+		t.Errorf("Expected fast frequency_penalty 0.3, got %f", *fastClient.GetFrequencyPenalty())
+	}
+
+	if strongClient.GetTemperature() != 0.2 {
+		t.Errorf("Expected strong temperature 0.2, got %f", strongClient.GetTemperature())
+	}
+	if *strongClient.GetMinP() != 0.08 {
+		t.Errorf("Expected strong min_p 0.08, got %f", *strongClient.GetMinP())
+	}
+
+	// Verify JSON serialization includes all sampling parameters
+	req := ChatCompletionRequest{
+		Model:             "qwen-2.5-7b",
+		Temperature:       fastClient.GetTemperature(),
+		TopP:              fastClient.GetTopP(),
+		MinP:              fastClient.GetMinP(),
+		RepeatPenalty:     fastClient.GetRepeatPenalty(),
+		RepetitionPenalty: fastClient.GetRepeatPenalty(),
+		PresencePenalty:   fastClient.GetPresencePenalty(),
+		FrequencyPenalty:  fastClient.GetFrequencyPenalty(),
+	}
+
+	data, err := json.Marshal(req)
+	if err != nil {
+		t.Fatalf("Failed to marshal ChatCompletionRequest: %v", err)
+	}
+
+	var parsed map[string]interface{}
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		t.Fatalf("Failed to unmarshal serialized request: %v", err)
+	}
+
+	for _, field := range []string{"temperature", "top_p", "min_p", "repeat_penalty", "repetition_penalty", "presence_penalty", "frequency_penalty"} {
+		if _, ok := parsed[field]; !ok {
+			t.Errorf("Expected JSON to contain key %q, got: %s", field, string(data))
+		}
+	}
+}

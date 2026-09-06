@@ -33,6 +33,12 @@ type ChatCompletionRequest struct {
 	ResponseFormat     map[string]interface{} `json:"response_format,omitempty"`
 	ChatTemplateKwargs map[string]interface{} `json:"chat_template_kwargs,omitempty"`
 	Temperature        float32                `json:"temperature"`
+	TopP               *float32               `json:"top_p,omitempty"`
+	MinP               *float32               `json:"min_p,omitempty"`
+	RepeatPenalty      *float32               `json:"repeat_penalty,omitempty"`
+	RepetitionPenalty  *float32               `json:"repetition_penalty,omitempty"`
+	PresencePenalty    *float32               `json:"presence_penalty,omitempty"`
+	FrequencyPenalty   *float32               `json:"frequency_penalty,omitempty"`
 	Stream             bool                   `json:"stream"`
 	MaxTokens          int                    `json:"max_tokens,omitempty"`
 	CachePrompt        bool                   `json:"cache_prompt,omitempty"`
@@ -218,6 +224,177 @@ func (c *LLMClient) GetContextSize() int {
 	return 65536
 }
 
+func parseEnvFloat(keys ...string) (float32, bool) {
+	for _, k := range keys {
+		if val := os.Getenv(k); val != "" {
+			if f, err := strconv.ParseFloat(strings.TrimSpace(val), 32); err == nil {
+				return float32(f), true
+			}
+		}
+	}
+	return 0, false
+}
+
+// GetTemperature returns the sampling temperature based on client Tier and environment variables
+func (c *LLMClient) GetTemperature() float32 {
+	if c.Tier == "strong" {
+		if val, ok := parseEnvFloat("STRONG_MODEL_TEMPERATURE", "STRONG_TEMPERATURE"); ok {
+			return val
+		}
+	} else if c.Tier == "fast" {
+		if val, ok := parseEnvFloat("FAST_MODEL_TEMPERATURE", "FAST_TEMPERATURE"); ok {
+			return val
+		}
+	}
+
+	// Global fallback
+	if val, ok := parseEnvFloat("GLLAM_TEMPERATURE", "LLM_TEMPERATURE"); ok {
+		return val
+	}
+
+	// If tier is default or unset, allow fallback to either tier-specific variable
+	if c.Tier != "strong" && c.Tier != "fast" {
+		if val, ok := parseEnvFloat("STRONG_MODEL_TEMPERATURE", "FAST_MODEL_TEMPERATURE"); ok {
+			return val
+		}
+	}
+
+	if c.Tier == "fast" {
+		return 0.3
+	}
+	return 0.1
+}
+
+// GetMinP returns the min_p sampling parameter
+func (c *LLMClient) GetMinP() *float32 {
+	if c.Tier == "strong" {
+		if val, ok := parseEnvFloat("STRONG_MODEL_MINP", "STRONG_MODEL_MIN_P", "STRONG_MINP"); ok {
+			return &val
+		}
+	} else if c.Tier == "fast" {
+		if val, ok := parseEnvFloat("FAST_MODEL_MINP", "FAST_MODEL_MIN_P", "FAST_MINP"); ok {
+			return &val
+		}
+	}
+
+	if val, ok := parseEnvFloat("GLLAM_MINP", "GLLAM_MIN_P", "LLM_MINP", "LLM_MIN_P"); ok {
+		return &val
+	}
+
+	if c.Tier != "strong" && c.Tier != "fast" {
+		if val, ok := parseEnvFloat("STRONG_MODEL_MINP", "FAST_MODEL_MINP"); ok {
+			return &val
+		}
+	}
+
+	def := float32(0.05)
+	return &def
+}
+
+// GetTopP returns the top_p sampling parameter
+func (c *LLMClient) GetTopP() *float32 {
+	if c.Tier == "strong" {
+		if val, ok := parseEnvFloat("STRONG_MODEL_TOPP", "STRONG_MODEL_TOP_P", "STRONG_TOPP"); ok {
+			return &val
+		}
+	} else if c.Tier == "fast" {
+		if val, ok := parseEnvFloat("FAST_MODEL_TOPP", "FAST_MODEL_TOP_P", "FAST_TOPP"); ok {
+			return &val
+		}
+	}
+
+	if val, ok := parseEnvFloat("GLLAM_TOPP", "GLLAM_TOP_P", "LLM_TOPP", "LLM_TOP_P"); ok {
+		return &val
+	}
+
+	if c.Tier != "strong" && c.Tier != "fast" {
+		if val, ok := parseEnvFloat("STRONG_MODEL_TOPP", "FAST_MODEL_TOPP"); ok {
+			return &val
+		}
+	}
+
+	def := float32(0.95)
+	return &def
+}
+
+// GetRepeatPenalty returns the repeat penalty sampling parameter
+func (c *LLMClient) GetRepeatPenalty() *float32 {
+	if c.Tier == "strong" {
+		if val, ok := parseEnvFloat("STRONG_MODEL_REPEATPENALTY", "STRONG_MODEL_REPEAT_PENALTY", "STRONG_MODEL_REPETITION_PENALTY"); ok {
+			return &val
+		}
+	} else if c.Tier == "fast" {
+		if val, ok := parseEnvFloat("FAST_MODEL_REPEATPENALTY", "FAST_MODEL_REPEAT_PENALTY", "FAST_MODEL_REPETITION_PENALTY"); ok {
+			return &val
+		}
+	}
+
+	if val, ok := parseEnvFloat("GLLAM_REPEATPENALTY", "GLLAM_REPEAT_PENALTY", "LLM_REPEATPENALTY"); ok {
+		return &val
+	}
+
+	if c.Tier != "strong" && c.Tier != "fast" {
+		if val, ok := parseEnvFloat("STRONG_MODEL_REPEATPENALTY", "FAST_MODEL_REPEATPENALTY"); ok {
+			return &val
+		}
+	}
+
+	def := float32(1.1)
+	return &def
+}
+
+// GetPresencePenalty returns the presence penalty sampling parameter
+func (c *LLMClient) GetPresencePenalty() *float32 {
+	if c.Tier == "strong" {
+		if val, ok := parseEnvFloat("STRONG_MODEL_PRESENCEPENALTY", "STRONG_MODEL_PRESENCE_PENALTY"); ok {
+			return &val
+		}
+	} else if c.Tier == "fast" {
+		if val, ok := parseEnvFloat("FAST_MODEL_PRESENCEPENALTY", "FAST_MODEL_PRESENCE_PENALTY"); ok {
+			return &val
+		}
+	}
+
+	if val, ok := parseEnvFloat("GLLAM_PRESENCEPENALTY", "GLLAM_PRESENCE_PENALTY", "LLM_PRESENCEPENALTY"); ok {
+		return &val
+	}
+
+	if c.Tier != "strong" && c.Tier != "fast" {
+		if val, ok := parseEnvFloat("STRONG_MODEL_PRESENCEPENALTY", "FAST_MODEL_PRESENCEPENALTY"); ok {
+			return &val
+		}
+	}
+
+	def := float32(0.3)
+	return &def
+}
+
+// GetFrequencyPenalty returns the frequency penalty sampling parameter
+func (c *LLMClient) GetFrequencyPenalty() *float32 {
+	if c.Tier == "strong" {
+		if val, ok := parseEnvFloat("STRONG_MODEL_FREQUENCYPENALTY", "STRONG_MODEL_FREQUENCY_PENALTY"); ok {
+			return &val
+		}
+	} else if c.Tier == "fast" {
+		if val, ok := parseEnvFloat("FAST_MODEL_FREQUENCYPENALTY", "FAST_MODEL_FREQUENCY_PENALTY"); ok {
+			return &val
+		}
+	}
+
+	if val, ok := parseEnvFloat("GLLAM_FREQUENCYPENALTY", "GLLAM_FREQUENCY_PENALTY", "LLM_FREQUENCYPENALTY"); ok {
+		return &val
+	}
+
+	if c.Tier != "strong" && c.Tier != "fast" {
+		if val, ok := parseEnvFloat("STRONG_MODEL_FREQUENCYPENALTY", "FAST_MODEL_FREQUENCYPENALTY"); ok {
+			return &val
+		}
+	}
+
+	def := float32(0.3)
+	return &def
+}
+
 // Generate responds to a user prompt given a system prompt context
 func (c *LLMClient) Generate(ctx context.Context, systemPrompt, userPrompt string) (string, error) {
 	return c.GenerateWithFormat(ctx, systemPrompt, userPrompt, nil)
@@ -315,20 +492,35 @@ func (c *LLMClient) generateWithFormatNoCache(ctx context.Context, systemPrompt,
 		if maxTokens > maxExtractionCap {
 			maxTokens = maxExtractionCap
 		}
+		isOpenAIOrOpenRouter := strings.Contains(c.BaseURL, "openrouter.ai") || strings.Contains(c.BaseURL, "openai.com")
+		var chatTemplateKwargs map[string]interface{}
+		var repeatPenalty *float32 = c.GetRepeatPenalty()
+		if !isOpenAIOrOpenRouter {
+			chatTemplateKwargs = map[string]interface{}{
+				"preserve_thinking": true,
+			}
+		} else {
+			repeatPenalty = nil
+		}
+
 		reqBody := ChatCompletionRequest{
 			Model: c.Model,
 			Messages: []ChatMessage{
 				{Role: "system", Content: systemPrompt},
 				{Role: "user", Content: userPrompt},
 			},
-			ResponseFormat: c.adaptResponseFormat(responseFormat),
-			ChatTemplateKwargs: map[string]interface{}{
-				"preserve_thinking": true,
-			},
-			Temperature: 0.1,
-			Stream:      false,
-			MaxTokens:   maxTokens,
-			CachePrompt: true,
+			ResponseFormat:     c.adaptResponseFormat(responseFormat),
+			ChatTemplateKwargs: chatTemplateKwargs,
+			Temperature:        c.GetTemperature(),
+			TopP:               c.GetTopP(),
+			MinP:               c.GetMinP(),
+			RepeatPenalty:      repeatPenalty,
+			RepetitionPenalty:  c.GetRepeatPenalty(),
+			PresencePenalty:    c.GetPresencePenalty(),
+			FrequencyPenalty:   c.GetFrequencyPenalty(),
+			Stream:             false,
+			MaxTokens:          maxTokens,
+			CachePrompt:        true,
 		}
 
 		payload, err := json.Marshal(reqBody)
@@ -398,16 +590,28 @@ func (c *LLMClient) generateWithFormatNoCache(ctx context.Context, systemPrompt,
 	}
 
 	// Default: Streaming generation with automatic non-streaming fallback
+	isOpenAIOrOpenRouter := strings.Contains(c.BaseURL, "openrouter.ai") || strings.Contains(c.BaseURL, "openai.com")
+	var repeatPenalty *float32 = c.GetRepeatPenalty()
+	if isOpenAIOrOpenRouter {
+		repeatPenalty = nil
+	}
+
 	reqBody := ChatCompletionRequest{
 		Model: c.Model,
 		Messages: []ChatMessage{
 			{Role: "system", Content: systemPrompt},
 			{Role: "user", Content: userPrompt},
 		},
-		Temperature: 0.1,
-		Stream:      true,
-		MaxTokens:   maxTokens,
-		CachePrompt: true,
+		Temperature:       c.GetTemperature(),
+		TopP:              c.GetTopP(),
+		MinP:              c.GetMinP(),
+		RepeatPenalty:     repeatPenalty,
+		RepetitionPenalty: c.GetRepeatPenalty(),
+		PresencePenalty:   c.GetPresencePenalty(),
+		FrequencyPenalty:  c.GetFrequencyPenalty(),
+		Stream:            true,
+		MaxTokens:         maxTokens,
+		CachePrompt:       true,
 	}
 
 	body, err := json.Marshal(reqBody)
