@@ -61,6 +61,12 @@ func serializeEmbedding(vec []float32) ([]byte, error) {
 
 // Embed sends text to the llama.cpp server and returns the embedding vector.
 func (l *LlamaEmbedder) Embed(ctx context.Context, text string) ([]float32, error) {
+	// Guard against oversized inputs that exceed the embedding server's context window.
+	// Find a clean paragraph boundary between 14,000 and 16,000 characters (~4,000 tokens).
+	if len([]rune(text)) > 16000 {
+		text = TruncateAtParagraphBoundary(text, 14000, 16000)
+	}
+
 	l.cacheMu.RLock()
 	if val, found := l.cache[text]; found {
 		l.cacheMu.RUnlock()

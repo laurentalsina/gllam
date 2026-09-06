@@ -31,7 +31,11 @@ func (e *GllamEngine) SaveEpisodicSummary(ctx context.Context, summary memory.Ep
     }
 
     if e.embedder != nil {
-        emb, err := e.embedder.Embed(ctx, summary.SummaryText)
+        // For coarse session-level routing, find a natural paragraph boundary between
+        // 4096 and 5120 characters to avoid cutting in the middle of paragraphs.
+        textToEmbed := TruncateAtParagraphBoundary(summary.SummaryText, 4096, 5120)
+
+        emb, err := e.embedder.Embed(ctx, textToEmbed)
         if err == nil {
             embBytes, err := serializeEmbedding(emb)
             if err == nil {

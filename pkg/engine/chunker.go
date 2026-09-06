@@ -309,3 +309,65 @@ func snapToBoundaryForward(runes []rune, pos, maxPos int) int {
 	}
 	return pos
 }
+
+// TruncateAtParagraphBoundary finds a natural paragraph boundary (\n\n), turn boundary (\n),
+// or sentence boundary in the window between minChars and maxChars (or nearest preceding boundary)
+// to avoid cutting text in the middle of a paragraph.
+func TruncateAtParagraphBoundary(text string, minChars, maxChars int) string {
+	runes := []rune(text)
+	if len(runes) <= minChars {
+		return text
+	}
+
+	if maxChars > len(runes) {
+		maxChars = len(runes)
+	}
+	if minChars >= maxChars {
+		return string(runes[:minChars])
+	}
+
+	// 1. Search for a double-newline paragraph break (\n\n) in the window [minChars, maxChars]
+	sub := string(runes[minChars:maxChars])
+	if idx := strings.LastIndex(sub, "\n\n"); idx != -1 {
+		runeOffset := utf8.RuneCountInString(sub[:idx+2])
+		return strings.TrimSpace(string(runes[:minChars+runeOffset]))
+	}
+
+	// 2. Search for a single-newline turn boundary (\n) in [minChars, maxChars]
+	if idx := strings.LastIndex(sub, "\n"); idx != -1 {
+		runeOffset := utf8.RuneCountInString(sub[:idx+1])
+		return strings.TrimSpace(string(runes[:minChars+runeOffset]))
+	}
+
+	// 3. Search for a sentence boundary (. ! ?) followed by space/newline in [minChars, maxChars]
+	for i := maxChars - 1; i >= minChars; i-- {
+		r := runes[i]
+		if (r == '.' || r == '!' || r == '?') && i+1 < len(runes) && (unicode.IsSpace(runes[i+1]) || runes[i+1] == '\n') {
+			return strings.TrimSpace(string(runes[:i+1]))
+		}
+	}
+
+	// 4. If no boundary found in the window, search backwards from minChars for the nearest paragraph break (\n\n)
+	prefix := string(runes[:minChars])
+	if idx := strings.LastIndex(prefix, "\n\n"); idx != -1 && idx >= minChars/2 {
+		runeOffset := utf8.RuneCountInString(prefix[:idx+2])
+		return strings.TrimSpace(string(runes[:runeOffset]))
+	}
+
+	// 5. Fallback: search backwards for nearest sentence boundary
+	for i := minChars - 1; i >= minChars/2; i-- {
+		r := runes[i]
+		if (r == '.' || r == '!' || r == '?') && i+1 < len(runes) && (unicode.IsSpace(runes[i+1]) || runes[i+1] == '\n') {
+			return strings.TrimSpace(string(runes[:i+1]))
+		}
+	}
+
+	// 6. Word boundary in [minChars, maxChars]
+	for i := maxChars - 1; i >= minChars; i-- {
+		if unicode.IsSpace(runes[i]) {
+			return strings.TrimSpace(string(runes[:i]))
+		}
+	}
+
+	return string(runes[:maxChars])
+}

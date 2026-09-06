@@ -32,11 +32,16 @@ DB_PATH="./bench/gllam_data_beam_test.db"
 
 BEAM_CONVERSATIONS="/home/laurent/Projects/agentic_benchmarks/beam_100k_conversations.jsonl"
 BEAM_QA="/home/laurent/Projects/agentic_benchmarks/beam_100k_qa_sample50.jsonl"
-OUT_RESULTS="./bench/beam/beam_100k_results_test.jsonl"
-GRADE_OUT="./bench/beam/beam_final_grade_test.txt"
+RUN_TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
+RUN_LOG_DIR="./bench/beam/run_logs/${RUN_TIMESTAMP}"
+mkdir -p "$RUN_LOG_DIR"
+OUT_RESULTS="${RUN_LOG_DIR}/beam_100k_results.jsonl"
+GRADE_OUT="${RUN_LOG_DIR}/beam_final_grade.txt"
 
 echo "======================================================="
 echo "🚀 Starting BEAM 100k Benchmark Pipeline"
+echo "   ├─ Run Logs: $RUN_LOG_DIR"
+echo "   ├─ Results: $OUT_RESULTS"
 echo "   ├─ DB: $DB_PATH"
 echo "   ├─ Fast Text Server: ${FAST_TEXT_SERVER:-<not set>}"
 echo "   ├─ Strong Text Server: ${STRONG_TEXT_SERVER:-<not set>}"
@@ -79,6 +84,7 @@ go run ./cmd/grade_beam/main.go \
 
 echo "======================================================="
 echo "✅ Pipeline Complete!"
+echo "   ├─ Results saved to $OUT_RESULTS"
 echo "   └─ Grade report saved to $GRADE_OUT"
 echo "======================================================="
 cat "$GRADE_OUT"

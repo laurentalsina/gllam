@@ -56,8 +56,12 @@ if [ ! -f "$RESULTS_FILE" ]; then
     exit 1
 fi
 
-RESULTS_DIR=$(dirname "$RESULTS_FILE")
-GRADE_OUT="${2:-${RESULTS_DIR}/beam_final_grade_selective.json}"
+if [[ "$RESULTS_FILE" == *"selective"* ]]; then
+    DEFAULT_GRADE_OUT="${RESULTS_DIR}/beam_final_grade_selective.json"
+else
+    DEFAULT_GRADE_OUT="${RESULTS_DIR}/beam_final_grade.json"
+fi
+GRADE_OUT="${2:-$DEFAULT_GRADE_OUT}"
 
 echo "======================================================="
 echo "📊 Grading BEAM Results"

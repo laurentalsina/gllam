@@ -220,12 +220,12 @@ func (c *LLMClient) adaptResponseFormat(original map[string]interface{}) map[str
 	}
 
 	// Check if this is OpenRouter/OpenAI-compatible and needs standard JSON Schema format
-	isLocal := strings.Contains(c.BaseURL, "127.0.0.1") || strings.Contains(c.BaseURL, "localhost") || strings.Contains(c.BaseURL, "100.96.")
+	isOpenAIOrOpenRouter := strings.Contains(c.BaseURL, "openrouter.ai") || strings.Contains(c.BaseURL, "openai.com")
 
 	t, okType := original["type"].(string)
 	schema, okSchema := original["schema"]
 
-	if !isLocal && okType && t == "json_object" && okSchema {
+	if isOpenAIOrOpenRouter && okType && t == "json_object" && okSchema {
 		// Convert to standard OpenAI / OpenRouter json_schema format
 		return map[string]interface{}{
 			"type": "json_schema",
@@ -296,6 +296,15 @@ func (c *LLMClient) generateWithFormatNoCache(ctx context.Context, systemPrompt,
 
 	// If response format is provided, perform a non-streaming constrained request
 	if responseFormat != nil {
+		maxExtractionCap := 5120 // ~5k tokens: provides ample paragraph-level headroom above 4096
+		if envCap := os.Getenv("MAX_EXTRACTION_TOKENS"); envCap != "" {
+			if val, err := strconv.Atoi(envCap); err == nil && val > 0 {
+				maxExtractionCap = val
+			}
+		}
+		if maxTokens > maxExtractionCap {
+			maxTokens = maxExtractionCap
+		}
 		reqBody := ChatCompletionRequest{
 			Model: c.Model,
 			Messages: []ChatMessage{

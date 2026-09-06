@@ -11,8 +11,8 @@ export GLLAM_PLANNER_EXECUTABLE_PATH="/home/laurent/Projects/downward/fast-downw
 # Model Context Window & Timeout Environment Variables
 export STRONG_MODEL_CONTEXT="${STRONG_MODEL_CONTEXT:-131072}"
 export FAST_MODEL_CONTEXT="${FAST_MODEL_CONTEXT:-65536}"
-export STRONG_MODEL_TIMEOUT="${STRONG_MODEL_TIMEOUT:-180}"
-export FAST_MODEL_TIMEOUT="${FAST_MODEL_TIMEOUT:-120}"
+export STRONG_MODEL_TIMEOUT="${STRONG_MODEL_TIMEOUT:-300}"
+export FAST_MODEL_TIMEOUT="${FAST_MODEL_TIMEOUT:-360}"
 
 # Validate required server endpoints
 if [ -z "$FAST_TEXT_SERVER" ] && [ -z "$STRONG_TEXT_SERVER" ]; then

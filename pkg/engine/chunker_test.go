@@ -73,3 +73,19 @@ func TestValidateTranscriptSemanticCoherence(t *testing.T) {
 	}
 }
 
+func TestTruncateAtParagraphBoundary(t *testing.T) {
+	// Build text with paragraphs
+	p1 := strings.Repeat("This is paragraph one. ", 150) // ~3450 chars
+	p2 := strings.Repeat("This is paragraph two. ", 50)  // ~1150 chars
+	p3 := strings.Repeat("This is paragraph three. ", 50) // ~1150 chars
+	fullText := p1 + "\n\n" + p2 + "\n\n" + p3
+
+	cut := TruncateAtParagraphBoundary(fullText, 4096, 5120)
+	if len(cut) < 4096 || len(cut) > 5120 {
+		t.Errorf("Expected cut length to be between 4096 and 5120, got %d", len(cut))
+	}
+	if !strings.HasSuffix(cut, "This is paragraph two.") {
+		t.Errorf("Expected cut to end cleanly at end of paragraph two, got suffix: %s", cut[max(0, len(cut)-50):])
+	}
+}
+
