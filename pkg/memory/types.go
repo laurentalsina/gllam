@@ -52,6 +52,7 @@ type SemanticNode struct {
 	TaxonomyPath  string `json:"taxonomy_path"` // Materialized path (e.g. /Engineering/Infrastructure/Databases/Relational/Postgres)
 	IsCategory    bool   `json:"is_category"`   // Flag indicating if node represents a taxonomy category
 	CaveatSummary string    `json:"caveat_summary,omitempty"` // Compacted historical node caveat summary
+	ContextSiloID string    `json:"context_silo_id,omitempty"` // Partitioning ID (e.g. corpus conversation or document silo)
 	CreatedFrom   string    `json:"created_from"`          // Reference to raw data that led to creation (e.g. filename + chunk number)
         CreatedAt     time.Time `json:"created_at"`
         UpdatedAt     time.Time `json:"updated_at"`
@@ -72,6 +73,7 @@ type TaxonomyNode struct {
 
 type SemanticTemporalAttributes struct {
 	ID               string `json:"id,omitempty"`
+	ContextSiloID    string `json:"context_silo_id,omitempty"`
 	ValidFrom        string `json:"valid_from,omitempty"`
 	ValidUntil       string `json:"valid_until,omitempty"`
 	TemporalAnchorID string `json:"temporal_anchor_id,omitempty"`
@@ -88,6 +90,7 @@ type SemanticLink struct {
     Modality              string  `json:"modality"`
     OriginID              string  `json:"origin_id"`              // node (id) for human/agent/system that provided information about the link
     ResolutionRationale   string  `json:"resolution_rationale"`   // Explanation when resolving a contradiction
+    ContextSiloID         string  `json:"context_silo_id,omitempty"` // Partitioning ID (e.g. corpus conversation or document silo)
     CreatedFrom           string  `json:"created_from"`           // Reference to raw data that led to creation (e.g. filename + chunk number)
     CreatedAt             time.Time `json:"created_at"`
     UpdatedAt             time.Time `json:"updated_at"`

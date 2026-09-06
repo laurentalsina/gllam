@@ -32,8 +32,9 @@ CREATE TABLE IF NOT EXISTS procedural_knowledge (
 -- 3. SEMANTIC NODES (Grounded entities & taxonomy categories)
 CREATE TABLE IF NOT EXISTS semantic_nodes (
     id TEXT PRIMARY KEY,
-    name TEXT UNIQUE NOT NULL,
+    name TEXT NOT NULL,
     type TEXT NOT NULL, 
+    context_silo_id TEXT NOT NULL DEFAULT '', -- Partitioning ID (e.g. corpus conversation or document silo)
     context_prompt TEXT,
     trust_weight INTEGER DEFAULT 100,
     taxonomy_path TEXT DEFAULT '/',        -- Materialized path (e.g. /Engineering/Infrastructure/Databases/Relational/Postgres)
@@ -45,12 +46,15 @@ CREATE TABLE IF NOT EXISTS semantic_nodes (
 );
 
 CREATE INDEX IF NOT EXISTS idx_semantic_nodes_id ON semantic_nodes(id);
+CREATE INDEX IF NOT EXISTS idx_semantic_nodes_silo ON semantic_nodes(context_silo_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_semantic_nodes_silo_name ON semantic_nodes(context_silo_id, name);
 CREATE INDEX IF NOT EXISTS idx_semantic_nodes_taxonomy_path ON semantic_nodes(taxonomy_path);
 CREATE INDEX IF NOT EXISTS idx_semantic_nodes_is_category ON semantic_nodes(is_category);
 
 -- 4a. SEMANTIC TEMPORAL ATTRIBUTES
 CREATE TABLE IF NOT EXISTS semantic_temporal_links (
     id TEXT PRIMARY KEY,
+    context_silo_id TEXT NOT NULL DEFAULT '', -- Partitioning ID (e.g. corpus conversation or document silo)
     valid_from TEXT,                -- Unix timestamp string OR qualitative date/time
     valid_until TEXT,               -- Unix timestamp string OR qualitative date/time
     temporal_anchor_id TEXT,        -- Grounded node ID reference for relative timing
@@ -59,11 +63,14 @@ CREATE TABLE IF NOT EXISTS semantic_temporal_links (
     FOREIGN KEY (temporal_anchor_id) REFERENCES semantic_nodes(id) ON DELETE SET NULL
 );
 
+CREATE INDEX IF NOT EXISTS idx_semantic_temporal_links_silo ON semantic_temporal_links(context_silo_id);
+
 -- 4b. SEMANTIC LINKS (Caveat-qualified relationships with grounded uncertainty support)
 CREATE TABLE IF NOT EXISTS semantic_links (
     source_id TEXT NOT NULL,
     target_id TEXT NOT NULL,
     relationship TEXT NOT NULL,
+    context_silo_id TEXT NOT NULL DEFAULT '', -- Partitioning ID (e.g. corpus conversation or document silo)
     caveats TEXT NOT NULL,                -- Conditions, constraints, or exceptions
     modality TEXT NOT NULL,               -- Epistemic: default, Alethic: physically/logically necessary, Deontic: obligatory/permitted/prohibited etc...
     origin_id TEXT,                       -- node ID (human, agent, system) that provided information about the link
@@ -79,6 +86,7 @@ CREATE TABLE IF NOT EXISTS semantic_links (
     FOREIGN KEY (temporal_link_id) REFERENCES semantic_temporal_links(id) ON DELETE SET NULL
 );
 
+CREATE INDEX IF NOT EXISTS idx_semantic_links_silo ON semantic_links(context_silo_id);
 CREATE INDEX IF NOT EXISTS idx_semantic_links_target ON semantic_links(target_id);
 CREATE INDEX IF NOT EXISTS idx_semantic_links_source ON semantic_links(source_id);
 CREATE INDEX IF NOT EXISTS idx_semantic_links_origin ON semantic_links(origin_id);

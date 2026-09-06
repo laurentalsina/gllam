@@ -285,5 +285,47 @@ func (e *GllamEngine) InitSchema() error {
 		fmt.Println("   🔧 Successfully migrated database schema: added temporal_link_id column to semantic_links table.")
 	}
 
+	// Schema Migration: Check and add context_silo_id to semantic_nodes, semantic_links, and semantic_temporal_links
+	ensureColumnExists := func(table, column, colDef string) error {
+		hasCol := false
+		tRows, qErr := e.db.Query(fmt.Sprintf("PRAGMA table_info(%s)", table))
+		if qErr != nil {
+			return nil
+		}
+		defer tRows.Close()
+		for tRows.Next() {
+			var cid int
+			var name, typeStr string
+			var notnull, pk int
+			var dfltVal sql.NullString
+			if sErr := tRows.Scan(&cid, &name, &typeStr, &notnull, &dfltVal, &pk); sErr == nil && name == column {
+				hasCol = true
+				break
+			}
+		}
+		if !hasCol {
+			_, alterErr := e.db.Exec(fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", table, column, colDef))
+			if alterErr != nil {
+				return fmt.Errorf("failed to add column %s to %s: %w", column, table, alterErr)
+			}
+			fmt.Printf("   🔧 Successfully migrated database schema: added %s column to %s table.\n", column, table)
+		}
+		return nil
+	}
+
+	if err := ensureColumnExists("semantic_nodes", "context_silo_id", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	if err := ensureColumnExists("semantic_links", "context_silo_id", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	if err := ensureColumnExists("semantic_temporal_links", "context_silo_id", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+
+	_, _ = e.db.Exec("CREATE INDEX IF NOT EXISTS idx_semantic_nodes_silo ON semantic_nodes(context_silo_id)")
+	_, _ = e.db.Exec("CREATE INDEX IF NOT EXISTS idx_semantic_links_silo ON semantic_links(context_silo_id)")
+	_, _ = e.db.Exec("CREATE INDEX IF NOT EXISTS idx_semantic_temporal_links_silo ON semantic_temporal_links(context_silo_id)")
+
 	return nil
 }

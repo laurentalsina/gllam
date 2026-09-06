@@ -49,14 +49,15 @@ func (e *GllamEngine) UpsertNode(ctx context.Context, node memory.SemanticNode) 
 	}
 
 	query := `
-        INSERT INTO semantic_nodes (id, name, type, context_prompt, trust_weight, taxonomy_path, is_category, caveat_summary, created_from, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO semantic_nodes (id, name, type, context_silo_id, context_prompt, trust_weight, taxonomy_path, is_category, caveat_summary, created_from, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET 
             name = CASE 
                 WHEN (lower(excluded.name) LIKE 'user%' OR lower(excluded.name) LIKE 'assistant%') AND NOT (lower(semantic_nodes.name) LIKE 'user%' OR lower(semantic_nodes.name) LIKE 'assistant%') AND semantic_nodes.name != '' THEN semantic_nodes.name
                 ELSE excluded.name
             END, 
             type = excluded.type, 
+            context_silo_id = CASE WHEN excluded.context_silo_id != '' THEN excluded.context_silo_id ELSE semantic_nodes.context_silo_id END,
             context_prompt = CASE 
                 WHEN excluded.context_prompt != '' AND excluded.context_prompt IS NOT NULL THEN excluded.context_prompt
                 ELSE semantic_nodes.context_prompt
@@ -68,7 +69,7 @@ func (e *GllamEngine) UpsertNode(ctx context.Context, node memory.SemanticNode) 
             created_from = COALESCE(excluded.created_from, semantic_nodes.created_from),
             updated_at = excluded.updated_at`
 
-	_, err := e.db.ExecContext(ctx, query, node.ID, node.Name, node.Type, node.ContextPrompt, node.TrustWeight, node.TaxonomyPath, isCatInt, caveatSummaryVal, createdFromVal, createdTime, now)
+	_, err := e.db.ExecContext(ctx, query, node.ID, node.Name, node.Type, node.ContextSiloID, node.ContextPrompt, node.TrustWeight, node.TaxonomyPath, isCatInt, caveatSummaryVal, createdFromVal, createdTime, now)
 	if err != nil {
 		return fmt.Errorf("failed to upsert node: %w", err)
 	}
@@ -220,9 +221,10 @@ func (e *GllamEngine) AddEdge(ctx context.Context, link memory.SemanticLink) err
 		temporalLinkID = sql.NullString{String: tID, Valid: true}
 
 		insertTempQuery := `
-			INSERT INTO semantic_temporal_links (id, valid_from, valid_until, temporal_anchor_id, temporal_relation, temporal_note)
-			VALUES (?, ?, ?, ?, ?, ?)
+			INSERT INTO semantic_temporal_links (id, context_silo_id, valid_from, valid_until, temporal_anchor_id, temporal_relation, temporal_note)
+			VALUES (?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT(id) DO UPDATE SET
+				context_silo_id = CASE WHEN excluded.context_silo_id != '' THEN excluded.context_silo_id ELSE semantic_temporal_links.context_silo_id END,
 				valid_from = excluded.valid_from,
 				valid_until = excluded.valid_until,
 				temporal_anchor_id = excluded.temporal_anchor_id,
@@ -237,16 +239,17 @@ func (e *GllamEngine) AddEdge(ctx context.Context, link memory.SemanticLink) err
 			_ = e.db.QueryRowContext(ctx, "SELECT 1 FROM semantic_nodes WHERE id = ?", link.Temporal.TemporalAnchorID).Scan(&exists)
 			if exists == 0 {
 				_ = e.UpsertNode(ctx, memory.SemanticNode{
-					ID:          link.Temporal.TemporalAnchorID,
-					Name:        link.Temporal.TemporalAnchorID,
-					Type:        "event",
-					CreatedFrom: "anchor_inference",
+					ID:            link.Temporal.TemporalAnchorID,
+					Name:          link.Temporal.TemporalAnchorID,
+					Type:          "event",
+					ContextSiloID: link.ContextSiloID,
+					CreatedFrom:   "anchor_inference",
 				})
 			}
 		}
 
 		_, tErr := e.db.ExecContext(ctx, insertTempQuery,
-			tID, link.Temporal.ValidFrom, link.Temporal.ValidUntil,
+			tID, link.ContextSiloID, link.Temporal.ValidFrom, link.Temporal.ValidUntil,
 			anchorID, link.Temporal.TemporalRelation, link.Temporal.TemporalNote)
 		if tErr != nil {
 			return fmt.Errorf("failed to save semantic temporal attributes: %w", tErr)
@@ -254,9 +257,10 @@ func (e *GllamEngine) AddEdge(ctx context.Context, link memory.SemanticLink) err
 	}
 
     insertQuery := `
-        INSERT INTO semantic_links (source_id, target_id, relationship, caveats, modality, origin_id, resolution_rationale, created_from, created_at, updated_at, temporal_link_id)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO semantic_links (source_id, target_id, relationship, context_silo_id, caveats, modality, origin_id, resolution_rationale, created_from, created_at, updated_at, temporal_link_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(source_id, target_id, relationship) DO UPDATE SET 
+            context_silo_id = CASE WHEN excluded.context_silo_id != '' THEN excluded.context_silo_id ELSE semantic_links.context_silo_id END,
             caveats = excluded.caveats,
             modality = excluded.modality,
             origin_id = excluded.origin_id,
@@ -273,10 +277,11 @@ func (e *GllamEngine) AddEdge(ctx context.Context, link memory.SemanticLink) err
 		_ = e.db.QueryRowContext(ctx, "SELECT 1 FROM semantic_nodes WHERE id = ?", link.OriginID).Scan(&exists)
 		if exists == 0 {
 			_ = e.UpsertNode(ctx, memory.SemanticNode{
-				ID:          link.OriginID,
-				Name:        link.OriginID,
-				Type:        "human",
-				CreatedFrom: "origin_inference",
+				ID:            link.OriginID,
+				Name:          link.OriginID,
+				Type:          "human",
+				ContextSiloID: link.ContextSiloID,
+				CreatedFrom:   "origin_inference",
 			})
 		}
     }
@@ -290,7 +295,7 @@ func (e *GllamEngine) AddEdge(ctx context.Context, link memory.SemanticLink) err
     }
 
     _, err = e.db.ExecContext(ctx, insertQuery,
-        link.SourceID, link.TargetID, link.Relationship, link.Caveats, link.Modality,
+        link.SourceID, link.TargetID, link.Relationship, link.ContextSiloID, link.Caveats, link.Modality,
         origSource, resRationaleVal, createdFromVal, createdTime, nowTime, temporalLinkID)
 
     if err != nil {
