@@ -787,11 +787,36 @@ func main() {
 				// 6. Extract semantics just-in-time (or reuse cached graph if previously extracted for this silo)
 				tExtract0 := time.Now()
 				logTimestamp("JIT semantic extraction")
+
+				// Ensure chunk tracking table exists & backfill
+				_, _ = gllam.DB().ExecContext(ctx, `CREATE TABLE IF NOT EXISTS semantic_silo_chunks (
+					silo_id TEXT NOT NULL,
+					chunk_index INTEGER NOT NULL,
+					chunk_label TEXT NOT NULL,
+					completed_at TEXT NOT NULL,
+					PRIMARY KEY (silo_id, chunk_index)
+				)`)
+				_, _ = gllam.DB().ExecContext(ctx, `INSERT OR IGNORE INTO semantic_silo_chunks (silo_id, chunk_index, chunk_label, completed_at)
+					SELECT DISTINCT context_silo_id,
+						CAST(SUBSTR(created_from, INSTR(created_from, '_chunk_') + 7) AS INTEGER) AS chunk_index,
+						SUBSTR(created_from, INSTR(created_from, '_chunk_') + 7) AS chunk_label,
+						datetime('now')
+					FROM semantic_nodes
+					WHERE context_silo_id = ?
+					  AND created_from LIKE '%_chunk_%'
+					  AND CAST(SUBSTR(created_from, INSTR(created_from, '_chunk_') + 7) AS INTEGER) > 0`, siloID)
+
+				transcriptChunks := engine.ChunkTranscript(transcriptText, gllam.SystemPrompts.ChunkSize, gllam.SystemPrompts.ChunkOverlap)
+				totalExpectedChunks := len(transcriptChunks)
+
+				var completedChunksCount int
+				_ = gllam.DB().QueryRowContext(ctx, "SELECT count(*) FROM semantic_silo_chunks WHERE silo_id = ?", siloID).Scan(&completedChunksCount)
+
 				var cachedNodesCount int
 				_ = gllam.DB().QueryRowContext(ctx, "SELECT count(*) FROM semantic_nodes WHERE context_silo_id = ?", siloID).Scan(&cachedNodesCount)
 
-				if cachedNodesCount > 0 {
-					logMain("   ├─ ⚡ Reusing cached semantic graph for Context Silo '%s' (%d existing nodes). Skipping extraction!\n", siloID, cachedNodesCount)
+				if totalExpectedChunks > 0 && completedChunksCount >= totalExpectedChunks && cachedNodesCount > 0 {
+					logMain("   ├─ ⚡ Reusing fully cached semantic graph for Context Silo '%s' (all %d/%d chunks processed, %d existing nodes). Skipping extraction!\n", siloID, completedChunksCount, totalExpectedChunks, cachedNodesCount)
 					addEvent(fmt.Sprintf("Reused cached semantic graph (%d nodes) for silo %s", cachedNodesCount, siloID))
 				} else {
 					extractionPrompt := gllam.SystemPrompts.SemanticExtraction
@@ -1313,20 +1338,57 @@ func processChunkRecursive(
 func extractSemanticsForText(ctx context.Context, gllam *engine.GllamEngine, embedder engine.Embedder, llmClient *engine.LLMClient, text string, systemPrompt string, extractionJSONSchema map[string]interface{}, sourceName string, events *[]JITExtractionEvent) (int, int, error) {
 	chunks := engine.ChunkTranscript(text, gllam.SystemPrompts.ChunkSize, gllam.SystemPrompts.ChunkOverlap)
 
+	// Ensure chunk tracking table exists
+	_, _ = gllam.DB().ExecContext(ctx, `CREATE TABLE IF NOT EXISTS semantic_silo_chunks (
+		silo_id TEXT NOT NULL,
+		chunk_index INTEGER NOT NULL,
+		chunk_label TEXT NOT NULL,
+		completed_at TEXT NOT NULL,
+		PRIMARY KEY (silo_id, chunk_index)
+	)`)
+
+	// Backfill existing completed chunks from semantic_nodes if any
+	_, _ = gllam.DB().ExecContext(ctx, `INSERT OR IGNORE INTO semantic_silo_chunks (silo_id, chunk_index, chunk_label, completed_at)
+		SELECT DISTINCT context_silo_id,
+			CAST(SUBSTR(created_from, INSTR(created_from, '_chunk_') + 7) AS INTEGER) AS chunk_index,
+			SUBSTR(created_from, INSTR(created_from, '_chunk_') + 7) AS chunk_label,
+			datetime('now')
+		FROM semantic_nodes
+		WHERE context_silo_id = ?
+		  AND created_from LIKE '%_chunk_%'
+		  AND CAST(SUBSTR(created_from, INSTR(created_from, '_chunk_') + 7) AS INTEGER) > 0`, sourceName)
+
 	var totalNodes, totalLinks int
 	var lastErr error
 
 	seenNodeIDs := make(map[string]bool)
 	nodeIDMapping := make(map[string]string)
 
+	var skippedChunks int
 	for cIdx, chunk := range chunks {
-		label := fmt.Sprintf("%d/%d", cIdx+1, len(chunks))
+		chunkIndex := cIdx + 1
+		var isDone int
+		_ = gllam.DB().QueryRowContext(ctx, "SELECT count(*) FROM semantic_silo_chunks WHERE silo_id = ? AND chunk_index = ?", sourceName, chunkIndex).Scan(&isDone)
+		if isDone > 0 {
+			skippedChunks++
+			continue
+		}
+
+		label := fmt.Sprintf("%d/%d", chunkIndex, len(chunks))
+		fmt.Printf("   ├─ Processing missing/resumed Chunk %s for Silo '%s'...\n", label, sourceName)
 		n, l, err := processChunkRecursive(ctx, gllam, embedder, llmClient, chunk.Text, label, systemPrompt, extractionJSONSchema, sourceName, 0, 3, seenNodeIDs, nodeIDMapping, events)
 		totalNodes += n
 		totalLinks += l
-		if err != nil {
+		if err == nil {
+			now := time.Now().UTC().Format(time.RFC3339)
+			_, _ = gllam.DB().ExecContext(ctx, "INSERT OR REPLACE INTO semantic_silo_chunks (silo_id, chunk_index, chunk_label, completed_at) VALUES (?, ?, ?, ?)", sourceName, chunkIndex, label, now)
+		} else {
 			lastErr = err
 		}
+	}
+
+	if skippedChunks > 0 {
+		fmt.Printf("   ├─ ⚡ Reused %d previously completed chunks for Silo '%s'\n", skippedChunks, sourceName)
 	}
 
 	if totalNodes == 0 && totalLinks == 0 && lastErr != nil {
