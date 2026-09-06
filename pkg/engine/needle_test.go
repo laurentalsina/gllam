@@ -113,7 +113,8 @@ func TestContextSiloIsolation(t *testing.T) {
 	tempDir := t.TempDir()
 	dbPath := filepath.Join(tempDir, "test_silo_isolation.db")
 
-	gllam, err := NewGllamEngine(dbPath, nil)
+	mockEmbedder := &MockVersionedEmbedder{Version: "mock-v1"}
+	gllam, err := NewGllamEngine(dbPath, mockEmbedder)
 	if err != nil {
 		t.Fatalf("Failed to create engine: %v", err)
 	}
@@ -133,6 +134,8 @@ func TestContextSiloIsolation(t *testing.T) {
 		ContextPrompt: "Alice loves green tea",
 		ContextSiloID: "13",
 	})
+	_ = gllam.StoreNodeEmbedding(ctx, "silo_13_alice")
+
 	_ = gllam.UpsertNode(ctx, memory.SemanticNode{
 		ID:            "silo_13_bob",
 		Name:          "Bob in Silo 13",
@@ -140,6 +143,8 @@ func TestContextSiloIsolation(t *testing.T) {
 		ContextPrompt: "Bob is a software architect",
 		ContextSiloID: "13",
 	})
+	_ = gllam.StoreNodeEmbedding(ctx, "silo_13_bob")
+
 	_ = gllam.AddEdge(ctx, memory.SemanticLink{
 		SourceID:      "silo_13_alice",
 		TargetID:      "silo_13_bob",
@@ -155,6 +160,8 @@ func TestContextSiloIsolation(t *testing.T) {
 		ContextPrompt: "Alice loves black coffee",
 		ContextSiloID: "3",
 	})
+	_ = gllam.StoreNodeEmbedding(ctx, "silo_3_alice")
+
 	_ = gllam.UpsertNode(ctx, memory.SemanticNode{
 		ID:            "silo_3_charlie",
 		Name:          "Charlie in Silo 3",
@@ -162,12 +169,25 @@ func TestContextSiloIsolation(t *testing.T) {
 		ContextPrompt: "Charlie is a devops engineer",
 		ContextSiloID: "3",
 	})
+	_ = gllam.StoreNodeEmbedding(ctx, "silo_3_charlie")
+
 	_ = gllam.AddEdge(ctx, memory.SemanticLink{
 		SourceID:      "silo_3_alice",
 		TargetID:      "silo_3_charlie",
 		Relationship:  "works_with",
 		ContextSiloID: "3",
 	})
+
+	// 0. Vector Search isolation in SearchSimilarNodesInSilo
+	sim13, err := gllam.SearchSimilarNodesInSilo(ctx, "Alice", "13", 5)
+	if err != nil {
+		t.Fatalf("SearchSimilarNodesInSilo 13 failed: %v", err)
+	}
+	for _, res := range sim13 {
+		if res.NodeID != "silo_13_alice" && res.NodeID != "silo_13_bob" {
+			t.Fatalf("Vector search contamination! Found node %s in Silo 13 vector search", res.NodeID)
+		}
+	}
 
 	// 1. RetrieveHybridNeedle with Silo 13 -> Must NOT contain any Silo 3 nodes
 	results13, err := gllam.RetrieveHybridNeedleWithSilo(ctx, "Alice", []string{"silo_13_alice", "silo_3_alice"}, "", "13", 10)

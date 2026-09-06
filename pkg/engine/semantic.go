@@ -510,11 +510,15 @@ func (e *GllamEngine) SearchSimilarNodesInSilo(ctx context.Context, queryText st
 	var rows *sql.Rows
 	if siloID == "" {
 		query := `
-			SELECT e.node_id, e.distance, COALESCE(n.name, '')
-			FROM semantic_embeddings e
-			LEFT JOIN semantic_nodes n ON e.node_id = n.id
-			WHERE e.embedding MATCH vec_f32(?) AND e.k = ?
-			ORDER BY e.distance`
+			WITH knn AS MATERIALIZED (
+				SELECT node_id, distance
+				FROM semantic_embeddings
+				WHERE embedding MATCH vec_f32(?) AND k = ?
+			)
+			SELECT knn.node_id, knn.distance, COALESCE(n.name, '')
+			FROM knn
+			LEFT JOIN semantic_nodes n ON knn.node_id = n.id
+			ORDER BY knn.distance`
 		rows, err = e.dbRO.QueryContext(ctx, query, queryBlob, limit)
 	} else {
 		// When filtering by context_silo_id, expand k candidate search window to avoid under-fetching
@@ -523,11 +527,16 @@ func (e *GllamEngine) SearchSimilarNodesInSilo(ctx context.Context, queryText st
 			kWindow = 200
 		}
 		query := `
-			SELECT e.node_id, e.distance, COALESCE(n.name, '')
-			FROM semantic_embeddings e
-			JOIN semantic_nodes n ON e.node_id = n.id
-			WHERE e.embedding MATCH vec_f32(?) AND e.k = ? AND n.context_silo_id = ?
-			ORDER BY e.distance
+			WITH knn AS MATERIALIZED (
+				SELECT node_id, distance
+				FROM semantic_embeddings
+				WHERE embedding MATCH vec_f32(?) AND k = ?
+			)
+			SELECT knn.node_id, knn.distance, COALESCE(n.name, '')
+			FROM knn
+			JOIN semantic_nodes n ON knn.node_id = n.id
+			WHERE n.context_silo_id = ?
+			ORDER BY knn.distance
 			LIMIT ?`
 		rows, err = e.dbRO.QueryContext(ctx, query, queryBlob, kWindow, siloID, limit)
 	}

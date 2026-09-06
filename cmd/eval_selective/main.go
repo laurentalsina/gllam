@@ -1001,16 +1001,19 @@ func extractSemanticsForText(ctx context.Context, gllam *engine.GllamEngine, emb
 	chunks := engine.ChunkTranscript(text, gllam.SystemPrompts.ChunkSize, gllam.SystemPrompts.ChunkOverlap)
 
 	var nodesCount, linksCount int
+	var lastErr error
 	for cIdx, chunk := range chunks {
 		if !engine.ValidateTranscriptSemanticCoherence(chunk.Text) {
 			continue
 		}
 
-		userPrompt := fmt.Sprintf("Transcript Chunk (%d/%d):\n%s\n\nExtract JSON:", cIdx+1, len(chunks), chunk.Text)
+		userPrompt := fmt.Sprintf("Transcript Chunk (%d/%d):\n%s\n\nExtract JSON directly without preamble or thinking:", cIdx+1, len(chunks), chunk.Text)
 
 		response, err := llmClient.GenerateWithFormat(ctx, systemPrompt, userPrompt, extractionJSONSchema)
 		if err != nil {
-			return 0, 0, err
+			lastErr = err
+			logMain("   ⚠️ Chunk %d/%d extraction failed: %v\n", cIdx+1, len(chunks), err)
+			continue
 		}
 
 		sanitized := SanitizeLLMJSON(response)
@@ -1214,6 +1217,9 @@ func extractSemanticsForText(ctx context.Context, gllam *engine.GllamEngine, emb
 		}
 	}
 
+	if nodesCount == 0 && linksCount == 0 && lastErr != nil {
+		return 0, 0, lastErr
+	}
 	return nodesCount, linksCount, nil
 }
 

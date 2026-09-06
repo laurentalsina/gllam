@@ -21,18 +21,21 @@ import (
 )
 
 type ChatMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role             string `json:"role"`
+	Content          string `json:"content"`
+	ReasoningContent string `json:"reasoning_content,omitempty"`
+	Reasoning        string `json:"reasoning,omitempty"`
 }
 
 type ChatCompletionRequest struct {
-	Model          string                 `json:"model,omitempty"`
-	Messages       []ChatMessage          `json:"messages"`
-	ResponseFormat map[string]interface{} `json:"response_format,omitempty"`
-	Temperature    float32                `json:"temperature"`
-	Stream         bool                   `json:"stream"`
-	MaxTokens      int                    `json:"max_tokens,omitempty"`
-	CachePrompt    bool                   `json:"cache_prompt,omitempty"`
+	Model              string                 `json:"model,omitempty"`
+	Messages           []ChatMessage          `json:"messages"`
+	ResponseFormat     map[string]interface{} `json:"response_format,omitempty"`
+	ChatTemplateKwargs map[string]interface{} `json:"chat_template_kwargs,omitempty"`
+	Temperature        float32                `json:"temperature"`
+	Stream             bool                   `json:"stream"`
+	MaxTokens          int                    `json:"max_tokens,omitempty"`
+	CachePrompt        bool                   `json:"cache_prompt,omitempty"`
 }
 
 type ChatStreamResponse struct {
@@ -48,7 +51,14 @@ type ChatStreamResponse struct {
 
 type ChatCompletionResponse struct {
 	Choices []struct {
-		Message ChatMessage `json:"message"`
+		Message struct {
+			Role             string `json:"role"`
+			Content          string `json:"content"`
+			ReasoningContent string `json:"reasoning_content,omitempty"`
+			Reasoning        string `json:"reasoning,omitempty"`
+			Thoughts         string `json:"thoughts,omitempty"`
+		} `json:"message"`
+		FinishReason string `json:"finish_reason,omitempty"`
 	} `json:"choices"`
 }
 
@@ -312,10 +322,13 @@ func (c *LLMClient) generateWithFormatNoCache(ctx context.Context, systemPrompt,
 				{Role: "user", Content: userPrompt},
 			},
 			ResponseFormat: c.adaptResponseFormat(responseFormat),
-			Temperature:    0.1,
-			Stream:         false,
-			MaxTokens:      maxTokens,
-			CachePrompt:    true,
+			ChatTemplateKwargs: map[string]interface{}{
+				"preserve_thinking": false,
+			},
+			Temperature: 0.1,
+			Stream:      false,
+			MaxTokens:   maxTokens,
+			CachePrompt: true,
 		}
 
 		payload, err := json.Marshal(reqBody)
@@ -363,9 +376,22 @@ func (c *LLMClient) generateWithFormatNoCache(ctx context.Context, systemPrompt,
 			return "", fmt.Errorf("no completion choices returned")
 		}
 
-		content := chatResp.Choices[0].Message.Content
+		choice := chatResp.Choices[0]
+		content := choice.Message.Content
+
+		// Fallback: if Content is empty, recover from ReasoningContent, Reasoning, or Thoughts
 		if strings.TrimSpace(content) == "" {
-			return "", fmt.Errorf("llm server returned an empty completion content choice (possibly blocked by content filter or context limit)")
+			if strings.TrimSpace(choice.Message.ReasoningContent) != "" {
+				content = choice.Message.ReasoningContent
+			} else if strings.TrimSpace(choice.Message.Reasoning) != "" {
+				content = choice.Message.Reasoning
+			} else if strings.TrimSpace(choice.Message.Thoughts) != "" {
+				content = choice.Message.Thoughts
+			}
+		}
+
+		if strings.TrimSpace(content) == "" {
+			return "", fmt.Errorf("llm server returned an empty completion content choice (finish_reason: %q, possibly blocked by content filter or context limit)", choice.FinishReason)
 		}
 
 		return content, nil
