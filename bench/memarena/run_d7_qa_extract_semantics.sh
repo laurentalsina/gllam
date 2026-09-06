@@ -5,16 +5,29 @@
 export CGO_ENABLED=1
 export CGO_CFLAGS="-I/home/laurent/vllm/.venv/lib/python3.13/site-packages/_rocm_sdk_devel/lib/rocm_sysdeps/include"
 
-TEXT_SERVER="${1:-${TEXT_SERVER:-${LLM_SERVER:-http://100.96.179.19:8888}}}"
+if [ -z "$FAST_TEXT_SERVER" ] && [ -z "$STRONG_TEXT_SERVER" ]; then
+    echo "❌ ERROR: Neither FAST_TEXT_SERVER nor STRONG_TEXT_SERVER is set in the environment!" >&2
+    echo "Please source your environment configuration (e.g. source scripts/local_llm_examples/source_setup_gllam.sh)." >&2
+    exit 1
+fi
+
+if [ -z "$EMBEDDINGS_SERVER" ]; then
+    echo "❌ ERROR: EMBEDDINGS_SERVER environment variable is not set!" >&2
+    exit 1
+fi
 
 EXTRA_FLAGS=()
 if [ "$CLEAN" = "true" ]; then
     EXTRA_FLAGS+=("--clean")
 fi
 
+CONCURRENCY="${CONCURRENCY:-1}"
+
 echo "======================================================="
 echo "🧩 Extracting Semantics for MemArena d7_qa Benchmark"
-echo "Endpoint: $TEXT_SERVER"
+echo "Fast Server: ${FAST_TEXT_SERVER:-<not set>}"
+echo "Strong Server: ${STRONG_TEXT_SERVER:-<not set>}"
+echo "Embeddings Server: $EMBEDDINGS_SERVER"
 echo "Database: ./bench/gllam_data.db"
 echo "Mode: Resumable (checkpointing active; set CLEAN=true to purge)"
 echo "======================================================="
@@ -22,6 +35,6 @@ echo "======================================================="
 go run ./cmd/extract_semantics/main.go \
   --dbpath ./bench/gllam_data.db \
   --prefix sess_ \
-  --concurrency 16 \
-  "${EXTRA_FLAGS[@]}" \
-  --text-server "$TEXT_SERVER"
+  --concurrency "$CONCURRENCY" \
+  --embeddings-server "$EMBEDDINGS_SERVER" \
+  "${EXTRA_FLAGS[@]}"

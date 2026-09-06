@@ -262,8 +262,7 @@ func clearSemanticTables(ctx context.Context, db *sql.DB) {
 
 func main() {
 	dbPath := flag.String("dbpath", getEnv("DATABASE_PATH", "./bench/gllam_data.db"), "Path to SQLite database")
-	textServer := flag.String("text-server", getEnv("TEXT_SERVER", "http://127.0.0.1:8888"), "LLM text server endpoint (llama.cpp)")
-	embeddingsServer := flag.String("embeddings-server", getEnv("EMBEDDINGS_SERVER", "http://127.0.0.1:8800"), "Embeddings server endpoint")
+	embeddingsServer := flag.String("embeddings-server", getEnv("EMBEDDINGS_SERVER", ""), "Embeddings server endpoint")
 	corpusPath := flag.String("corpus", getEnv("CORPUS_PATH", "./bench/memarena/corpus_sessions.jsonl"), "Path to corpus file")
 	qaPath := flag.String("qa", getEnv("QA_PATH", "./bench/memarena/d7_qa.jsonl"), "Path to QA jsonl file")
 	outPath := flag.String("out", getEnv("OUT_PATH", "./d7_qa_results_selective.jsonl"), "Output path")
@@ -282,6 +281,10 @@ func main() {
 	runTimestampFlag := flag.String("run-timestamp", "", "Override run timestamp for log directory naming")
 
 	flag.Parse()
+	if *embeddingsServer == "" {
+		fmt.Fprintf(os.Stderr, "❌ Error: Embeddings server not specified. Pass --embeddings-server or export EMBEDDINGS_SERVER\n")
+		os.Exit(1)
+	}
 	_ = debug
 	_ = decomposeQueryFlag
 
@@ -409,7 +412,7 @@ func main() {
 
 	var strongClient *engine.LLMClient
 	if strongServerEnv != "" {
-		strongClient = engine.NewLLMClientWithKey(strongServerEnv, "", strongModelEnv)
+		strongClient = engine.NewLLMClientWithKey(strongServerEnv, os.Getenv("OPENROUTER_API_KEY"), strongModelEnv)
 		strongClient.Tier = "strong"
 	}
 
@@ -421,8 +424,8 @@ func main() {
 
 	var defaultClient *engine.LLMClient
 	if strongClient == nil && fastClient == nil {
-		defaultClient = engine.NewLLMClient(*textServer)
-		defaultClient.Tier = "default"
+		fmt.Fprintf(os.Stderr, "❌ Error: Neither STRONG_TEXT_SERVER nor FAST_TEXT_SERVER is set in the environment!\n")
+		os.Exit(1)
 	}
 
 	sigChan := make(chan os.Signal, 1)

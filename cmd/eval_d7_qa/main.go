@@ -46,17 +46,41 @@ func getEnvInt(key string, fallback int) int {
 }
 
 func main() {
-        // Command Line Flag (has prio over)  Environment Variable (has prio over)  Hardcoded Default
-	dbPath := flag.String("dbpath", getEnv("DATABASE_PATH", "./bench/ gllam_data.db"), "Path to SQLite database (env: DATABASE_PATH_PATH)")
-	textServer := flag.String("text-server", getEnv("TEXT_SERVER", "https://openrouter.ai/api/v1"), "LLM text server endpoint (env: TEXT_SERVER)")
-	embeddingsServer := flag.String("embeddings-server", getEnv("EMBEDDINGS_SERVER", "http://127.0.0.1:8800"), "Embeddings server endpoint (env: EMBEDDINGS_SERVER)")
+	dbPath := flag.String("dbpath", getEnv("DATABASE_PATH", "./bench/gllam_data.db"), "Path to SQLite database (env: DATABASE_PATH)")
+	embeddingsServer := flag.String("embeddings-server", getEnv("EMBEDDINGS_SERVER", ""), "Embeddings server endpoint (env: EMBEDDINGS_SERVER)")
 
 	qaPath := flag.String("qa", getEnv("QA_PATH", "./d7_qa.jsonl"), "Path to d7_qa.jsonl (env: QA_PATH)")
 	outPath := flag.String("out", getEnv("OUT_PATH", "./d7_qa_results.jsonl"), "Output path (env: OUT_PATH)")
 	limit := flag.Int("limit", getEnvInt("LIMIT", 0), "Limit number of queries (0 for all) (env: LIMIT)")
-
 	
 	flag.Parse()
+
+	strongServerEnv := getEnv("STRONG_TEXT_SERVER", "")
+	strongModelEnv := getEnv("STRONG_LLM_MODEL", "")
+	fastServerEnv := getEnv("FAST_TEXT_SERVER", "")
+	fastModelEnv := getEnv("FAST_LLM_MODEL", "")
+
+	if strongServerEnv == "" && fastServerEnv == "" {
+		fmt.Fprintf(os.Stderr, "❌ Error: Neither STRONG_TEXT_SERVER nor FAST_TEXT_SERVER is set in the environment!\n")
+		os.Exit(1)
+	}
+	if *embeddingsServer == "" {
+		fmt.Fprintf(os.Stderr, "❌ Error: Embeddings server not specified. Pass --embeddings-server or export EMBEDDINGS_SERVER\n")
+		os.Exit(1)
+	}
+
+	taskTier := getEnv("BENCH_RESULT_EVALUATION", "STRONG_TEXT_SERVER")
+	var llmClient *engine.LLMClient
+	if taskTier == "STRONG_TEXT_SERVER" && strongServerEnv != "" {
+		llmClient = engine.NewLLMClientWithKey(strongServerEnv, os.Getenv("OPENROUTER_API_KEY"), strongModelEnv)
+		llmClient.Tier = "strong"
+	} else if fastServerEnv != "" {
+		llmClient = engine.NewLLMClientWithKey(fastServerEnv, "", fastModelEnv)
+		llmClient.Tier = "fast"
+	} else {
+		llmClient = engine.NewLLMClientWithKey(strongServerEnv, os.Getenv("OPENROUTER_API_KEY"), strongModelEnv)
+		llmClient.Tier = "strong"
+	}
 
 	ctx := context.Background()
 	embedder := engine.NewLlamaEmbedder(*embeddingsServer)
@@ -80,8 +104,8 @@ func main() {
 
 	fmt.Printf("=======================================================\n")
 	fmt.Printf("🚀 Starting Evaluation Engine\n")
-	fmt.Printf("   ├─ Endpoint: %s\n", *textServer)
-	fmt.Printf("   └─ Target Model: %s\n", modelName)
+	fmt.Printf("   ├─ Endpoint: %s\n", llmClient.BaseURL)
+	fmt.Printf("   └─ Target Model: %s\n", llmClient.Model)
 	fmt.Printf("=======================================================\n\n")
 
 	var nodeCount int
@@ -124,7 +148,6 @@ func main() {
 
 		fmt.Printf("Evaluating [%s]: %s\n", qa.InstanceID, qa.Query)
 		
-		llmClient := engine.NewLLMClient(*textServer)
 		compiled, err := gllam.RouteAndAssemble(ctx, qa.Query, nil)
 		var answer string
 		if err != nil {

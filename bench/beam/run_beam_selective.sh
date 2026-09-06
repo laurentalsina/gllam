@@ -14,9 +14,18 @@ export FAST_MODEL_CONTEXT="${FAST_MODEL_CONTEXT:-65536}"
 export STRONG_MODEL_TIMEOUT="${STRONG_MODEL_TIMEOUT:-180}"
 export FAST_MODEL_TIMEOUT="${FAST_MODEL_TIMEOUT:-120}"
 
-# Configurable endpoints and files
-TEXT_SERVER="${TEXT_SERVER:-http://100.96.179.19:8888}"
-EMBEDDINGS_SERVER="${EMBEDDINGS_SERVER:-http://127.0.0.1:8800}"
+# Validate required server endpoints
+if [ -z "$FAST_TEXT_SERVER" ] && [ -z "$STRONG_TEXT_SERVER" ]; then
+    echo "❌ ERROR: Neither FAST_TEXT_SERVER nor STRONG_TEXT_SERVER is set!" >&2
+    echo "Please source your environment configuration (e.g. source scripts/local_llm_examples/source_setup_gllam.sh)." >&2
+    exit 1
+fi
+
+if [ -z "$EMBEDDINGS_SERVER" ]; then
+    echo "❌ ERROR: EMBEDDINGS_SERVER environment variable is not set!" >&2
+    echo "Please export EMBEDDINGS_SERVER before running this benchmark." >&2
+    exit 1
+fi
 DB_PATH="./bench/gllam_data_selective_beam.db"
 
 BEAM_CORPUS="/home/laurent/Projects/agentic_benchmarks/beam_100k_conversations.jsonl"
@@ -100,7 +109,8 @@ fi
 echo "======================================================="
 echo "🚀 Starting BEAM 100k Dynamic Selective Benchmark"
 echo "   ├─ DB: $DB_PATH"
-echo "   ├─ Text Server: $TEXT_SERVER"
+echo "   ├─ Fast Text Server: ${FAST_TEXT_SERVER:-<not set>}"
+echo "   ├─ Strong Text Server: ${STRONG_TEXT_SERVER:-<not set>}"
 echo "   ├─ Embeddings Server: $EMBEDDINGS_SERVER"
 echo "   ├─ Planner: $GLLAM_PLANNER_EXECUTABLE_PATH"
 echo "   ├─ Debug Mode: $DEBUG_FLAG"
@@ -119,7 +129,6 @@ go run ./cmd/eval_selective/main.go \
   --corpus "$BEAM_CORPUS" \
   --qa "$BEAM_QA" \
   --out "$OUT_RESULTS" \
-  --text-server "$TEXT_SERVER" \
   --embeddings-server "$EMBEDDINGS_SERVER" \
   --top-k 10 \
   --use-utterances-vectors=true \
@@ -136,8 +145,7 @@ go run ./cmd/eval_selective/main.go \
 # Grade Results
 echo -e "\n📊 Grading Results..."
 go run ./cmd/grade_beam/main.go \
-  --results "$OUT_RESULTS" \
-  --text-server "$TEXT_SERVER" > "$GRADE_OUT" 2>&1
+  --results "$OUT_RESULTS" > "$GRADE_OUT" 2>&1
 
 echo "======================================================="
 echo "✅ Pipeline Complete!"

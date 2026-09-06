@@ -22,17 +22,18 @@ type Result struct {
 
 func main() {
 	resultsPath := flag.String("results", "./d7_qa_results.jsonl", "Path to results JSONL")
-	defaultTextServer := "http://100.96.179.19:8888"
-	if os.Getenv("OPENROUTER_API_KEY") != "" {
-		defaultTextServer = "https://openrouter.ai/api/v1"
-	}
-	textEndpoint := flag.String("text-server", defaultTextServer, "LLM text server")
 	verbose := flag.Bool("verbose", true, "Print detailed Query, Ground Truth, and Model Answer breakdown for failed items")
 	failReportPath := flag.String("fail-report", "", "Optional path to save failures markdown report")
 	flag.Parse()
 
-	if os.Getenv("OPENROUTER_API_KEY") != "" && (*textEndpoint == "http://100.96.179.19:8888" || *textEndpoint == defaultTextServer) {
-		*textEndpoint = "https://openrouter.ai/api/v1"
+	strongServerEnv := os.Getenv("STRONG_TEXT_SERVER")
+	strongModelEnv := os.Getenv("STRONG_LLM_MODEL")
+	fastServerEnv := os.Getenv("FAST_TEXT_SERVER")
+	fastModelEnv := os.Getenv("FAST_LLM_MODEL")
+
+	if strongServerEnv == "" && fastServerEnv == "" {
+		fmt.Fprintf(os.Stderr, "❌ Error: Neither STRONG_TEXT_SERVER nor FAST_TEXT_SERVER is set in the environment!\n")
+		os.Exit(1)
 	}
 
 	file, err := os.Open(*resultsPath)
@@ -42,7 +43,23 @@ func main() {
 	}
 	defer file.Close()
 
-	llmClient := engine.NewLLMClient(*textEndpoint)
+	taskTier := os.Getenv("BENCH_RESULT_EVALUATION")
+	if taskTier == "" {
+		taskTier = "FAST_TEXT_SERVER"
+	}
+
+	var llmClient *engine.LLMClient
+	if taskTier == "STRONG_TEXT_SERVER" && strongServerEnv != "" {
+		llmClient = engine.NewLLMClientWithKey(strongServerEnv, os.Getenv("OPENROUTER_API_KEY"), strongModelEnv)
+		llmClient.Tier = "strong"
+	} else if fastServerEnv != "" {
+		llmClient = engine.NewLLMClientWithKey(fastServerEnv, "", fastModelEnv)
+		llmClient.Tier = "fast"
+	} else {
+		llmClient = engine.NewLLMClientWithKey(strongServerEnv, os.Getenv("OPENROUTER_API_KEY"), strongModelEnv)
+		llmClient.Tier = "strong"
+	}
+
 	ctx := context.Background()
 
 	scanner := bufio.NewScanner(file)

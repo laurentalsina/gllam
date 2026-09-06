@@ -7,7 +7,11 @@ set -e
 export CGO_ENABLED=1
 export CGO_CFLAGS="-I/home/laurent/vllm/.venv/lib/python3.13/site-packages/_rocm_sdk_devel/lib/rocm_sysdeps/include"
 
-TEXT_SERVER="${TEXT_SERVER:-http://100.96.179.19:8888}"
+if [ -z "$FAST_TEXT_SERVER" ] && [ -z "$STRONG_TEXT_SERVER" ]; then
+    echo "❌ ERROR: Neither FAST_TEXT_SERVER nor STRONG_TEXT_SERVER is set!" >&2
+    echo "Please source your environment configuration (e.g. source scripts/local_llm_examples/source_setup_gllam.sh)." >&2
+    exit 1
+fi
 # Resolve the default results input file using the latest run logs directory
 DEFAULT_RESULTS="./bench/beam/beam_100k_results_selective.jsonl"
 if [ -d "./bench/beam/run_logs" ]; then
@@ -58,14 +62,14 @@ GRADE_OUT="${2:-${RESULTS_DIR}/beam_final_grade_selective.json}"
 echo "======================================================="
 echo "📊 Grading BEAM Results"
 echo "   ├─ Results: $RESULTS_FILE"
-echo "   ├─ Text Server: $TEXT_SERVER"
+echo "   ├─ Fast Text Server: ${FAST_TEXT_SERVER:-<not set>}"
+echo "   ├─ Strong Text Server: ${STRONG_TEXT_SERVER:-<not set>}"
 echo "   ├─ Output: $GRADE_OUT"
 echo "======================================================="
 
 # Run Grader
 go run ./cmd/grade_beam/main.go \
   --results "$RESULTS_FILE" \
-  --text-server "$TEXT_SERVER" \
   --output "$GRADE_OUT"
 
 echo "======================================================="

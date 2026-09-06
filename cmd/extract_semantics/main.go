@@ -49,8 +49,7 @@ func getEnv(key, fallback string) string {
 
 func main() {
 	dbPath := flag.String("dbpath", getEnv("DATABASE_PATH", "./bench/gllam_data.db"), "Path to SQLite database")
-	textServer := flag.String("text-server", getEnv("TEXT_SERVER", "http://127.0.0.1:8888"), "LLM text server endpoint (llama.cpp)")
-	embeddingServer := flag.String("embeddings-server", getEnv("EMBEDDINGS_SERVER", "http://127.0.0.1:8800"), "Embeddings server endpoint")
+	embeddingServer := flag.String("embeddings-server", getEnv("EMBEDDINGS_SERVER", ""), "Embeddings server endpoint")
         promptsPath := flag.String("prompts-config", getEnv("PROMPTS_CONFIG", "config/agentic_memory.json"), "Path to agentic memory config and prompts")
         schemaPath := flag.String("schema-file", getEnv("EXTRACTION_SCHEMA_PATH", "./config/semantic_extraction_schema.json"), "Path to JSON schema file for constrained decoding")
 
@@ -64,6 +63,20 @@ func main() {
 	trialChunk := flag.Int("trial-chunk", 1, "Chunk index (1-based) to use in trial mode")
 	useTemporal := flag.Bool("temporal", false, "Use temporal-ready extraction prompts instead of default")
 	flag.Parse()
+
+	strongServerEnv := getEnv("STRONG_TEXT_SERVER", "")
+	strongModelEnv := getEnv("STRONG_LLM_MODEL", "")
+	fastServerEnv := getEnv("FAST_TEXT_SERVER", "")
+	fastModelEnv := getEnv("FAST_LLM_MODEL", "")
+
+	if strongServerEnv == "" && fastServerEnv == "" {
+		fmt.Fprintf(os.Stderr, "❌ Error: Neither STRONG_TEXT_SERVER nor FAST_TEXT_SERVER is set in the environment!\n")
+		os.Exit(1)
+	}
+	if *embeddingServer == "" {
+		fmt.Fprintf(os.Stderr, "❌ Error: Embeddings server not specified. Pass --embeddings-server or export EMBEDDINGS_SERVER\n")
+		os.Exit(1)
+	}
 
         var extractionJSONSchema map[string]interface{}
         if *schemaPath != "" {
@@ -84,8 +97,19 @@ func main() {
         }
 
 	ctx := context.Background()
-	llmClient := engine.NewLLMClient(*textServer)
-	llmClient.Tier = "fast"
+
+	taskTier := getEnv("SEMANTIC_EXTRACTION", "FAST_TEXT_SERVER")
+	var llmClient *engine.LLMClient
+	if taskTier == "STRONG_TEXT_SERVER" && strongServerEnv != "" {
+		llmClient = engine.NewLLMClientWithKey(strongServerEnv, os.Getenv("OPENROUTER_API_KEY"), strongModelEnv)
+		llmClient.Tier = "strong"
+	} else if fastServerEnv != "" {
+		llmClient = engine.NewLLMClientWithKey(fastServerEnv, "", fastModelEnv)
+		llmClient.Tier = "fast"
+	} else {
+		llmClient = engine.NewLLMClientWithKey(strongServerEnv, os.Getenv("OPENROUTER_API_KEY"), strongModelEnv)
+		llmClient.Tier = "strong"
+	}
 
 	embedder := engine.NewLlamaEmbedder(*embeddingServer)
 	gllam, err := engine.NewGllamEngine(*dbPath, embedder)

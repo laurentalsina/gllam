@@ -28,8 +28,15 @@ type Conversation struct {
 func main() {
 	dbPath := flag.String("db", "./gllam_data.db", "Path to SQLite database")
 	jsonlPath := flag.String("jsonl", "/home/laurent/Projects/agentic_benchmarks/beam_100k_conversations.jsonl", "Path to the exported BEAM jsonl file")
-	embeddingsServer := flag.String("embeddings-server", "http://127.0.0.1:8800", "Embeddings server URL")
+	defaultEmbeddingServer := os.Getenv("EMBEDDINGS_SERVER")
+	embeddingsServer := flag.String("embeddings-server", defaultEmbeddingServer, "Embeddings server URL")
+	forceIngest := flag.Bool("force", false, "Force re-ingestion and re-embedding of already ingested sessions")
 	flag.Parse()
+
+	if *embeddingsServer == "" {
+		fmt.Fprintf(os.Stderr, "❌ Error: Embeddings server not specified. Pass --embeddings-server or export EMBEDDINGS_SERVER\n")
+		os.Exit(1)
+	}
 
 	ctx := context.Background()
 
@@ -44,6 +51,21 @@ func main() {
 	if err := gllam.InitSchema(); err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to initialize schema: %v\n", err)
 		os.Exit(1)
+	}
+
+	existingSessions := make(map[string]bool)
+	rows, err := gllam.DB().QueryContext(ctx, "SELECT id FROM episodic_summaries")
+	if err == nil {
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err == nil {
+				existingSessions[id] = true
+			}
+		}
+		rows.Close()
+	}
+	if len(existingSessions) > 0 && !*forceIngest {
+		fmt.Printf("ℹ️ Found %d existing sessions in database. Existing sessions will be skipped (use --force to re-embed).\n", len(existingSessions))
 	}
 
 	file, err := os.Open(*jsonlPath)
@@ -62,6 +84,7 @@ func main() {
 
 	convCount := 0
 	sessionCount := 0
+	skippedCount := 0
 
 	for scanner.Scan() {
 		line := scanner.Bytes()
@@ -71,16 +94,23 @@ func main() {
 			continue
 		}
 
-		for sessionIdx, session := range conv.Chat {
-			var currentSession strings.Builder
+		convIngested := 0
+		convSkipped := 0
 
+		for sessionIdx, session := range conv.Chat {
+			sessionID := fmt.Sprintf("beam-100k-%s-session%d", conv.ConversationID, sessionIdx)
+			if !*forceIngest && existingSessions[sessionID] {
+				skippedCount++
+				convSkipped++
+				continue
+			}
+
+			var currentSession strings.Builder
 			for _, msg := range session {
 				turnText := fmt.Sprintf("%s (id %d): %s\n\n", msg.Role, msg.ID, msg.Content)
 				currentSession.WriteString(turnText)
 			}
 
-			// Save this session
-			sessionID := fmt.Sprintf("beam-100k-%s-session%d", conv.ConversationID, sessionIdx)
 			summary := memory.EpisodicSummary{
 				ID:          sessionID,
 				SessionID:   sessionID,
@@ -92,16 +122,19 @@ func main() {
 				fmt.Fprintf(os.Stderr, "Failed to save session %s: %v\n", sessionID, err)
 			} else {
 				sessionCount++
+				convIngested++
 			}
 		}
 
 		convCount++
-		fmt.Printf("Ingested conversation %s containing %d sessions...\n", conv.ConversationID, len(conv.Chat))
+		if convIngested > 0 {
+			fmt.Printf("Ingested conversation %s (new sessions: %d, cached: %d)...\n", conv.ConversationID, convIngested, convSkipped)
+		}
 	}
 
 	if err := scanner.Err(); err != nil {
 		fmt.Fprintf(os.Stderr, "Scanner error: %v\n", err)
 	}
 
-	fmt.Printf("Ingestion complete. Total conversations: %d, Total sessions ingested: %d\n", convCount, sessionCount)
+	fmt.Printf("Ingestion complete. Total conversations: %d, Newly ingested: %d, Skipped (already cached): %d\n", convCount, sessionCount, skippedCount)
 }

@@ -43,12 +43,16 @@ func main() {
 	qaPath := flag.String("qa", "/home/laurent/Projects/agentic_benchmarks/beam_100k_qa.jsonl", "Path to beam qa jsonl")
 	outPath := flag.String("out", "./beam_100k_results.jsonl", "Output path")
 	limit := flag.Int("limit", 0, "Limit number of queries (0 for all)")
-	textServer := flag.String("text-server", getEnv("TEXT_SERVER", "http://127.0.0.1:8888"), "LLM text server endpoint")
-	embeddingServer := flag.String("embeddings-server", getEnv("EMBEDDINGS_SERVER", "http://127.0.0.1:8800"), "Embeddings server endpoint")
+	embeddingServer := flag.String("embeddings-server", getEnv("EMBEDDINGS_SERVER", ""), "Embeddings server endpoint")
 	promptsPath := flag.String("prompts-config", getEnv("PROMPTS_CONFIG", "config/agentic_memory.json"), "Path to agentic memory config and prompts")
 	categories := flag.String("categories", "", "Filter by category (comma-separated or single)")
 	instanceID := flag.String("instance-id", "", "Filter by specific instance_id (e.g. 8_temporal_reasoning_0)")
 	flag.Parse()
+
+	if *embeddingServer == "" {
+		fmt.Fprintf(os.Stderr, "❌ Error: Embeddings server not specified. Pass --embeddings-server or export EMBEDDINGS_SERVER\n")
+		os.Exit(1)
+	}
 
 	ctx := context.Background()
 	embedder := engine.NewLlamaEmbedder(*embeddingServer)
@@ -67,6 +71,13 @@ func main() {
 	plannerPath := getEnv("GLLAM_PLANNER_EXECUTABLE_PATH", "")
 	if plannerPath != "" {
 		gllam.SetPlannerExecutablePath(plannerPath)
+	}
+
+	strongServerEnv := getEnv("STRONG_TEXT_SERVER", "")
+	fastServerEnv := getEnv("FAST_TEXT_SERVER", "")
+	if strongServerEnv == "" && fastServerEnv == "" {
+		fmt.Fprintf(os.Stderr, "❌ Error: Neither STRONG_TEXT_SERVER nor FAST_TEXT_SERVER is set in the environment!\n")
+		os.Exit(1)
 	}
 
 	file, err := os.Open(*qaPath)
@@ -125,7 +136,7 @@ func main() {
 
 		var strongClient *engine.LLMClient
 		if strongServerEnv != "" {
-			strongClient = engine.NewLLMClientWithKey(strongServerEnv, "", strongModelEnv)
+			strongClient = engine.NewLLMClientWithKey(strongServerEnv, os.Getenv("OPENROUTER_API_KEY"), strongModelEnv)
 			strongClient.Tier = "strong"
 		}
 
@@ -133,12 +144,6 @@ func main() {
 		if fastServerEnv != "" {
 			fastClient = engine.NewLLMClientWithKey(fastServerEnv, "", fastModelEnv)
 			fastClient.Tier = "fast"
-		}
-
-		var defaultClient *engine.LLMClient
-		if strongClient == nil && fastClient == nil {
-			defaultClient = engine.NewLLMClient(*textServer)
-			defaultClient.Tier = "default"
 		}
 		
 		// Optional: prepend conversation ID to query to help disambiguate cross-conversation leakage
@@ -157,7 +162,8 @@ func main() {
 					prompt = prompt + "\n\n" + catPrompt
 				}
 			}
-			answer, err = getClientForTask("BENCH_RESULT_EVALUATION", "STRONG_TEXT_SERVER", strongClient, fastClient, defaultClient).Generate(ctx, prompt, qa.Query)
+			taskTier := getEnv("FINAL_ANSWER", getEnv("BENCH_RESULT_EVALUATION", "STRONG_TEXT_SERVER"))
+			answer, err = getClientForTask("FINAL_ANSWER", taskTier, strongClient, fastClient, nil).Generate(ctx, prompt, qa.Query)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Error generating answer for %s: %v\n", qa.InstanceID, err)
 				answer = "ERROR"

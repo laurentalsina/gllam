@@ -16,9 +16,18 @@ export STRONG_MODEL_TIMEOUT="${STRONG_MODEL_TIMEOUT:-300}"
 export FAST_MODEL_TIMEOUT="${FAST_MODEL_TIMEOUT:-300}"
 CONCURRENCY="${CONCURRENCY:-1}"
 
-# Configurable endpoints and files
-TEXT_SERVER="${TEXT_SERVER:-http://100.96.179.19:8888}"
-EMBEDDINGS_SERVER="${EMBEDDINGS_SERVER:-http://127.0.0.1:8800}"
+# Validate required server endpoints
+if [ -z "$FAST_TEXT_SERVER" ] && [ -z "$STRONG_TEXT_SERVER" ]; then
+    echo "❌ ERROR: Neither FAST_TEXT_SERVER nor STRONG_TEXT_SERVER is set!" >&2
+    echo "Please source your environment configuration (e.g. source scripts/local_llm_examples/source_setup_gllam.sh)." >&2
+    exit 1
+fi
+
+if [ -z "$EMBEDDINGS_SERVER" ]; then
+    echo "❌ ERROR: EMBEDDINGS_SERVER environment variable is not set!" >&2
+    echo "Please export EMBEDDINGS_SERVER before running this benchmark." >&2
+    exit 1
+fi
 DB_PATH="./bench/gllam_data_beam_test.db"
 
 BEAM_CONVERSATIONS="/home/laurent/Projects/agentic_benchmarks/beam_100k_conversations.jsonl"
@@ -29,7 +38,8 @@ GRADE_OUT="./bench/beam/beam_final_grade_test.txt"
 echo "======================================================="
 echo "🚀 Starting BEAM 100k Benchmark Pipeline"
 echo "   ├─ DB: $DB_PATH"
-echo "   ├─ Text Server: $TEXT_SERVER"
+echo "   ├─ Fast Text Server: ${FAST_TEXT_SERVER:-<not set>}"
+echo "   ├─ Strong Text Server: ${STRONG_TEXT_SERVER:-<not set>}"
 echo "   ├─ Embeddings Server: $EMBEDDINGS_SERVER"
 echo "   ├─ Planner: $GLLAM_PLANNER_EXECUTABLE_PATH"
 echo "   ├─ Concurrency: $CONCURRENCY"
@@ -49,7 +59,6 @@ echo -e "\n🧩 Step 2: Extracting Graph Semantics..."
 go run ./cmd/extract_semantics/main.go \
   --dbpath "$DB_PATH" \
   --prefix beam-100k- \
-  --text-server "$TEXT_SERVER" \
   --embeddings-server "$EMBEDDINGS_SERVER" \
   --concurrency "$CONCURRENCY" \
   --temporal \
@@ -60,13 +69,13 @@ echo -e "\n🏎️  Step 3: Running Evaluation..."
 go run ./cmd/eval_beam/main.go \
   --db "$DB_PATH" \
   --qa "$BEAM_QA" \
-  --out "$OUT_RESULTS"
+  --out "$OUT_RESULTS" \
+  --embeddings-server "$EMBEDDINGS_SERVER"
 
 # Step 4: Grading
 echo -e "\n📊 Step 4: Grading Results..."
 go run ./cmd/grade_beam/main.go \
-  --results "$OUT_RESULTS" \
-  --text-server "$TEXT_SERVER" > "$GRADE_OUT" 2>&1
+  --results "$OUT_RESULTS" > "$GRADE_OUT" 2>&1
 
 echo "======================================================="
 echo "✅ Pipeline Complete!"

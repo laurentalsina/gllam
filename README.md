@@ -78,12 +78,14 @@ CGO_ENABLED=1 go build ./...
 
 source an env file that contains something like:
 
-```
-export EMBEDDINGS_SERVER="http://127.0.0.1:8080"
+```bash
+export EMBEDDINGS_SERVER="http://127.0.0.1:8800"
 export DATABASE_PATH="/home/laurent/Projects/gllam/bench/gllam_data.db"
 export OPENROUTER_API_KEY=sk-or-v1-4222222222222222222222222222222222222222222
-export TEXT_SERVER="https://openrouter.ai/api/v1"
-export LLM_MODEL="inclusionai/ling-3.0-flash"
+export STRONG_TEXT_SERVER="https://openrouter.ai/api/v1"
+export STRONG_LLM_MODEL="google/gemini-3.7-flash"
+export FAST_TEXT_SERVER="http://100.96.179.23:8888"
+export FAST_LLM_MODEL="local-server"
 ```
 
 # Start embeddings server (separate process)

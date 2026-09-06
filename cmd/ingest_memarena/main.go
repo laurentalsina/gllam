@@ -35,10 +35,15 @@ func getEnv(key, fallback string) string {
 func main() {
         // Command Line Flag (has prio over)  Environment Variable (has prio over)  Hardcoded Default
         dbPath := flag.String("dbpath", getEnv("DATABASE_PATH", "./bench/ gllam_data.db"), "Path to SQLite database (env: DATABASE_PATH_PATH)")
-        embeddingsServer := flag.String("embeddings-server", getEnv("EMBEDDINGS_SERVER", "http://127.0.0.1:8800"), "Embeddings server endpoint (env: EMBEDDINGS_SERVER)")
+        embeddingsServer := flag.String("embeddings-server", getEnv("EMBEDDINGS_SERVER", ""), "Embeddings server endpoint (env: EMBEDDINGS_SERVER)")
 
 	corpusPath := flag.String("corpus", "./corpus_sessions.jsonl", "Path to corpus_sessions.jsonl")
 	flag.Parse()
+
+	if *embeddingsServer == "" {
+		fmt.Fprintf(os.Stderr, "❌ Error: Embeddings server not specified. Pass --embeddings-server or export EMBEDDINGS_SERVER\n")
+		os.Exit(1)
+	}
 
 	ctx := context.Background()
 
