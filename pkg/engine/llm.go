@@ -306,7 +306,7 @@ func (c *LLMClient) generateWithFormatNoCache(ctx context.Context, systemPrompt,
 
 	// If response format is provided, perform a non-streaming constrained request
 	if responseFormat != nil {
-		maxExtractionCap := 5120 // ~5k tokens: provides ample paragraph-level headroom above 4096
+		maxExtractionCap := 8192 // 8k tokens: provides ample headroom for concise thinking + complete JSON graph
 		if envCap := os.Getenv("MAX_EXTRACTION_TOKENS"); envCap != "" {
 			if val, err := strconv.Atoi(envCap); err == nil && val > 0 {
 				maxExtractionCap = val
@@ -323,7 +323,7 @@ func (c *LLMClient) generateWithFormatNoCache(ctx context.Context, systemPrompt,
 			},
 			ResponseFormat: c.adaptResponseFormat(responseFormat),
 			ChatTemplateKwargs: map[string]interface{}{
-				"preserve_thinking": false,
+				"preserve_thinking": true,
 			},
 			Temperature: 0.1,
 			Stream:      false,

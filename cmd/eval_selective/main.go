@@ -1007,7 +1007,7 @@ func extractSemanticsForText(ctx context.Context, gllam *engine.GllamEngine, emb
 			continue
 		}
 
-		userPrompt := fmt.Sprintf("Transcript Chunk (%d/%d):\n%s\n\nExtract JSON directly without preamble or thinking:", cIdx+1, len(chunks), chunk.Text)
+		userPrompt := fmt.Sprintf("Transcript Chunk (%d/%d):\n%s\n\nFirst briefly outline key entities and relations in <think>...</think> (under 200 words), then output the final JSON:", cIdx+1, len(chunks), chunk.Text)
 
 		response, err := llmClient.GenerateWithFormat(ctx, systemPrompt, userPrompt, extractionJSONSchema)
 		if err != nil {

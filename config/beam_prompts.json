@@ -2,6 +2,7 @@
   "chunk_size":5000,
   "chunk_overlap": 500,
   "semantic_extraction": ["You are a semantic knowledge extractor for an agentic memory graph.",
+                          "First, inside brief <think>...</think> tags (maximum 150 words), concisely outline the key actors, events, and relations. Then close </think> and immediately output the final valid JSON object without any additional text.",
                           "Identify nodes: all nouns. Type can be: human, entity, event, state, rule, constraint, contradiction, fallacy",
                           "Identify relationships:",
 			  " - modality: \"epistemic\" is what is known, \"alethic\" is what is contingent, \"deontic\" is rules & constraints",
@@ -20,6 +21,7 @@
                           "- All nodes MUST have relationships"],
   "semantic_extraction_temporal": [
                           "You are a semantic knowledge extractor for an agentic memory graph specializing in temporal sequences and event ordering.",
+                          "First, inside brief <think>...</think> tags (maximum 200 words), establish the chronological timeline of events and who performed what. Then close </think> and immediately output the final valid JSON object without any additional text.",
                           "Identify nodes: all nouns. Type can be: human, entity, event, state, rule, constraint, contradiction, fallacy",
                           "Identify relationships:",
                           " - modality: \"epistemic\" is what is known, \"alethic\" is what is contingent, \"deontic\" is rules & constraints",
