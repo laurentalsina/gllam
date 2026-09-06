@@ -521,7 +521,8 @@ func main() {
 		logMain("   ├─ Processing Details Log: %s/processing_details_%s.log\n", runLogDir, qa.InstanceID)
 
 		// 1. Context Silo Isolation (partitioning semantic graphs per conversation to allow persistent reuse)
-		siloID := qa.ConversationID
+		cleanConvID := strings.TrimPrefix(strings.TrimPrefix(strings.TrimSpace(qa.ConversationID), "BEAM_100K_Conversation_"), "Conversation_")
+		siloID := fmt.Sprintf("BEAM_100K_Conversation_%s", cleanConvID)
 		logMain("   ├─ Context Silo ID: %s (Conversation %s)\n", siloID, qa.ConversationID)
 		addEvent(fmt.Sprintf("Context Silo set to %s", siloID))
 
@@ -997,230 +998,341 @@ func main() {
 	_ = os.WriteFile(mainLogPath, mainLogData, 0644)
 }
 
+func splitTranscriptInHalf(text string) (string, string) {
+	lines := strings.Split(text, "\n")
+	if len(lines) <= 1 {
+		words := strings.Fields(text)
+		if len(words) <= 1 {
+			return text, ""
+		}
+		mid := len(words) / 2
+		return strings.Join(words[:mid], " "), strings.Join(words[mid:], " ")
+	}
+
+	totalLen := len(text)
+	midTarget := totalLen / 2
+
+	bestIdx := len(lines) / 2
+	minDist := totalLen
+	curLen := 0
+
+	for i, line := range lines {
+		curLen += len(line) + 1
+		dist := curLen - midTarget
+		if dist < 0 {
+			dist = -dist
+		}
+		trimmed := strings.TrimSpace(line)
+		isTurnBoundary := strings.HasPrefix(trimmed, "user") || strings.HasPrefix(trimmed, "assistant") || trimmed == ""
+		if isTurnBoundary && dist < minDist {
+			minDist = dist
+			bestIdx = i
+		}
+	}
+
+	if bestIdx <= 0 || bestIdx >= len(lines) {
+		bestIdx = len(lines) / 2
+	}
+
+	part1 := strings.TrimSpace(strings.Join(lines[:bestIdx], "\n"))
+	part2 := strings.TrimSpace(strings.Join(lines[bestIdx:], "\n"))
+	return part1, part2
+}
+
+func ingestExtraction(
+	ctx context.Context,
+	gllam *engine.GllamEngine,
+	embedder engine.Embedder,
+	extraction struct {
+		Nodes []memory.SemanticNode `json:"nodes"`
+		Links []memory.SemanticLink `json:"links"`
+	},
+	sourceName string,
+	chunkLabel string,
+	seenNodeIDs map[string]bool,
+	nodeIDMapping map[string]string,
+) (int, int, []string) {
+	var canonicalizationLogs []string
+
+	scopeID := func(rawID string) string {
+		if rawID == "" {
+			return ""
+		}
+		prefix := fmt.Sprintf("silo_%s_", sourceName)
+		if strings.HasPrefix(rawID, prefix) {
+			return rawID
+		}
+		return prefix + rawID
+	}
+
+	// 1. Resolve / canonicalize nodes
+	for _, node := range extraction.Nodes {
+		if node.ID == "" {
+			continue
+		}
+		scopedRawID := scopeID(node.ID)
+
+		// Check if ID already exists in DB within this silo
+		var dbID string
+		err := gllam.DB().QueryRowContext(ctx, "SELECT id FROM semantic_nodes WHERE id = ? AND (context_silo_id = ? OR context_silo_id = '')", scopedRawID, sourceName).Scan(&dbID)
+		if err == nil {
+			nodeIDMapping[node.ID] = dbID
+			continue
+		}
+
+		// Check if name already exists in this silo (exact case-insensitive match)
+		var dbIDByName string
+		err = gllam.DB().QueryRowContext(ctx, "SELECT id FROM semantic_nodes WHERE LOWER(name) = LOWER(?) AND (context_silo_id = ? OR context_silo_id = '') LIMIT 1", node.Name, sourceName).Scan(&dbIDByName)
+		if err == nil {
+			nodeIDMapping[node.ID] = dbIDByName
+			canonicalizationLogs = append(canonicalizationLogs, fmt.Sprintf("🔄 Canonicalized Node ID: '%s' -> '%s' (exact Name match: '%s')", node.ID, dbIDByName, node.Name))
+			continue
+		}
+
+		// Check for vector similarity match within this silo
+		if embedder != nil {
+			similar, err := gllam.SearchSimilarNodesInSilo(ctx, node.Name, sourceName, 1)
+			if err == nil && len(similar) > 0 {
+				if similar[0].Distance < 0.12 {
+					nodeIDMapping[node.ID] = similar[0].NodeID
+					canonicalizationLogs = append(canonicalizationLogs, fmt.Sprintf("🔄 Canonicalized Node ID: '%s' -> '%s' (vector similarity match: Distance %f)", node.ID, similar[0].NodeID, similar[0].Distance))
+					continue
+				}
+			}
+		}
+
+		nodeIDMapping[node.ID] = scopedRawID
+	}
+
+	// Apply mapping to Nodes and filter duplicates
+	var canonicalNodes []memory.SemanticNode
+	for _, node := range extraction.Nodes {
+		if node.ID == "" {
+			continue
+		}
+		mappedID := nodeIDMapping[node.ID]
+		if mappedID == "" {
+			mappedID = scopeID(node.ID)
+		}
+		if seenNodeIDs[mappedID] {
+			continue
+		}
+		seenNodeIDs[mappedID] = true
+
+		node.ID = mappedID
+		node.ContextSiloID = sourceName
+		canonicalNodes = append(canonicalNodes, node)
+	}
+
+	// Apply mapping to Links and filter self-loops
+	var canonicalLinks []memory.SemanticLink
+	for _, link := range extraction.Links {
+		if link.SourceID == "" || link.TargetID == "" || link.Relationship == "" {
+			continue
+		}
+
+		if mSrc, ok := nodeIDMapping[link.SourceID]; ok {
+			link.SourceID = mSrc
+		} else {
+			link.SourceID = scopeID(link.SourceID)
+		}
+		if mTgt, ok := nodeIDMapping[link.TargetID]; ok {
+			link.TargetID = mTgt
+		} else {
+			link.TargetID = scopeID(link.TargetID)
+		}
+		if link.OriginID != "" {
+			if mOrig, ok := nodeIDMapping[link.OriginID]; ok {
+				link.OriginID = mOrig
+			} else {
+				link.OriginID = scopeID(link.OriginID)
+			}
+		}
+		if link.Temporal != nil && link.Temporal.TemporalAnchorID != "" {
+			if mAnchor, ok := nodeIDMapping[link.Temporal.TemporalAnchorID]; ok {
+				link.Temporal.TemporalAnchorID = mAnchor
+			} else {
+				link.Temporal.TemporalAnchorID = scopeID(link.Temporal.TemporalAnchorID)
+			}
+		}
+
+		if link.SourceID == link.TargetID {
+			continue
+		}
+		link.ContextSiloID = sourceName
+		canonicalLinks = append(canonicalLinks, link)
+	}
+
+	// Ingest into SQLite
+	_, _ = gllam.DB().ExecContext(ctx, "BEGIN IMMEDIATE")
+
+	type nodeVector struct {
+		id  string
+		vec []float32
+	}
+	var nodeVecs []nodeVector
+
+	nodeSource := fmt.Sprintf("conversation_%s_chunk_%s", sourceName, chunkLabel)
+	addLineage := func(nodeID string) {
+		lineage := memory.DocumentLineage{
+			NodeID:        nodeID,
+			SourceURI:     fmt.Sprintf("conversation://%s", sourceName),
+			DocumentTitle: fmt.Sprintf("Conversation Session %s", sourceName),
+			SourceType:    "conversation",
+			LineNumber:    1,
+			CharOffset:    0,
+		}
+		_ = gllam.AddDocumentLineage(ctx, lineage)
+	}
+
+	var nodesCount, linksCount int
+	for _, node := range canonicalNodes {
+		node.CreatedFrom = nodeSource
+		node.ContextSiloID = sourceName
+		if err := gllam.UpsertNode(ctx, node); err == nil {
+			nodesCount++
+			addLineage(node.ID)
+			if vec, err := embedder.Embed(ctx, node.Name); err == nil && len(vec) > 0 {
+				nodeVecs = append(nodeVecs, nodeVector{id: node.ID, vec: vec})
+			}
+		}
+	}
+
+	for _, link := range canonicalLinks {
+		link.CreatedFrom = nodeSource
+		link.ContextSiloID = sourceName
+		if err := gllam.AddEdge(ctx, link); err != nil {
+			canonicalizationLogs = append(canonicalizationLogs, fmt.Sprintf("⚠️ AddEdge first pass failed for link %s -> %s (%s): %v", link.SourceID, link.TargetID, link.Relationship, err))
+			_ = gllam.UpsertNode(ctx, memory.SemanticNode{ID: link.SourceID, Name: link.SourceID, Type: "inferred", CreatedFrom: link.CreatedFrom, ContextSiloID: sourceName})
+			addLineage(link.SourceID)
+			_ = gllam.UpsertNode(ctx, memory.SemanticNode{ID: link.TargetID, Name: link.TargetID, Type: "inferred", CreatedFrom: link.CreatedFrom, ContextSiloID: sourceName})
+			addLineage(link.TargetID)
+			if retryErr := gllam.AddEdge(ctx, link); retryErr == nil {
+				linksCount++
+			} else {
+				canonicalizationLogs = append(canonicalizationLogs, fmt.Sprintf("❌ AddEdge retry failed: %v", retryErr))
+			}
+		} else {
+			linksCount++
+		}
+	}
+
+	for _, nv := range nodeVecs {
+		_ = gllam.IndexNodeVector(ctx, nv.id, nv.vec)
+	}
+
+	_, _ = gllam.DB().ExecContext(ctx, "COMMIT")
+
+	return nodesCount, linksCount, canonicalizationLogs
+}
+
+func processChunkRecursive(
+	ctx context.Context,
+	gllam *engine.GllamEngine,
+	embedder engine.Embedder,
+	llmClient *engine.LLMClient,
+	chunkText string,
+	chunkLabel string,
+	systemPrompt string,
+	extractionJSONSchema map[string]interface{},
+	sourceName string,
+	depth int,
+	maxDepth int,
+	seenNodeIDs map[string]bool,
+	nodeIDMapping map[string]string,
+	events *[]JITExtractionEvent,
+) (int, int, error) {
+	if !engine.ValidateTranscriptSemanticCoherence(chunkText) {
+		return 0, 0, nil
+	}
+
+	userPrompt := fmt.Sprintf("Transcript Chunk (%s):\n%s\n\nFirst briefly outline key entities and relations in <think>...</think> (under 200 words), then output the final JSON:", chunkLabel, chunkText)
+
+	response, err := llmClient.GenerateWithFormat(ctx, systemPrompt, userPrompt, extractionJSONSchema)
+	if err != nil {
+		if depth < maxDepth {
+			fmt.Printf("   🔄 Chunk %s extraction failed (%v). Bisecting chunk into two halves (depth %d/%d)...\n", chunkLabel, err, depth+1, maxDepth)
+			part1, part2 := splitTranscriptInHalf(chunkText)
+			if strings.TrimSpace(part1) != "" && strings.TrimSpace(part2) != "" {
+				n1, l1, err1 := processChunkRecursive(ctx, gllam, embedder, llmClient, part1, chunkLabel+".1", systemPrompt, extractionJSONSchema, sourceName, depth+1, maxDepth, seenNodeIDs, nodeIDMapping, events)
+				n2, l2, err2 := processChunkRecursive(ctx, gllam, embedder, llmClient, part2, chunkLabel+".2", systemPrompt, extractionJSONSchema, sourceName, depth+1, maxDepth, seenNodeIDs, nodeIDMapping, events)
+				if err1 != nil && err2 != nil {
+					return n1 + n2, l1 + l2, fmt.Errorf("both halves of chunk %s failed: %v; %v", chunkLabel, err1, err2)
+				}
+				return n1 + n2, l1 + l2, nil
+			}
+		}
+		fmt.Printf("   ⚠️ Chunk %s extraction failed and cannot be bisected further: %v\n", chunkLabel, err)
+		return 0, 0, err
+	}
+
+	sanitized := SanitizeLLMJSON(response)
+
+	var extraction struct {
+		Nodes []memory.SemanticNode `json:"nodes"`
+		Links []memory.SemanticLink `json:"links"`
+	}
+	if err := json.Unmarshal([]byte(sanitized), &extraction); err != nil {
+		if depth < maxDepth {
+			fmt.Printf("   🔄 Chunk %s returned malformed/truncated JSON (%v). Bisecting into two halves (depth %d/%d)...\n", chunkLabel, err, depth+1, maxDepth)
+			part1, part2 := splitTranscriptInHalf(chunkText)
+			if strings.TrimSpace(part1) != "" && strings.TrimSpace(part2) != "" {
+				n1, l1, err1 := processChunkRecursive(ctx, gllam, embedder, llmClient, part1, chunkLabel+".1", systemPrompt, extractionJSONSchema, sourceName, depth+1, maxDepth, seenNodeIDs, nodeIDMapping, events)
+				n2, l2, err2 := processChunkRecursive(ctx, gllam, embedder, llmClient, part2, chunkLabel+".2", systemPrompt, extractionJSONSchema, sourceName, depth+1, maxDepth, seenNodeIDs, nodeIDMapping, events)
+				if err1 != nil && err2 != nil {
+					return n1 + n2, l1 + l2, fmt.Errorf("both halves of chunk %s failed: %v; %v", chunkLabel, err1, err2)
+				}
+				return n1 + n2, l1 + l2, nil
+			}
+		}
+		logFile := "./bench/beam/beam_selective_extraction_error.log"
+		logContent := fmt.Sprintf("=== ERROR AT %s ===\nError: %v\n[RAW RESPONSE]:\n%s\n[SANITIZED RESPONSE]:\n%s\n=================================\n\n", time.Now().Format(time.RFC3339), err, response, sanitized)
+		_ = os.WriteFile(logFile, []byte(logContent), 0644)
+		fmt.Printf("   ⚠️ Chunk %s JSON unmarshal failed and cannot be bisected further: %v\n", chunkLabel, err)
+		return 0, 0, err
+	}
+
+	n, l, logs := ingestExtraction(ctx, gllam, embedder, extraction, sourceName, chunkLabel, seenNodeIDs, nodeIDMapping)
+
+	if events != nil {
+		*events = append(*events, JITExtractionEvent{
+			ChunkIndex:           0,
+			SystemPrompt:         systemPrompt,
+			UserPrompt:           userPrompt,
+			RawResponse:          response,
+			SanitizedJSON:        sanitized,
+			NodesExtracted:       n,
+			LinksExtracted:       l,
+			CanonicalizationLogs: logs,
+		})
+	}
+
+	return n, l, nil
+}
+
 func extractSemanticsForText(ctx context.Context, gllam *engine.GllamEngine, embedder engine.Embedder, llmClient *engine.LLMClient, text string, systemPrompt string, extractionJSONSchema map[string]interface{}, sourceName string, events *[]JITExtractionEvent) (int, int, error) {
 	chunks := engine.ChunkTranscript(text, gllam.SystemPrompts.ChunkSize, gllam.SystemPrompts.ChunkOverlap)
 
-	var nodesCount, linksCount int
+	var totalNodes, totalLinks int
 	var lastErr error
+
+	seenNodeIDs := make(map[string]bool)
+	nodeIDMapping := make(map[string]string)
+
 	for cIdx, chunk := range chunks {
-		if !engine.ValidateTranscriptSemanticCoherence(chunk.Text) {
-			continue
-		}
-
-		userPrompt := fmt.Sprintf("Transcript Chunk (%d/%d):\n%s\n\nFirst briefly outline key entities and relations in <think>...</think> (under 200 words), then output the final JSON:", cIdx+1, len(chunks), chunk.Text)
-
-		response, err := llmClient.GenerateWithFormat(ctx, systemPrompt, userPrompt, extractionJSONSchema)
+		label := fmt.Sprintf("%d/%d", cIdx+1, len(chunks))
+		n, l, err := processChunkRecursive(ctx, gllam, embedder, llmClient, chunk.Text, label, systemPrompt, extractionJSONSchema, sourceName, 0, 3, seenNodeIDs, nodeIDMapping, events)
+		totalNodes += n
+		totalLinks += l
 		if err != nil {
 			lastErr = err
-			fmt.Printf("   ⚠️ Chunk %d/%d extraction failed: %v\n", cIdx+1, len(chunks), err)
-			continue
-		}
-
-		sanitized := SanitizeLLMJSON(response)
-
-		var extraction struct {
-			Nodes []memory.SemanticNode `json:"nodes"`
-			Links []memory.SemanticLink `json:"links"`
-		}
-		if err := json.Unmarshal([]byte(sanitized), &extraction); err != nil {
-			logFile := "./bench/beam/beam_selective_extraction_error.log"
-			logContent := fmt.Sprintf("=== ERROR AT %s ===\nError: %v\n[RAW RESPONSE]:\n%s\n[SANITIZED RESPONSE]:\n%s\n=================================\n\n", time.Now().Format(time.RFC3339), err, response, sanitized)
-			_ = os.WriteFile(logFile, []byte(logContent), 0644)
-			continue
-		}
-
-		var canonicalizationLogs []string
-
-		scopeID := func(rawID string) string {
-			if rawID == "" {
-				return ""
-			}
-			prefix := fmt.Sprintf("silo_%s_", sourceName)
-			if strings.HasPrefix(rawID, prefix) {
-				return rawID
-			}
-			return prefix + rawID
-		}
-
-		// Build ID mapping to canonicalize nodes and resolve duplicates
-		nodeIDMapping := make(map[string]string)
-		for _, node := range extraction.Nodes {
-			if node.ID == "" {
-				continue
-			}
-			scopedRawID := scopeID(node.ID)
-
-			// 1. Check if ID already exists in DB within this silo
-			var dbID string
-			err := gllam.DB().QueryRowContext(ctx, "SELECT id FROM semantic_nodes WHERE id = ? AND (context_silo_id = ? OR context_silo_id = '')", scopedRawID, sourceName).Scan(&dbID)
-			if err == nil {
-				nodeIDMapping[node.ID] = dbID
-				continue
-			}
-
-			// 2. Check if name already exists in this silo (exact case-insensitive match)
-			var dbIDByName string
-			err = gllam.DB().QueryRowContext(ctx, "SELECT id FROM semantic_nodes WHERE LOWER(name) = LOWER(?) AND (context_silo_id = ? OR context_silo_id = '') LIMIT 1", node.Name, sourceName).Scan(&dbIDByName)
-			if err == nil {
-				nodeIDMapping[node.ID] = dbIDByName
-				canonicalizationLogs = append(canonicalizationLogs, fmt.Sprintf("🔄 Canonicalized Node ID: '%s' -> '%s' (exact Name match: '%s')", node.ID, dbIDByName, node.Name))
-				continue
-			}
-
-			// 3. Check for vector similarity match within this silo
-			if embedder != nil {
-				similar, err := gllam.SearchSimilarNodesInSilo(ctx, node.Name, sourceName, 1)
-				if err == nil && len(similar) > 0 {
-					// Cosine distance threshold: < 0.12 (highly similar)
-					if similar[0].Distance < 0.12 {
-						nodeIDMapping[node.ID] = similar[0].NodeID
-						canonicalizationLogs = append(canonicalizationLogs, fmt.Sprintf("🔄 Canonicalized Node ID: '%s' -> '%s' (vector similarity match: Distance %f)", node.ID, similar[0].NodeID, similar[0].Distance))
-						continue
-					}
-				}
-			}
-
-			// Keep scoped ID if no match
-			nodeIDMapping[node.ID] = scopedRawID
-		}
-
-		// Apply mapping to Nodes and filter duplicates
-		var canonicalNodes []memory.SemanticNode
-		seenNodeIDs := make(map[string]bool)
-		for _, node := range extraction.Nodes {
-			if node.ID == "" {
-				continue
-			}
-			mappedID := nodeIDMapping[node.ID]
-			if mappedID == "" {
-				mappedID = scopeID(node.ID)
-			}
-			if seenNodeIDs[mappedID] {
-				continue
-			}
-			seenNodeIDs[mappedID] = true
-
-			node.ID = mappedID
-			node.ContextSiloID = sourceName
-			canonicalNodes = append(canonicalNodes, node)
-		}
-
-		// Apply mapping to Links and filter self-loops
-		var canonicalLinks []memory.SemanticLink
-		for _, link := range extraction.Links {
-			if link.SourceID == "" || link.TargetID == "" || link.Relationship == "" {
-				continue
-			}
-
-			if mSrc, ok := nodeIDMapping[link.SourceID]; ok {
-				link.SourceID = mSrc
-			} else {
-				link.SourceID = scopeID(link.SourceID)
-			}
-			if mTgt, ok := nodeIDMapping[link.TargetID]; ok {
-				link.TargetID = mTgt
-			} else {
-				link.TargetID = scopeID(link.TargetID)
-			}
-			if link.OriginID != "" {
-				if mOrig, ok := nodeIDMapping[link.OriginID]; ok {
-					link.OriginID = mOrig
-				} else {
-					link.OriginID = scopeID(link.OriginID)
-				}
-			}
-			if link.Temporal != nil && link.Temporal.TemporalAnchorID != "" {
-				if mAnchor, ok := nodeIDMapping[link.Temporal.TemporalAnchorID]; ok {
-					link.Temporal.TemporalAnchorID = mAnchor
-				} else {
-					link.Temporal.TemporalAnchorID = scopeID(link.Temporal.TemporalAnchorID)
-				}
-			}
-
-			if link.SourceID == link.TargetID {
-				continue
-			}
-			link.ContextSiloID = sourceName
-			canonicalLinks = append(canonicalLinks, link)
-		}
-
-		// Ingest into SQLite
-		_, _ = gllam.DB().ExecContext(ctx, "BEGIN IMMEDIATE")
-
-		type nodeVector struct {
-			id  string
-			vec []float32
-		}
-		var nodeVecs []nodeVector
-
-		nodeSource := fmt.Sprintf("conversation_%s_chunk_%d", sourceName, cIdx+1)
-		addLineage := func(nodeID string) {
-			lineage := memory.DocumentLineage{
-				NodeID:        nodeID,
-				SourceURI:     fmt.Sprintf("conversation://%s", sourceName),
-				DocumentTitle: fmt.Sprintf("Conversation Session %s", sourceName),
-				SourceType:    "conversation",
-				LineNumber:    cIdx + 1,
-				CharOffset:    0,
-			}
-			_ = gllam.AddDocumentLineage(ctx, lineage)
-		}
-
-		for _, node := range canonicalNodes {
-			node.CreatedFrom = nodeSource
-			node.ContextSiloID = sourceName
-			if err := gllam.UpsertNode(ctx, node); err == nil {
-				nodesCount++
-				addLineage(node.ID)
-				if vec, err := embedder.Embed(ctx, node.Name); err == nil && len(vec) > 0 {
-					nodeVecs = append(nodeVecs, nodeVector{id: node.ID, vec: vec})
-				}
-			}
-		}
-
-		for _, link := range canonicalLinks {
-			link.CreatedFrom = nodeSource
-			link.ContextSiloID = sourceName
-			if err := gllam.AddEdge(ctx, link); err != nil {
-				canonicalizationLogs = append(canonicalizationLogs, fmt.Sprintf("⚠️ AddEdge first pass failed for link %s -> %s (%s): %v", link.SourceID, link.TargetID, link.Relationship, err))
-				_ = gllam.UpsertNode(ctx, memory.SemanticNode{ID: link.SourceID, Name: link.SourceID, Type: "inferred", CreatedFrom: link.CreatedFrom, ContextSiloID: sourceName})
-				addLineage(link.SourceID)
-				_ = gllam.UpsertNode(ctx, memory.SemanticNode{ID: link.TargetID, Name: link.TargetID, Type: "inferred", CreatedFrom: link.CreatedFrom, ContextSiloID: sourceName})
-				addLineage(link.TargetID)
-				if retryErr := gllam.AddEdge(ctx, link); retryErr == nil {
-					linksCount++
-				} else {
-					canonicalizationLogs = append(canonicalizationLogs, fmt.Sprintf("❌ AddEdge retry failed: %v", retryErr))
-				}
-			} else {
-				linksCount++
-			}
-		}
-
-		for _, nv := range nodeVecs {
-			_ = gllam.IndexNodeVector(ctx, nv.id, nv.vec)
-		}
-
-		_, _ = gllam.DB().ExecContext(ctx, "COMMIT")
-
-		if events != nil {
-			*events = append(*events, JITExtractionEvent{
-				ChunkIndex:           cIdx + 1,
-				SystemPrompt:         systemPrompt,
-				UserPrompt:           userPrompt,
-				RawResponse:          response,
-				SanitizedJSON:        sanitized,
-				NodesExtracted:       len(canonicalNodes),
-				LinksExtracted:       len(canonicalLinks),
-				CanonicalizationLogs: canonicalizationLogs,
-			})
 		}
 	}
 
-	if nodesCount == 0 && linksCount == 0 && lastErr != nil {
+	if totalNodes == 0 && totalLinks == 0 && lastErr != nil {
 		return 0, 0, lastErr
 	}
-	return nodesCount, linksCount, nil
+	return totalNodes, totalLinks, nil
 }
 
 func SanitizeLLMJSON(s string) string {
