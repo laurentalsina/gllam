@@ -13,6 +13,7 @@ export STRONG_MODEL_CONTEXT="${STRONG_MODEL_CONTEXT:-131072}"
 export FAST_MODEL_CONTEXT="${FAST_MODEL_CONTEXT:-65536}"
 export STRONG_MODEL_TIMEOUT="${STRONG_MODEL_TIMEOUT:-300}"
 export FAST_MODEL_TIMEOUT="${FAST_MODEL_TIMEOUT:-360}"
+export MAX_EXTRACTION_TOKENS="${MAX_EXTRACTION_TOKENS:-8192}"
 
 # Validate required server endpoints
 if [ -z "$FAST_TEXT_SERVER" ] && [ -z "$STRONG_TEXT_SERVER" ]; then
@@ -118,6 +119,7 @@ echo "   ├─ Bypass Semantic: $BYPASS_SEMANTIC"
 echo "   ├─ Bypass Temporal: $BYPASS_TEMPORAL"
 echo "   ├─ Prune Clue Chunks: $PRUNE_CLUE_CHUNKS"
 echo "   ├─ Decompose Query: $DECOMPOSE_QUERY"
+echo "   ├─ Max Extraction Tokens: $MAX_EXTRACTION_TOKENS"
 if [ ! -z "$CATEGORIES" ]; then
 echo "   ├─ Target Categories: $CATEGORIES"
 fi
