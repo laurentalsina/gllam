@@ -261,7 +261,6 @@ func (e *GllamEngine) InitSchema() error {
 	var hasTemporalLinkID bool
 	rows, err := e.db.Query("PRAGMA table_info(semantic_links)")
 	if err == nil {
-		defer rows.Close()
 		for rows.Next() {
 			var cid int
 			var name string
@@ -276,6 +275,7 @@ func (e *GllamEngine) InitSchema() error {
 				}
 			}
 		}
+		rows.Close()
 	}
 	if !hasTemporalLinkID {
 		_, alterErr := e.db.Exec("ALTER TABLE semantic_links ADD COLUMN temporal_link_id TEXT REFERENCES semantic_temporal_links(id) ON DELETE SET NULL")
@@ -292,7 +292,6 @@ func (e *GllamEngine) InitSchema() error {
 		if qErr != nil {
 			return nil
 		}
-		defer tRows.Close()
 		for tRows.Next() {
 			var cid int
 			var name, typeStr string
@@ -303,6 +302,8 @@ func (e *GllamEngine) InitSchema() error {
 				break
 			}
 		}
+		tRows.Close()
+
 		if !hasCol {
 			_, alterErr := e.db.Exec(fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", table, column, colDef))
 			if alterErr != nil {

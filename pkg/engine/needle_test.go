@@ -109,3 +109,103 @@ func TestRetrieveHybridNeedleQualifierBoostingAndAbstention(t *testing.T) {
 	}
 }
 
+func TestContextSiloIsolation(t *testing.T) {
+	tempDir := t.TempDir()
+	dbPath := filepath.Join(tempDir, "test_silo_isolation.db")
+
+	gllam, err := NewGllamEngine(dbPath, nil)
+	if err != nil {
+		t.Fatalf("Failed to create engine: %v", err)
+	}
+	defer gllam.Close()
+
+	if err := gllam.InitSchema(); err != nil {
+		t.Fatalf("Failed to init schema: %v", err)
+	}
+
+	ctx := context.Background()
+
+	// Seed Silo 13 facts
+	_ = gllam.UpsertNode(ctx, memory.SemanticNode{
+		ID:            "silo_13_alice",
+		Name:          "Alice in Silo 13",
+		Type:          "human",
+		ContextPrompt: "Alice loves green tea",
+		ContextSiloID: "13",
+	})
+	_ = gllam.UpsertNode(ctx, memory.SemanticNode{
+		ID:            "silo_13_bob",
+		Name:          "Bob in Silo 13",
+		Type:          "human",
+		ContextPrompt: "Bob is a software architect",
+		ContextSiloID: "13",
+	})
+	_ = gllam.AddEdge(ctx, memory.SemanticLink{
+		SourceID:      "silo_13_alice",
+		TargetID:      "silo_13_bob",
+		Relationship:  "friends_with",
+		ContextSiloID: "13",
+	})
+
+	// Seed Silo 3 facts
+	_ = gllam.UpsertNode(ctx, memory.SemanticNode{
+		ID:            "silo_3_alice",
+		Name:          "Alice in Silo 3",
+		Type:          "human",
+		ContextPrompt: "Alice loves black coffee",
+		ContextSiloID: "3",
+	})
+	_ = gllam.UpsertNode(ctx, memory.SemanticNode{
+		ID:            "silo_3_charlie",
+		Name:          "Charlie in Silo 3",
+		Type:          "human",
+		ContextPrompt: "Charlie is a devops engineer",
+		ContextSiloID: "3",
+	})
+	_ = gllam.AddEdge(ctx, memory.SemanticLink{
+		SourceID:      "silo_3_alice",
+		TargetID:      "silo_3_charlie",
+		Relationship:  "works_with",
+		ContextSiloID: "3",
+	})
+
+	// 1. RetrieveHybridNeedle with Silo 13 -> Must NOT contain any Silo 3 nodes
+	results13, err := gllam.RetrieveHybridNeedleWithSilo(ctx, "Alice", []string{"silo_13_alice", "silo_3_alice"}, "", "13", 10)
+	if err != nil {
+		t.Fatalf("RetrieveHybridNeedleWithSilo 13 failed: %v", err)
+	}
+	for _, res := range results13 {
+		if res.Node.ContextSiloID != "" && res.Node.ContextSiloID != "13" {
+			t.Fatalf("Knowledge contamination! Found node from silo %s in query for silo 13: %s", res.Node.ContextSiloID, res.Node.ID)
+		}
+	}
+
+	// 2. RetrieveHybridNeedle with Silo 3 -> Must NOT contain any Silo 13 nodes
+	results3, err := gllam.RetrieveHybridNeedleWithSilo(ctx, "Alice", []string{"silo_13_alice", "silo_3_alice"}, "", "3", 10)
+	if err != nil {
+		t.Fatalf("RetrieveHybridNeedleWithSilo 3 failed: %v", err)
+	}
+	for _, res := range results3 {
+		if res.Node.ContextSiloID != "" && res.Node.ContextSiloID != "3" {
+			t.Fatalf("Knowledge contamination! Found node from silo %s in query for silo 3: %s", res.Node.ContextSiloID, res.Node.ID)
+		}
+	}
+
+	// 3. RouteAndAssembleWithSilo for Silo 13
+	compiled13, err := gllam.RouteAndAssembleWithSilo(ctx, "Who is friends with Alice?", []string{"silo_13_alice"}, "13")
+	if err != nil {
+		t.Fatalf("RouteAndAssembleWithSilo 13 failed: %v", err)
+	}
+	for _, n := range compiled13.SemanticNodes {
+		if n.ContextSiloID != "" && n.ContextSiloID != "13" {
+			t.Fatalf("RouteAndAssemble contamination! Found node from silo %s in silo 13 compiled context: %s", n.ContextSiloID, n.ID)
+		}
+	}
+	for _, l := range compiled13.SemanticLinks {
+		if l.ContextSiloID != "" && l.ContextSiloID != "13" {
+			t.Fatalf("RouteAndAssemble contamination! Found link from silo %s in silo 13 compiled context", l.ContextSiloID)
+		}
+	}
+}
+
+
