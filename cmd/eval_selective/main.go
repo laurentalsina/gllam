@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -268,9 +269,10 @@ func main() {
 	outPath := flag.String("out", getEnv("OUT_PATH", "./d7_qa_results_selective.jsonl"), "Output path")
 	promptsPath := flag.String("prompts-config", getEnv("PROMPTS_CONFIG", "config/agentic_memory.json"), "Path to agentic memory config")
 	schemaPath := flag.String("schema-file", getEnv("EXTRACTION_SCHEMA_PATH", "./config/semantic_extraction_schema.json"), "Path to JSON schema")
-	topKMatches := flag.Int("top-k", 2, "Number of top matching utterances to expand context for")
+	topKMatches := flag.Int("top-k", 50, "Number of top matching utterances to expand context for")
 	limit := flag.Int("limit", 0, "Limit number of queries (0 for all)")
 	categories := flag.String("categories", "", "Comma-separated list of categories to evaluate (all, preference_following, temporal_reasoning, event_ordering, knowledge_update, summarization, instruction_following, information_extraction, contradiction_resolution, multi_session_reasoning, abstention)")
+	instanceID := flag.String("instance-id", "", "Comma-separated list of instance IDs to evaluate (e.g. 8_temporal_reasoning_0)")
 	debug := flag.Bool("debug", false, "Print verbose debugging information about JIT processing steps")
 	pruneClueChunks := flag.Bool("prune-clue-chunks", false, "Prune irrelevant transcript chunks using a fast LLM YES/NO classifier pass")
 	bypassTemporal := flag.Bool("bypass-temporal", false, "Bypass JIT semantic extraction for temporal questions and answer directly from transcript")
@@ -514,6 +516,21 @@ func main() {
 			}
 		}
 
+		if *instanceID != "" {
+			matched := false
+			allowedIDs := strings.Split(*instanceID, ",")
+			for _, id := range allowedIDs {
+				idTrimmed := strings.TrimSpace(id)
+				if idTrimmed == qa.InstanceID {
+					matched = true
+					break
+				}
+			}
+			if !matched {
+				continue
+			}
+		}
+
 
 
 		logInstance := MainLogInstance{
@@ -579,16 +596,17 @@ func main() {
 		tRetrieve0 := time.Now()
 		logTimestamp("candidate retrieval")
 		var allCandidates []string
-		seenCand := make(map[string]bool)
+		subQueryCandidates := make([][]string, len(subQueries))
 
-		for _, sq := range subQueries {
+		for sqIdx, sq := range subQueries {
 			if *useUtterancesVectors {
 				logMain("   ├─ Retrieving top-%d matching paragraphs via Hybrid Search (TF-IDF + Vector RRF) for: %q...\n", *topKMatches, sq)
 			} else {
 				logMain("   ├─ Retrieving top-%d matching paragraphs via TF-IDF for: %q...\n", *topKMatches, sq)
 			}
 			sqCandidates, sqTerms := retrieveCandidatesForQuery(ctx, sq, targetSpeakers, idx, embedder, gllam, *topKMatches, *useUtterancesVectors, *useTermsVectors, qa.ConversationID, getClientForTask("SEARCH_CANDIDATES", "FAST_TEXT_SERVER", strongClient, fastClient, defaultClient))
-			
+			subQueryCandidates[sqIdx] = sqCandidates
+
 			for _, term := range sqTerms {
 				termSeen := false
 				for _, t := range structuredLog.SearchTerms {
@@ -601,32 +619,51 @@ func main() {
 					structuredLog.SearchTerms = append(structuredLog.SearchTerms, term)
 				}
 			}
+		}
 
-			for _, c := range sqCandidates {
-				if !seenCand[c] {
-					seenCand[c] = true
-					allCandidates = append(allCandidates, c)
-					
-					if u, ok := idx.Utterances[c]; ok {
-						structuredLog.RetrievedCandidates = append(structuredLog.RetrievedCandidates, CandidateInfo{
-							UtteranceID: c,
-							Speaker:     u.SpeakerID,
-							Text:        u.Text,
-							SessionID:   u.SessionID,
-						})
+		// Interleave candidates across sub-queries so every sub-query gets equal representation by rank
+		maxCandLen := 0
+		for _, cList := range subQueryCandidates {
+			if len(cList) > maxCandLen {
+				maxCandLen = len(cList)
+			}
+		}
+
+		seenCand := make(map[string]bool)
+		for rank := 0; rank < maxCandLen; rank++ {
+			for _, cList := range subQueryCandidates {
+				if rank < len(cList) {
+					c := cList[rank]
+					if !seenCand[c] {
+						seenCand[c] = true
+						allCandidates = append(allCandidates, c)
+
+						if u, ok := idx.Utterances[c]; ok {
+							structuredLog.RetrievedCandidates = append(structuredLog.RetrievedCandidates, CandidateInfo{
+								UtteranceID: c,
+								Speaker:     u.SpeakerID,
+								Text:        u.Text,
+								SessionID:   u.SessionID,
+							})
+						}
 					}
 				}
 			}
 		}
 		retrieveDur := time.Since(tRetrieve0)
 		totalRetrieveTime += retrieveDur
-		logMain("   ├─ [%s] [%v] Candidate retrieval completed.\n", time.Now().Format("2006-01-02 15:04:05"), retrieveDur.Round(time.Millisecond))
+		logMain("   ├─ [%s] [%v] Candidate retrieval completed (%d total candidate utterances across %d sub-queries).\n", time.Now().Format("2006-01-02 15:04:05"), retrieveDur.Round(time.Millisecond), len(allCandidates), len(subQueries))
 		addEvent(fmt.Sprintf("Candidate retrieval completed in %v", retrieveDur.Round(time.Millisecond)))
 
 		var answer string
 
+		passBatchSize := len(subQueries) * *topKMatches
+		if passBatchSize <= 0 {
+			passBatchSize = *topKMatches
+		}
+
 		for pass := 0; pass < 3; pass++ {
-			startIndex := pass * *topKMatches
+			startIndex := pass * passBatchSize
 			if startIndex >= len(allCandidates) {
 				if pass > 0 {
 					break
@@ -634,7 +671,7 @@ func main() {
 				answer = "ANSWER_NOT_FOUND"
 				break
 			}
-			endIndex := startIndex + *topKMatches
+			endIndex := startIndex + passBatchSize
 			if endIndex > len(allCandidates) {
 				endIndex = len(allCandidates)
 			}
@@ -710,7 +747,7 @@ func main() {
 			if *pruneClueChunks {
 				logTimestamp("chunk pruning")
 				logMain("   ├─ Pruning irrelevant chunks from transcript using keyword overlap scoring...\n")
-				transcriptText = pruneIrrelevantChunks(ctx, transcriptText, qa.Query, structuredLog.SearchTerms, gllam.SystemPrompts.ChunkSize, gllam.SystemPrompts.ChunkOverlap, &structuredLog.ChunkPruning.Chunks)
+				transcriptText = pruneIrrelevantChunks(ctx, transcriptText, qa.Query, subQueries, structuredLog.SearchTerms, gllam.SystemPrompts.ChunkSize, gllam.SystemPrompts.ChunkOverlap, &structuredLog.ChunkPruning.Chunks)
 				pruneDur := time.Since(tPrune0)
 				logMain("   ├─ [%s] [%v] Chunk pruning completed.\n", time.Now().Format("2006-01-02 15:04:05"), pruneDur.Round(time.Millisecond))
 				addEvent(fmt.Sprintf("Chunk pruning completed in %v", pruneDur.Round(time.Millisecond)))
@@ -1780,12 +1817,34 @@ func isNotFoundResponse(answer string) bool {
 	return false
 }
 
-func pruneIrrelevantChunks(ctx context.Context, text string, query string, searchTerms []string, chunkSize, chunkOverlap int, events *[]ChunkPruningEvent) string {
+var (
+	calendarDateRegex = regexp.MustCompile(`(?i)\b(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+\d{1,2}(?:st|nd|rd|th)?(?:\s*,\s*\d{4})?\b|\b\d{1,2}\s+(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)(?:\s+\d{4})?\b`)
+	userTurnDateRegex = regexp.MustCompile(`(?i)(?:^|\n)(?:user|human)(?:[ _-][^:]*)?:\s*.*?\b(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+\d{1,2}`)
+)
+
+func isTemporalQuery(query string) bool {
+	qLower := strings.ToLower(query)
+	temporalTriggers := []string{
+		"how many days", "how many weeks", "how many months", "how many hours",
+		"days passed", "days between", "time passed", "elapsed",
+		"what date", "which date", "what day", "when did", "when will", "when was",
+		"chronological", "timeline", "before or after", "happened first", "happened last",
+		"order of", "order did", "order were", "rescheduled", "schedule",
+	}
+	for _, trig := range temporalTriggers {
+		if strings.Contains(qLower, trig) {
+			return true
+		}
+	}
+	return false
+}
+
+func pruneIrrelevantChunks(ctx context.Context, text string, query string, subQueries []string, searchTerms []string, chunkSize, chunkOverlap int, events *[]ChunkPruningEvent) string {
 	chunks := engine.ChunkTranscript(text, chunkSize, chunkOverlap)
 	var keptChunks []string
 
-	// Build search keywords from query as fallback/expansion
-	words := strings.Fields(query)
+	isTemporal := isTemporalQuery(query)
+
 	stopWords := map[string]struct{}{
 		"what": {}, "does": {}, "did": {}, "before": {}, "after": {}, "is": {},
 		"the": {}, "a": {}, "an": {}, "where": {}, "why": {}, "who": {}, "how": {},
@@ -1804,34 +1863,46 @@ func pruneIrrelevantChunks(ctx context.Context, text string, query string, searc
 		"but": {}, "so": {}, "very": {}, "just": {}, "like": {},
 	}
 
-	allTerms := make([]string, 0, len(searchTerms))
-	seenTerm := make(map[string]bool)
-	for _, term := range searchTerms {
-		tLower := strings.TrimSpace(strings.ToLower(term))
-		_, isStop := stopWords[tLower]
-		if len(tLower) >= 3 && !isStop && !seenTerm[tLower] {
-			seenTerm[tLower] = true
-			allTerms = append(allTerms, tLower)
-		}
-	}
-
-	// Fallback to query words ONLY if we have no filtered search terms
-	if len(allTerms) == 0 {
-		for _, w := range words {
-			wClean := strings.Trim(strings.ToLower(w), "?!.,'\":;")
-			_, isStop := stopWords[wClean]
-			if len(wClean) >= 3 && !isStop && !seenTerm[wClean] {
-				seenTerm[wClean] = true
-				allTerms = append(allTerms, wClean)
+	cleanTermsList := func(rawList []string) []string {
+		var res []string
+		seen := make(map[string]bool)
+		for _, raw := range rawList {
+			for _, tok := range strings.Fields(raw) {
+				tLower := strings.Trim(strings.ToLower(tok), "?!.,'\":;()")
+				_, isStop := stopWords[tLower]
+				if len(tLower) >= 3 && !isStop && !seen[tLower] {
+					seen[tLower] = true
+					res = append(res, tLower)
+				}
 			}
 		}
+		return res
+	}
+
+	// Prepare per-subquery terms
+	if len(subQueries) == 0 {
+		subQueries = []string{query}
+	}
+	subQueryTerms := make([][]string, len(subQueries))
+	for i, sq := range subQueries {
+		subQueryTerms[i] = cleanTermsList([]string{sq})
+	}
+
+	// General search terms
+	allTerms := cleanTermsList(searchTerms)
+	if len(allTerms) == 0 {
+		allTerms = cleanTermsList([]string{query})
 	}
 
 	type chunkScore struct {
-		text  string
-		score float64
-		index int
+		index      int
+		text       string
+		totalScore float64
+		sqScores   []float64
+		hasDates   bool
+		isUserDate bool
 	}
+
 	var scoredChunks []chunkScore
 
 	for i, chunk := range chunks {
@@ -1839,59 +1910,173 @@ func pruneIrrelevantChunks(ctx context.Context, text string, query string, searc
 			continue
 		}
 
-		score := 0.0
 		chunkLower := strings.ToLower(chunk.Text)
+
+		// 1. Compute sub-linear score for each subquery
+		sqScores := make([]float64, len(subQueries))
+		matchedSubqueries := 0
+		for sqIdx, terms := range subQueryTerms {
+			sqScore := 0.0
+			for _, term := range terms {
+				cnt := strings.Count(chunkLower, term)
+				if cnt > 0 {
+					sqScore += math.Sqrt(float64(cnt))
+				}
+			}
+			sqScores[sqIdx] = sqScore
+			if sqScore > 0 {
+				matchedSubqueries++
+			}
+		}
+
+		// 2. Compute general search terms score
+		baseScore := 0.0
 		for _, term := range allTerms {
-			count := strings.Count(chunkLower, term)
-			score += float64(count)
+			cnt := strings.Count(chunkLower, term)
+			if cnt > 0 {
+				baseScore += math.Sqrt(float64(cnt))
+			}
+		}
+
+		// Bonus for bridging multiple sub-queries
+		if matchedSubqueries > 1 {
+			baseScore *= 1.5
+		}
+
+		// 3. Temporal bonuses (calendar months, dates, user date declarations)
+		hasDates := false
+		isUserDate := false
+		if isTemporal {
+			dateMatches := calendarDateRegex.FindAllString(chunk.Text, -1)
+			if len(dateMatches) > 0 {
+				hasDates = true
+				uniqueDates := make(map[string]bool)
+				for _, dm := range dateMatches {
+					uniqueDates[strings.ToLower(dm)] = true
+				}
+				baseScore += float64(len(uniqueDates)) * 8.0
+			}
+
+			if userTurnDateRegex.MatchString(chunk.Text) {
+				isUserDate = true
+				baseScore += 15.0
+			}
 		}
 
 		scoredChunks = append(scoredChunks, chunkScore{
-			text:  chunk.Text,
-			score: score,
-			index: i,
+			index:      i,
+			text:       chunk.Text,
+			totalScore: baseScore,
+			sqScores:   sqScores,
+			hasDates:   hasDates,
+			isUserDate: isUserDate,
 		})
 	}
 
-	// Keep chunks with score > 0, up to a character limit to prevent context window bloat
+	// 4. Balanced selection across sub-queries and dates up to maxChars
 	maxChars := 65000
 	currentChars := 0
 	keptIndices := make(map[int]bool)
 
-	type chunkIndexScore struct {
-		index int
-		score float64
-		text  string
-	}
-	var cisList []chunkIndexScore
-	for _, sc := range scoredChunks {
-		if sc.score > 0 {
-			cisList = append(cisList, chunkIndexScore{
-				index: sc.index,
-				score: sc.score,
-				text:  sc.text,
-			})
+	// Build candidate buckets: one per subquery + one for date anchors if temporal
+	buckets := make([][]int, len(subQueries))
+	for sqIdx := range subQueries {
+		var list []chunkScore
+		for _, sc := range scoredChunks {
+			if sc.sqScores[sqIdx] > 0 {
+				list = append(list, sc)
+			}
+		}
+		sort.Slice(list, func(a, b int) bool {
+			return list[a].totalScore > list[b].totalScore
+		})
+		for _, sc := range list {
+			buckets[sqIdx] = append(buckets[sqIdx], sc.index)
 		}
 	}
 
-	sort.Slice(cisList, func(i, j int) bool {
-		return cisList[i].score > cisList[j].score
-	})
-
-	for _, cis := range cisList {
-		keptIndices[cis.index] = true
-		currentChars += len(cis.text)
-		if currentChars > maxChars {
-			break
+	var dateBucket []int
+	if isTemporal {
+		var dateList []chunkScore
+		for _, sc := range scoredChunks {
+			if sc.isUserDate || sc.hasDates {
+				dateList = append(dateList, sc)
+			}
+		}
+		sort.Slice(dateList, func(a, b int) bool {
+			return dateList[a].totalScore > dateList[b].totalScore
+		})
+		for _, sc := range dateList {
+			dateBucket = append(dateBucket, sc.index)
 		}
 	}
 
-	// Fallback if no chunks had any overlap: keep all of them within budget (including first overstep)
+	// Round-robin selection across buckets
+	pointerMap := make([]int, len(buckets))
+	datePtr := 0
+	addedAny := true
+
+	for currentChars < maxChars && addedAny {
+		addedAny = false
+
+		// Pick from date bucket first if temporal
+		if isTemporal && datePtr < len(dateBucket) {
+			idx := dateBucket[datePtr]
+			datePtr++
+			if !keptIndices[idx] {
+				keptIndices[idx] = true
+				currentChars += len(chunks[idx].Text)
+				addedAny = true
+				if currentChars >= maxChars {
+					break
+				}
+			}
+		}
+
+		// Pick from each sub-query bucket
+		for bIdx := range buckets {
+			for pointerMap[bIdx] < len(buckets[bIdx]) {
+				idx := buckets[bIdx][pointerMap[bIdx]]
+				pointerMap[bIdx]++
+				if !keptIndices[idx] {
+					keptIndices[idx] = true
+					currentChars += len(chunks[idx].Text)
+					addedAny = true
+					break
+				}
+			}
+			if currentChars >= maxChars {
+				break
+			}
+		}
+	}
+
+	// If budget remains, fill with any remaining high-scoring chunks
+	if currentChars < maxChars {
+		var remaining []chunkScore
+		for _, sc := range scoredChunks {
+			if sc.totalScore > 0 && !keptIndices[sc.index] {
+				remaining = append(remaining, sc)
+			}
+		}
+		sort.Slice(remaining, func(a, b int) bool {
+			return remaining[a].totalScore > remaining[b].totalScore
+		})
+		for _, sc := range remaining {
+			keptIndices[sc.index] = true
+			currentChars += len(sc.text)
+			if currentChars >= maxChars {
+				break
+			}
+		}
+	}
+
+	// Fallback if no chunks were kept: keep chunks within budget
 	if len(keptIndices) == 0 {
 		for _, sc := range scoredChunks {
 			keptIndices[sc.index] = true
 			currentChars += len(sc.text)
-			if currentChars > maxChars {
+			if currentChars >= maxChars {
 				break
 			}
 		}
@@ -1903,7 +2088,7 @@ func pruneIrrelevantChunks(ctx context.Context, text string, query string, searc
 		var score float64
 		for _, sc := range scoredChunks {
 			if sc.index == i {
-				score = sc.score
+				score = sc.totalScore
 				break
 			}
 		}

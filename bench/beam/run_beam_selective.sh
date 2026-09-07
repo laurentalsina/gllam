@@ -72,6 +72,7 @@ OUT_RESULTS="${RUN_LOG_DIR}/beam_100k_results_selective.jsonl"
 GRADE_OUT="${RUN_LOG_DIR}/beam_final_grade_selective.txt"
 
 # Parse command line arguments
+INSTANCE_ID=""
 CATEGORIES=""
 DEBUG_FLAG="false"
 BYPASS_SEMANTIC="false"
@@ -144,6 +145,14 @@ while [[ "$#" -gt 0 ]]; do
             TARGET_COMPRESSION="${1#*=}"
             shift 1
             ;;
+        --instance-id)
+            INSTANCE_ID="$2"
+            shift 2
+            ;;
+        --instance-id=*)
+            INSTANCE_ID="${1#*=}"
+            shift 1
+            ;;
         --preprocess-concurrency)
             PREPROCESS_CONCURRENCY="$2"
             shift 2
@@ -154,7 +163,7 @@ while [[ "$#" -gt 0 ]]; do
             ;;
         *)
             echo "Unknown parameter: $1"
-            echo "Usage: $0 [--cover <category_name>] [--debug] [--bypass-semantic <true|false>] [--bypass-temporal <true|false>] [--prune-clue-chunks <true|false>] [--decompose-query <true|false>] [--preprocess <true|false>] [--target-compression <pct>] [--preprocess-concurrency <n>]"
+            echo "Usage: $0 [--instance-id <id>] [--cover <category_name>] [--debug] [--bypass-semantic <true|false>] [--bypass-temporal <true|false>] [--prune-clue-chunks <true|false>] [--decompose-query <true|false>] [--preprocess <true|false>] [--target-compression <pct>] [--preprocess-concurrency <n>]"
             echo "Available categories: all, preference_following, temporal_reasoning, event_ordering, knowledge_update, summarization, instruction_following, information_extraction, contradiction_resolution, multi_session_reasoning, abstention"
             exit 1
             ;;
@@ -191,6 +200,7 @@ echo "   ├─ Max Extraction Tokens: $MAX_EXTRACTION_TOKENS"
 if [ ! -z "$CATEGORIES" ]; then
 echo "   ├─ Target Categories: $CATEGORIES"
 fi
+[ -n "$INSTANCE_ID" ] && echo "   ├─ Target Instance: $INSTANCE_ID"
 echo "======================================================="
 
 # Run Selective Evaluation (with JIT turn compression on retrieved context)
@@ -200,10 +210,11 @@ go run ./cmd/eval_selective/main.go \
   --qa "$BEAM_QA" \
   --out "$OUT_RESULTS" \
   --embeddings-server "$EMBEDDINGS_SERVER" \
-  --top-k 10 \
+  --top-k 50 \
   --use-utterances-vectors=true \
   --use-terms-vectors=true \
   --prompts-config config/beam_prompts.json \
+  --instance-id "$INSTANCE_ID" \
   --categories "$CATEGORIES" \
   --debug="$DEBUG_FLAG" \
   --bypass-semantic="$BYPASS_SEMANTIC" \
