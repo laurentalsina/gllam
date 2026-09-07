@@ -59,7 +59,16 @@
                                 "Then, outside the thinking tags, write your final direct and concise answer."
                                ],
   "allow_user_grilling": true,
+  "bitemporal_soft_delete": true,
+  "semantic_distance_threshold": 0.45,
   "ingestion_steering_prompt": "INGESTION STEERING DIRECTIVES FOR MULTI-AUTHOR & VERSION HISTORY:\n1. Confluence / Wiki: Parse page revision history and author edit epochs into CompactedRevisionEpochs.\n2. Jira / Issue Trackers: Parse comment history, author provenance, and status transitions (Open -> Resolved).\n3. Git Repositories / PRs: Parse branch merge history, commit signatures, and PR review comments.\n4. Chat / Slack: Parse thread reply chains and author message timestamps.",
+  "ingestion_steering_prompts": {
+    "confluence": "Confluence / Wiki Directives: Parse page revision history and author edit epochs into CompactedRevisionEpochs.",
+    "jira": "Jira / Issue Tracker Directives: Parse comment history, author provenance, and status transitions (Open -> Resolved).",
+    "git": "Git Repositories / PR Directives: Parse branch merge history, commit signatures, and PR review comments.",
+    "pull_request": "Pull Request Directives: Parse branch merge history, commit signatures, and PR review comments.",
+    "slack": "Chat / Slack Directives: Parse thread reply chains and author message timestamps."
+  },
   "ingestion_steering_directives": {
     "confluence": { "track_revision_history": true, "max_revision_depth": 10, "compact_author_epochs": true },
     "jira": { "track_comment_history": true, "track_status_transitions": true, "compact_author_epochs": true },

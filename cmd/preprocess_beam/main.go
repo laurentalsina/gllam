@@ -54,12 +54,20 @@ func main() {
 	}
 
 	// Load prompt configuration
-	promptTemplate := config.DefaultPreprocessCompressionPrompt
-	if *promptsConfig != "" {
-		if cfg, err := config.LoadAgenticMemoryConfig(*promptsConfig); err == nil && cfg.PreprocessCompressionPrompt != "" {
-			promptTemplate = cfg.PreprocessCompressionPrompt
-		}
+	promptsPath := *promptsConfig
+	if promptsPath == "" {
+		promptsPath = config.FindDefaultConfigPath()
 	}
+	cfg, err := config.LoadAgenticMemoryConfig(promptsPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "FATAL: Failed to load required agentic memory prompts config from %s: %v\n", promptsPath, err)
+		os.Exit(1)
+	}
+	if cfg.PreprocessCompressionPrompt == "" {
+		fmt.Fprintf(os.Stderr, "FATAL: preprocess_compression_prompt is empty in %s\n", promptsPath)
+		os.Exit(1)
+	}
+	promptTemplate := cfg.PreprocessCompressionPrompt
 
 	// Filter target conversations
 	targetConvIDs := make(map[string]bool)

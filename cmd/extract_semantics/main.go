@@ -122,10 +122,10 @@ func main() {
         // Load custom prompts if the path is provided
 	if *promptsPath != "" {
 		if err := gllam.LoadSystemPromptsConfig(*promptsPath); err != nil {
-			fmt.Printf("⚠️ Could not load prompts config from %s (%v). Using engine default prompts.\n", *promptsPath, err)
-		} else {
-			fmt.Printf("✅ Loaded system prompts config from: %s\n", *promptsPath)
+			fmt.Fprintf(os.Stderr, "FATAL: Failed to load system prompts config from %s: %v\n", *promptsPath, err)
+			os.Exit(1)
 		}
+		fmt.Printf("✅ Loaded system prompts config from: %s\n", *promptsPath)
 	}
 
 	if err := gllam.InitSchema(); err != nil {

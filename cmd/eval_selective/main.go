@@ -340,7 +340,8 @@ func main() {
 	defer gllam.Close()
 
 	if err := gllam.LoadSystemPromptsConfig(*promptsPath); err != nil {
-		logMain("⚠️ Could not load prompts config from %s: %v\n", *promptsPath, err)
+		fmt.Fprintf(os.Stderr, "FATAL: Failed to load required system prompts config from %s: %v\n", *promptsPath, err)
+		os.Exit(1)
 	}
 
 	if err := gllam.InitSchema(); err != nil {

@@ -37,7 +37,7 @@ func DefaultCompressionConfig() CompressionConfig {
 		ReductionPercent:         40,
 		MinWords:                 15,
 		Concurrency:              4,
-		PromptTemplate:           config.DefaultPreprocessCompressionPrompt,
+		PromptTemplate:           config.DefaultAgenticMemorySystemPrompts().PreprocessCompressionPrompt,
 		Timeout:                  120 * time.Second,
 		Force:                    false,
 	}
@@ -96,7 +96,7 @@ func NewMessageCompressor(llmClient *LLMClient, dbPath string, cfg CompressionCo
 		cfg.Concurrency = 4
 	}
 	if cfg.PromptTemplate == "" {
-		cfg.PromptTemplate = config.DefaultPreprocessCompressionPrompt
+		cfg.PromptTemplate = config.DefaultAgenticMemorySystemPrompts().PreprocessCompressionPrompt
 	}
 	if cfg.Timeout <= 0 {
 		cfg.Timeout = 120 * time.Second
@@ -154,7 +154,7 @@ func (mc *MessageCompressor) Stats() CompressionStats {
 // BuildCompressionSystemPrompt formats the prompt template with exact percentages
 func BuildCompressionSystemPrompt(template string, targetPct, reductionPct int) string {
 	if template == "" {
-		template = config.DefaultPreprocessCompressionPrompt
+		template = config.DefaultAgenticMemorySystemPrompts().PreprocessCompressionPrompt
 	}
 	s := strings.ReplaceAll(template, "{{TARGET_COMPRESSION_PERCENT}}", fmt.Sprintf("%d", targetPct))
 	s = strings.ReplaceAll(s, "{{REDUCTION_PERCENT}}", fmt.Sprintf("%d", reductionPct))
