@@ -249,11 +249,11 @@ func (mc *MessageCompressor) CompressMessage(ctx context.Context, role, text str
 
 	systemPrompt := BuildCompressionSystemPrompt(mc.cfg.PromptTemplate, mc.cfg.TargetCompressionPercent, mc.cfg.ReductionPercent)
 
-	// Invoke LLM
+	// Invoke LLM (non-streaming standard HTTP POST to prevent SSE proxy stream drops)
 	callCtx, cancel := context.WithTimeout(ctx, mc.cfg.Timeout)
 	defer cancel()
 
-	resp, err := mc.llmClient.Generate(callCtx, systemPrompt, userPrompt)
+	resp, err := mc.llmClient.GenerateNonStreaming(callCtx, systemPrompt, userPrompt)
 	if err != nil {
 		// On LLM failure, log and fall back safely to original text
 		mc.statsMu.Lock()

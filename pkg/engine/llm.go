@@ -72,9 +72,10 @@ type ChatCompletionResponse struct {
 type LLMClient struct {
 	BaseURL string
 	APIKey  string
-	Model   string
-	Tier    string // "strong", "fast", or "default"
-	client  *http.Client
+	Model        string
+	Tier         string // "strong", "fast", or "default"
+	NonStreaming bool
+	client       *http.Client
 }
 
 // NewLLMClient creates a new client with TCP Keep-Alive and infinite streaming timeout
@@ -400,6 +401,13 @@ func (c *LLMClient) Generate(ctx context.Context, systemPrompt, userPrompt strin
 	return c.GenerateWithFormat(ctx, systemPrompt, userPrompt, nil)
 }
 
+// GenerateNonStreaming responds to a user prompt using standard non-streaming HTTP POST
+func (c *LLMClient) GenerateNonStreaming(ctx context.Context, systemPrompt, userPrompt string) (string, error) {
+	clone := *c
+	clone.NonStreaming = true
+	return clone.GenerateWithFormat(ctx, systemPrompt, userPrompt, nil)
+}
+
 // adaptResponseFormat translates the custom llama-server JSON Schema format into standard OpenAI/OpenRouter format when using remote endpoints
 func (c *LLMClient) adaptResponseFormat(original map[string]interface{}) map[string]interface{} {
 	if original == nil {
@@ -481,8 +489,8 @@ func (c *LLMClient) generateWithFormatNoCache(ctx context.Context, systemPrompt,
 		}
 	}
 
-	// If response format is provided, perform a non-streaming constrained request
-	if responseFormat != nil {
+	// If response format is provided or non-streaming is requested, perform a non-streaming request
+	if responseFormat != nil || c.NonStreaming {
 		maxExtractionCap := 8192 // 8k tokens: provides ample headroom for concise thinking + complete JSON graph
 		if envCap := os.Getenv("MAX_EXTRACTION_TOKENS"); envCap != "" {
 			if val, err := strconv.Atoi(envCap); err == nil && val > 0 {
