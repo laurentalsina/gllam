@@ -59,6 +59,9 @@ BYPASS_SEMANTIC="false"
 BYPASS_TEMPORAL="false"
 PRUNE_CLUE_CHUNKS="true"
 DECOMPOSE_QUERY="true"
+PREPROCESS_DATA="${PREPROCESS_DATA:-true}"
+TARGET_COMPRESSION="${TARGET_COMPRESSION:-40}"
+PREPROCESS_CONCURRENCY="${PREPROCESS_CONCURRENCY:-4}"
 
 while [[ "$#" -gt 0 ]]; do
     case $1 in
@@ -106,9 +109,33 @@ while [[ "$#" -gt 0 ]]; do
             DECOMPOSE_QUERY="${1#*=}"
             shift 1
             ;;
+        --preprocess)
+            PREPROCESS_DATA="$2"
+            shift 2
+            ;;
+        --preprocess=*)
+            PREPROCESS_DATA="${1#*=}"
+            shift 1
+            ;;
+        --target-compression)
+            TARGET_COMPRESSION="$2"
+            shift 2
+            ;;
+        --target-compression=*)
+            TARGET_COMPRESSION="${1#*=}"
+            shift 1
+            ;;
+        --preprocess-concurrency)
+            PREPROCESS_CONCURRENCY="$2"
+            shift 2
+            ;;
+        --preprocess-concurrency=*)
+            PREPROCESS_CONCURRENCY="${1#*=}"
+            shift 1
+            ;;
         *)
             echo "Unknown parameter: $1"
-            echo "Usage: $0 [--cover <category_name>] [--debug] [--bypass-semantic <true|false>] [--bypass-temporal <true|false>] [--prune-clue-chunks <true|false>] [--decompose-query <true|false>]"
+            echo "Usage: $0 [--cover <category_name>] [--debug] [--bypass-semantic <true|false>] [--bypass-temporal <true|false>] [--prune-clue-chunks <true|false>] [--decompose-query <true|false>] [--preprocess <true|false>] [--target-compression <pct>] [--preprocess-concurrency <n>]"
             echo "Available categories: all, preference_following, temporal_reasoning, event_ordering, knowledge_update, summarization, instruction_following, information_extraction, contradiction_resolution, multi_session_reasoning, abstention"
             exit 1
             ;;
@@ -134,13 +161,18 @@ echo "   ├─ Bypass Semantic: $BYPASS_SEMANTIC"
 echo "   ├─ Bypass Temporal: $BYPASS_TEMPORAL"
 echo "   ├─ Prune Clue Chunks: $PRUNE_CLUE_CHUNKS"
 echo "   ├─ Decompose Query: $DECOMPOSE_QUERY"
+echo "   ├─ Preprocess Data: $PREPROCESS_DATA"
+if [ "$PREPROCESS_DATA" = "true" ]; then
+echo "   ├─ Target Compression: ${TARGET_COMPRESSION}% (Reduction: $((100 - TARGET_COMPRESSION))%)"
+echo "   ├─ Preprocess Concurrency: $PREPROCESS_CONCURRENCY"
+fi
 echo "   ├─ Max Extraction Tokens: $MAX_EXTRACTION_TOKENS"
 if [ ! -z "$CATEGORIES" ]; then
 echo "   ├─ Target Categories: $CATEGORIES"
 fi
 echo "======================================================="
 
-# Run Selective Evaluation
+# Run Selective Evaluation (with JIT turn compression on retrieved context)
 go run ./cmd/eval_selective/main.go \
   --dbpath "$DB_PATH" \
   --corpus "$BEAM_CORPUS" \
@@ -157,6 +189,9 @@ go run ./cmd/eval_selective/main.go \
   --bypass-temporal="$BYPASS_TEMPORAL" \
   --prune-clue-chunks="$PRUNE_CLUE_CHUNKS" \
   --decompose-query="$DECOMPOSE_QUERY" \
+  --preprocess-data="$PREPROCESS_DATA" \
+  --target-compression="$TARGET_COMPRESSION" \
+  --preprocess-concurrency="$PREPROCESS_CONCURRENCY" \
   --run-timestamp "$RUN_TIMESTAMP"
 
 # Grade Results

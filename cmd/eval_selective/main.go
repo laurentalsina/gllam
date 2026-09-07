@@ -278,6 +278,9 @@ func main() {
 	useUtterancesVectors := flag.Bool("use-utterances-vectors", false, "Use turn-level vector embedding similarity search for paragraph/context retrieval")
 	useTermsVectors := flag.Bool("use-terms-vectors", false, "Use semantic query expansion via term vocabulary embeddings")
 	decomposeQueryFlag := flag.Bool("decompose-query", false, "Decompose complex questions into sub-queries for multi-hop retrieval")
+	preprocessDataFlag := flag.Bool("preprocess-data", false, "Enable JIT dialogue turn compression on retrieved context utterances")
+	targetCompressionPct := flag.Int("target-compression", 40, "Target word count as percent of original for JIT turn compression (default 40)")
+	preprocessConcurrency := flag.Int("preprocess-concurrency", 4, "Concurrency for JIT turn compression (default 4)")
 	runTimestampFlag := flag.String("run-timestamp", "", "Override run timestamp for log directory naming")
 
 	flag.Parse()
@@ -426,6 +429,28 @@ func main() {
 	if strongClient == nil && fastClient == nil {
 		fmt.Fprintf(os.Stderr, "❌ Error: Neither STRONG_TEXT_SERVER nor FAST_TEXT_SERVER is set in the environment!\n")
 		os.Exit(1)
+	}
+
+	var compressor *engine.MessageCompressor
+	if *preprocessDataFlag {
+		preprocessServer := getClientForTask("TURN_COMPRESSION", "FAST_TEXT_SERVER", strongClient, fastClient, defaultClient)
+		compCfg := engine.DefaultCompressionConfig()
+		compCfg.TargetCompressionPercent = *targetCompressionPct
+		compCfg.ReductionPercent = 100 - *targetCompressionPct
+		compCfg.Concurrency = *preprocessConcurrency
+		if gllam.SystemPrompts != nil && gllam.SystemPrompts.PreprocessCompressionPrompt != "" {
+			compCfg.PromptTemplate = gllam.SystemPrompts.PreprocessCompressionPrompt
+		}
+		cacheDBPath := "./bench/beam/beam_preprocess_cache.db"
+		var errComp error
+		compressor, errComp = engine.NewMessageCompressor(preprocessServer, cacheDBPath, compCfg)
+		if errComp != nil {
+			logMain("   ⚠️ Warning: failed to initialize JIT message compressor: %v\n", errComp)
+		} else {
+			defer compressor.Close()
+			logMain("   ├─ JIT Dialogue Turn Compression enabled (target: %d%%, reduction: %d%%, cache: %s)\n",
+				compCfg.TargetCompressionPercent, compCfg.ReductionPercent, cacheDBPath)
+		}
 	}
 
 	sigChan := make(chan os.Signal, 1)
@@ -668,6 +693,62 @@ func main() {
 				}
 				return expandedUtterances[i].LineNumber < expandedUtterances[j].LineNumber
 			})
+
+			// Optional JIT turn compression on retrieved context utterances
+			if compressor != nil && len(expandedUtterances) > 0 {
+				tComp0 := time.Now()
+				logTimestamp("JIT turn compression")
+				logMain("   ├─ Compressing %d retrieved context turns to %d%% target length...\n", len(expandedUtterances), *targetCompressionPct)
+
+				var origWordsTotal, compWordsTotal int
+				for _, u := range expandedUtterances {
+					origWordsTotal += len(strings.Fields(u.Text))
+				}
+
+				var wg sync.WaitGroup
+				type compResult struct {
+					idx  int
+					text string
+				}
+				resultChan := make(chan compResult, len(expandedUtterances))
+				workerCount := *preprocessConcurrency
+				if workerCount <= 0 {
+					workerCount = 4
+				}
+				sem := make(chan struct{}, workerCount)
+
+				for idx, u := range expandedUtterances {
+					wg.Add(1)
+					go func(i int, utt engine.CorpusUtterance) {
+						defer wg.Done()
+						sem <- struct{}{}
+						defer func() { <-sem }()
+
+						compText, err := compressor.CompressMessage(ctx, utt.SpeakerID, utt.Text)
+						if err != nil {
+							resultChan <- compResult{idx: i, text: utt.Text}
+						} else {
+							resultChan <- compResult{idx: i, text: compText}
+						}
+					}(idx, u)
+				}
+				wg.Wait()
+				close(resultChan)
+
+				for res := range resultChan {
+					expandedUtterances[res.idx].Text = res.text
+					compWordsTotal += len(strings.Fields(res.text))
+				}
+
+				compDur := time.Since(tComp0)
+				reduction := 0.0
+				if origWordsTotal > 0 {
+					reduction = float64(origWordsTotal-compWordsTotal) / float64(origWordsTotal) * 100.0
+				}
+				logMain("   ├─ [%s] [%v] JIT turn compression completed: %d -> %d words (%.1f%% reduction).\n",
+					time.Now().Format("2006-01-02 15:04:05"), compDur.Round(time.Millisecond), origWordsTotal, compWordsTotal, reduction)
+				addEvent(fmt.Sprintf("JIT turn compression completed in %v (%d -> %d words, %.1f%% reduction)", compDur.Round(time.Millisecond), origWordsTotal, compWordsTotal, reduction))
+			}
 
 			// Rebuild dialogue transcript text
 			var transcriptBuilder strings.Builder

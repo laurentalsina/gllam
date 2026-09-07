@@ -15,6 +15,9 @@ export FAST_MODEL_CONTEXT="${FAST_MODEL_CONTEXT:-65536}"
 export STRONG_MODEL_TIMEOUT="${STRONG_MODEL_TIMEOUT:-300}"
 export FAST_MODEL_TIMEOUT="${FAST_MODEL_TIMEOUT:-300}"
 CONCURRENCY="${CONCURRENCY:-1}"
+PREPROCESS_DATA="${PREPROCESS_DATA:-true}"
+TARGET_COMPRESSION="${TARGET_COMPRESSION:-40}"
+PREPROCESS_CONCURRENCY="${PREPROCESS_CONCURRENCY:-4}"
 
 # Validate required server endpoints
 if [ -z "$FAST_TEXT_SERVER" ] && [ -z "$STRONG_TEXT_SERVER" ]; then
@@ -47,10 +50,47 @@ echo "   ├─ Fast Text Server: ${FAST_TEXT_SERVER:-<not set>}"
 echo "   ├─ Strong Text Server: ${STRONG_TEXT_SERVER:-<not set>}"
 echo "   ├─ Embeddings Server: $EMBEDDINGS_SERVER"
 echo "   ├─ Planner: $GLLAM_PLANNER_EXECUTABLE_PATH"
+echo "   ├─ Preprocess Data: $PREPROCESS_DATA"
+if [ "$PREPROCESS_DATA" = "true" ]; then
+echo "   ├─ Target Compression: ${TARGET_COMPRESSION}% (Reduction: $((100 - TARGET_COMPRESSION))%)"
+echo "   ├─ Preprocess Concurrency: $PREPROCESS_CONCURRENCY"
+fi
 echo "   ├─ Concurrency: $CONCURRENCY"
 echo "   ├─ Fast Timeout: $FAST_MODEL_TIMEOUT"
 echo "   └─ Strong Timeout: $STRONG_MODEL_TIMEOUT"
 echo "======================================================="
+
+# Step 0: Pre-processing (Dialogue Turn Compression)
+if [ "$PREPROCESS_DATA" = "true" ]; then
+    echo "======================================================="
+    echo "🧹 Pre-processing BEAM Corpus (Turn Compression Enabled)"
+    echo "   ├─ Target Compression: ${TARGET_COMPRESSION}% (Reduction: $((100 - TARGET_COMPRESSION))%)"
+    echo "   ├─ Concurrency: ${PREPROCESS_CONCURRENCY} workers"
+
+    PREPROCESSED_CORPUS="./bench/beam/data/beam_100k_conversations_compressed.jsonl"
+    PREPROCESS_CACHE_DB="./bench/beam/beam_preprocess_cache.db"
+    mkdir -p "./bench/beam/data"
+
+    PREPROCESS_SERVER="${FAST_TEXT_SERVER:-$STRONG_TEXT_SERVER}"
+
+    go run ./cmd/preprocess_beam/main.go \
+      --corpus "$BEAM_CONVERSATIONS" \
+      --qa "$BEAM_QA" \
+      --out "$PREPROCESSED_CORPUS" \
+      --cache-db "$PREPROCESS_CACHE_DB" \
+      --llm-server "$PREPROCESS_SERVER" \
+      --prompts-config config/beam_prompts.json \
+      --target-compression "$TARGET_COMPRESSION" \
+      --concurrency "$PREPROCESS_CONCURRENCY"
+
+    if [ -f "$PREPROCESSED_CORPUS" ]; then
+        BEAM_CONVERSATIONS="$PREPROCESSED_CORPUS"
+        echo "   └─ Pre-processing complete. Active corpus set to: $BEAM_CONVERSATIONS"
+    else
+        echo "   ⚠️ Pre-processing output missing, falling back to original: $BEAM_CONVERSATIONS"
+    fi
+    echo "======================================================="
+fi
 
 # Step 1: Ingestion
 echo -e "\n📥 Step 1: Ingesting BEAM Conversations..."
