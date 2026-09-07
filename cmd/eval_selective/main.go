@@ -279,7 +279,7 @@ func main() {
 	useTermsVectors := flag.Bool("use-terms-vectors", false, "Use semantic query expansion via term vocabulary embeddings")
 	decomposeQueryFlag := flag.Bool("decompose-query", false, "Decompose complex questions into sub-queries for multi-hop retrieval")
 	preprocessDataFlag := flag.Bool("preprocess-data", false, "Enable JIT dialogue turn compression on retrieved context utterances")
-	targetCompressionPct := flag.Int("target-compression", 40, "Target word count as percent of original for JIT turn compression (default 40)")
+	targetCompressionPct := flag.Int("target-compression", 60, "Target word count as percent of original for JIT turn compression (default 60)")
 	preprocessConcurrency := flag.Int("preprocess-concurrency", 1, "Concurrency for JIT turn compression (default 1)")
 	preprocessCacheDB := flag.String("preprocess-cache-db", "./bench/beam/beam_preprocess_cache.db", "Path to SQLite cache DB for JIT turn compression")
 	runTimestampFlag := flag.String("run-timestamp", "", "Override run timestamp for log directory naming")
@@ -416,13 +416,15 @@ func main() {
 
 	var strongClient *engine.LLMClient
 	if strongServerEnv != "" {
-		strongClient = engine.NewLLMClientWithKey(strongServerEnv, os.Getenv("OPENROUTER_API_KEY"), strongModelEnv)
+		strongKey := engine.ResolveAPIKey(strongServerEnv, "", "strong")
+		strongClient = engine.NewLLMClientWithKey(strongServerEnv, strongKey, strongModelEnv)
 		strongClient.Tier = "strong"
 	}
 
 	var fastClient *engine.LLMClient
 	if fastServerEnv != "" {
-		fastClient = engine.NewLLMClientWithKey(fastServerEnv, "", fastModelEnv)
+		fastKey := engine.ResolveAPIKey(fastServerEnv, "", "fast")
+		fastClient = engine.NewLLMClientWithKey(fastServerEnv, fastKey, fastModelEnv)
 		fastClient.Tier = "fast"
 	}
 
@@ -695,70 +697,7 @@ func main() {
 				return expandedUtterances[i].LineNumber < expandedUtterances[j].LineNumber
 			})
 
-			// Optional JIT turn compression on retrieved context utterances
-			if compressor != nil && len(expandedUtterances) > 0 {
-				tComp0 := time.Now()
-				logTimestamp("JIT turn compression")
-				logMain("   ├─ Compressing %d retrieved context turns to %d%% target length...\n", len(expandedUtterances), *targetCompressionPct)
-
-				var origWordsTotal, compWordsTotal int
-				for _, u := range expandedUtterances {
-					origWordsTotal += len(strings.Fields(u.Text))
-				}
-
-				var wg sync.WaitGroup
-				type compResult struct {
-					idx  int
-					text string
-				}
-				resultChan := make(chan compResult, len(expandedUtterances))
-				workerCount := *preprocessConcurrency
-				if workerCount <= 0 {
-					workerCount = 4
-				}
-				sem := make(chan struct{}, workerCount)
-
-				startStats := compressor.Stats()
-				for idx, u := range expandedUtterances {
-					wg.Add(1)
-					go func(i int, utt engine.CorpusUtterance) {
-						defer wg.Done()
-						sem <- struct{}{}
-						defer func() { <-sem }()
-
-						compText, err := compressor.CompressMessage(ctx, utt.SpeakerID, utt.Text)
-						if err != nil {
-							resultChan <- compResult{idx: i, text: utt.Text}
-						} else {
-							resultChan <- compResult{idx: i, text: compText}
-						}
-					}(idx, u)
-				}
-				wg.Wait()
-				close(resultChan)
-
-				for res := range resultChan {
-					expandedUtterances[res.idx].Text = res.text
-					compWordsTotal += len(strings.Fields(res.text))
-				}
-
-				endStats := compressor.Stats()
-				deltaCached := endStats.CachedTurns - startStats.CachedTurns
-				deltaProcessed := endStats.ProcessedTurns - startStats.ProcessedTurns
-				deltaSkipped := endStats.SkippedTurns - startStats.SkippedTurns
-
-				compDur := time.Since(tComp0)
-				reduction := 0.0
-				if origWordsTotal > 0 {
-					reduction = float64(origWordsTotal-compWordsTotal) / float64(origWordsTotal) * 100.0
-				}
-				logMain("   ├─ [%s] [%v] JIT turn compression completed: %d turns (%d cached, %d compressed, %d short preserved) | %d -> %d words (%.1f%% reduction).\n",
-					time.Now().Format("2006-01-02 15:04:05"), compDur.Round(time.Millisecond), len(expandedUtterances), deltaCached, deltaProcessed, deltaSkipped, origWordsTotal, compWordsTotal, reduction)
-				addEvent(fmt.Sprintf("JIT turn compression completed in %v: %d turns (%d cached, %d compressed) | %d -> %d words (%.1f%% reduction)",
-					compDur.Round(time.Millisecond), len(expandedUtterances), deltaCached, deltaProcessed, origWordsTotal, compWordsTotal, reduction))
-			}
-
-			// Rebuild dialogue transcript text
+			// Rebuild dialogue transcript text from expanded utterances
 			var transcriptBuilder strings.Builder
 			for _, u := range expandedUtterances {
 				transcriptBuilder.WriteString(fmt.Sprintf("%s: %s\n", u.SpeakerID, u.Text))
@@ -777,6 +716,63 @@ func main() {
 				logMain("   ├─ Transcript size after pruning: %d characters\n", len(transcriptText))
 			}
 			totalPruneTime += time.Since(tPrune0)
+
+			// Optional JIT turn compression on pruned context transcript
+			if compressor != nil && len(transcriptText) > 0 {
+				parsedTurns := engine.ParseTranscriptTurns(transcriptText)
+				if len(parsedTurns) > 0 {
+					tComp0 := time.Now()
+					logTimestamp("JIT turn compression")
+					logMain("   ├─ Compressing %d pruned context turns to %d%% target length...\n", len(parsedTurns), *targetCompressionPct)
+
+					var origWordsTotal, compWordsTotal int
+					var cachedCount, compressedCount, skippedCount int
+
+					for i, pt := range parsedTurns {
+						wCount := len(strings.Fields(pt.Content))
+						origWordsTotal += wCount
+
+						// Skip user turns (queries/constraints must stay pristine) and short turns (< 50 words)
+						cleanSpeaker := strings.ToLower(strings.TrimSpace(pt.Speaker))
+						isUser := strings.HasPrefix(cleanSpeaker, "user") || strings.HasPrefix(cleanSpeaker, "human")
+						if isUser || wCount < 50 {
+							compWordsTotal += wCount
+							skippedCount++
+							continue
+						}
+
+						tTurn0 := time.Now()
+						compText, err := compressor.CompressMessage(ctx, pt.Speaker, pt.Content)
+						if err != nil {
+							logMain("      [%d/%d] %s: ⚠️ error (%v), keeping original\n", i+1, len(parsedTurns), pt.Speaker, err)
+							compWordsTotal += wCount
+						} else {
+							newW := len(strings.Fields(compText))
+							compWordsTotal += newW
+							parsedTurns[i].Content = compText
+							dur := time.Since(tTurn0)
+							if dur < 20*time.Millisecond {
+								cachedCount++
+								logMain("      [%d/%d] %s: ⚡ cached (%d words, 0ms)\n", i+1, len(parsedTurns), pt.Speaker, newW)
+							} else {
+								compressedCount++
+								logMain("      [%d/%d] %s: %d -> %d words (%v)\n", i+1, len(parsedTurns), pt.Speaker, wCount, newW, dur.Round(time.Millisecond))
+							}
+						}
+					}
+
+					transcriptText = engine.AssembleTranscriptTurns(parsedTurns)
+					compDur := time.Since(tComp0)
+					reduction := 0.0
+					if origWordsTotal > 0 {
+						reduction = float64(origWordsTotal-compWordsTotal) / float64(origWordsTotal) * 100.0
+					}
+					logMain("   ├─ [%s] [%v] JIT turn compression completed: %d turns (%d cached, %d compressed, %d short preserved) | %d -> %d words (%.1f%% reduction).\n",
+						time.Now().Format("2006-01-02 15:04:05"), compDur.Round(time.Millisecond), len(parsedTurns), cachedCount, compressedCount, skippedCount, origWordsTotal, compWordsTotal, reduction)
+					addEvent(fmt.Sprintf("JIT turn compression completed in %v: %d turns (%d cached, %d compressed) | %d -> %d words (%.1f%% reduction)",
+						compDur.Round(time.Millisecond), len(parsedTurns), cachedCount, compressedCount, origWordsTotal, compWordsTotal, reduction))
+				}
+			}
 
 			logMain("   ├─ Retrieved & expanded context size: %d turns (%d characters)\n", len(expandedUtterances), len(transcriptText))
 

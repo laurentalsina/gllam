@@ -177,3 +177,25 @@ func TestPreprocessBeamConversation(t *testing.T) {
 		t.Fatalf("expected time_anchor to be preserved, got: %v", turn0["time_anchor"])
 	}
 }
+
+func TestParseAndAssembleTranscriptTurns(t *testing.T) {
+	raw := "user (id 0): I have a meeting on Friday.\nassistant (id 1): Sure! Here is the plan:\nStep 1: Check calendar.\nuser: Sounds good.\n"
+	turns := ParseTranscriptTurns(raw)
+	if len(turns) != 3 {
+		t.Fatalf("expected 3 turns, got %d", len(turns))
+	}
+	if turns[0].Speaker != "user (id 0)" || turns[0].Content != "I have a meeting on Friday." {
+		t.Errorf("turn 0 mismatch: %+v", turns[0])
+	}
+	if turns[1].Speaker != "assistant (id 1)" || !strings.Contains(turns[1].Content, "Step 1: Check calendar.") {
+		t.Errorf("turn 1 mismatch: %+v", turns[1])
+	}
+	if turns[2].Speaker != "user" || turns[2].Content != "Sounds good." {
+		t.Errorf("turn 2 mismatch: %+v", turns[2])
+	}
+
+	assembled := AssembleTranscriptTurns(turns)
+	if !strings.Contains(assembled, "user (id 0): I have a meeting on Friday.") {
+		t.Errorf("assembled missing turn 0: %s", assembled)
+	}
+}

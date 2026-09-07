@@ -133,3 +133,106 @@ func TestLLMClientSamplingParameters(t *testing.T) {
 		}
 	}
 }
+
+func TestLLMClientCerebrasSupport(t *testing.T) {
+	origCerebrasKey := os.Getenv("CEREBRAS_API_KEY")
+	origOpenRouterKey := os.Getenv("OPENROUTER_API_KEY")
+	origFastTemp := os.Getenv("FAST_MODEL_TEMPERATURE")
+	origFastPres := os.Getenv("FAST_MODEL_PRESENCEPENALTY")
+	origFastFreq := os.Getenv("FAST_MODEL_FREQUENCYPENALTY")
+	defer func() {
+		os.Setenv("CEREBRAS_API_KEY", origCerebrasKey)
+		os.Setenv("OPENROUTER_API_KEY", origOpenRouterKey)
+		os.Setenv("FAST_MODEL_TEMPERATURE", origFastTemp)
+		os.Setenv("FAST_MODEL_PRESENCEPENALTY", origFastPres)
+		os.Setenv("FAST_MODEL_FREQUENCYPENALTY", origFastFreq)
+	}()
+
+	os.Unsetenv("FAST_MODEL_TEMPERATURE")
+	os.Unsetenv("FAST_MODEL_PRESENCEPENALTY")
+	os.Unsetenv("FAST_MODEL_FREQUENCYPENALTY")
+
+	os.Setenv("CEREBRAS_API_KEY", "csk-test-cerebras-key-123")
+	os.Setenv("OPENROUTER_API_KEY", "sk-or-v1-test-openrouter-key")
+
+	cerebrasURL := "https://api.cerebras.ai/v1/chat/completions"
+	client := NewLLMClient(cerebrasURL)
+	client.Tier = "fast"
+
+	if client.APIKey != "csk-test-cerebras-key-123" {
+		t.Errorf("Expected client APIKey to be 'csk-test-cerebras-key-123', got %q", client.APIKey)
+	}
+
+	if !client.isOpenAICompatible() {
+		t.Errorf("Expected isOpenAICompatible to return true for Cerebras URL")
+	}
+
+	if client.Model != "qwen-3.8-27b" {
+		t.Errorf("Expected default model 'qwen-3.8-27b' for Cerebras, got %q", client.Model)
+	}
+
+	resolvedChatURL := client.resolveChatURL()
+	if resolvedChatURL != "https://api.cerebras.ai/v1/chat/completions" {
+		t.Errorf("Expected resolveChatURL to be 'https://api.cerebras.ai/v1/chat/completions', got %q", resolvedChatURL)
+	}
+
+	client2 := NewLLMClientWithKey("https://api.cerebras.ai/v1", "", "qwen-3.8-27b")
+	if client2.APIKey != "csk-test-cerebras-key-123" {
+		t.Errorf("Expected NewLLMClientWithKey to resolve Cerebras key, got %q", client2.APIKey)
+	}
+	if client2.resolveChatURL() != "https://api.cerebras.ai/v1/chat/completions" {
+		t.Errorf("Expected resolveChatURL on /v1 to be 'https://api.cerebras.ai/v1/chat/completions', got %q", client2.resolveChatURL())
+	}
+
+	if client.GetPresencePenalty() != nil {
+		t.Errorf("Expected nil presence penalty for Cerebras, got %v", client.GetPresencePenalty())
+	}
+	if client.GetFrequencyPenalty() != nil {
+		t.Errorf("Expected nil frequency penalty for Cerebras, got %v", client.GetFrequencyPenalty())
+	}
+	if client.GetRepeatPenalty() != nil {
+		t.Errorf("Expected nil repeat penalty for Cerebras, got %v", client.GetRepeatPenalty())
+	}
+	if client.GetTemperature() != 0.0 {
+		t.Errorf("Expected default temperature 0.0 for Cerebras, got %f", client.GetTemperature())
+	}
+}
+
+func TestLLMClientOpenRouterSupport(t *testing.T) {
+	origCerebrasKey := os.Getenv("CEREBRAS_API_KEY")
+	origOpenRouterKey := os.Getenv("OPENROUTER_API_KEY")
+	defer func() {
+		os.Setenv("CEREBRAS_API_KEY", origCerebrasKey)
+		os.Setenv("OPENROUTER_API_KEY", origOpenRouterKey)
+	}()
+
+	// Both keys present in environment
+	os.Setenv("CEREBRAS_API_KEY", "csk-test-cerebras-key-123")
+	os.Setenv("OPENROUTER_API_KEY", "sk-or-v1-test-openrouter-key")
+
+	openRouterURL := "https://openrouter.ai/api/v1"
+	client := NewLLMClient(openRouterURL)
+	client.Tier = "strong"
+
+	if client.APIKey != "sk-or-v1-test-openrouter-key" {
+		t.Errorf("Expected OpenRouter client to pick OPENROUTER_API_KEY, got %q", client.APIKey)
+	}
+
+	if !client.isOpenAICompatible() {
+		t.Errorf("Expected isOpenAICompatible to return true for OpenRouter")
+	}
+
+	if client.Model != "meta-llama/llama-3.3-70b-instruct" {
+		t.Errorf("Expected default OpenRouter model 'meta-llama/llama-3.3-70b-instruct', got %q", client.Model)
+	}
+
+	if client.resolveChatURL() != "https://openrouter.ai/api/v1/chat/completions" {
+		t.Errorf("Expected resolveChatURL to be 'https://openrouter.ai/api/v1/chat/completions', got %q", client.resolveChatURL())
+	}
+
+	// Verify local llama-server client does not get flagged as OpenAI compatible
+	localClient := NewLLMClient("http://127.0.0.1:8001")
+	if localClient.isOpenAICompatible() {
+		t.Errorf("Expected local llama.cpp server to NOT be flagged as isOpenAICompatible")
+	}
+}

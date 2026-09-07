@@ -42,6 +42,8 @@ type ChatCompletionRequest struct {
 	Stream             bool                   `json:"stream"`
 	MaxTokens          int                    `json:"max_tokens,omitempty"`
 	CachePrompt        bool                   `json:"cache_prompt,omitempty"`
+	ReasoningEffort    string                 `json:"reasoning_effort,omitempty"`
+	Seed               *int                   `json:"seed,omitempty"`
 }
 
 type ChatStreamResponse struct {
@@ -72,23 +74,91 @@ type ChatCompletionResponse struct {
 type LLMClient struct {
 	BaseURL string
 	APIKey  string
-	Model        string
-	Tier         string // "strong", "fast", or "default"
-	NonStreaming bool
-	client       *http.Client
+	Model             string
+	Tier              string // "strong", "fast", or "default"
+	NonStreaming      bool
+	MaxTokensOverride int
+	ReasoningEffort   string // override reasoning effort ("none", "low", "medium", "high")
+	client            *http.Client
+}
+
+// ResolveAPIKey determines the appropriate API key for a given base URL, tier, and explicit override.
+func ResolveAPIKey(baseURL, explicitKey, tier string) string {
+	if explicitKey != "" {
+		return explicitKey
+	}
+	u := strings.ToLower(baseURL)
+	if strings.Contains(u, "cerebras.ai") {
+		if k := os.Getenv("CEREBRAS_API_KEY"); k != "" {
+			return k
+		}
+		if k := os.Getenv("FAST_API_KEY"); k != "" {
+			return k
+		}
+	}
+	if strings.Contains(u, "openrouter.ai") {
+		if k := os.Getenv("OPENROUTER_API_KEY"); k != "" {
+			return k
+		}
+		if k := os.Getenv("STRONG_API_KEY"); k != "" {
+			return k
+		}
+	}
+	if tier == "fast" {
+		if k := os.Getenv("FAST_API_KEY"); k != "" {
+			return k
+		}
+		if strings.Contains(u, "cerebras.ai") {
+			if k := os.Getenv("CEREBRAS_API_KEY"); k != "" {
+				return k
+			}
+		}
+	} else if tier == "strong" {
+		if k := os.Getenv("STRONG_API_KEY"); k != "" {
+			return k
+		}
+		if strings.Contains(u, "openrouter.ai") {
+			if k := os.Getenv("OPENROUTER_API_KEY"); k != "" {
+				return k
+			}
+		}
+	}
+	if k := os.Getenv("LLM_API_KEY"); k != "" {
+		return k
+	}
+	if strings.Contains(u, "cerebras.ai") {
+		return os.Getenv("CEREBRAS_API_KEY")
+	}
+	if strings.Contains(u, "openrouter.ai") {
+		return os.Getenv("OPENROUTER_API_KEY")
+	}
+	return ""
+}
+
+// isOpenAICompatible returns true if the base URL belongs to an OpenAI-compatible cloud provider
+func (c *LLMClient) isOpenAICompatible() bool {
+	u := strings.ToLower(c.BaseURL)
+	return strings.Contains(u, "openrouter.ai") ||
+		strings.Contains(u, "openai.com") ||
+		strings.Contains(u, "cerebras.ai") ||
+		strings.Contains(u, "groq.com") ||
+		strings.Contains(u, "together.xyz") ||
+		strings.Contains(u, "deepseek.com") ||
+		strings.Contains(u, "anthropic.com")
 }
 
 // NewLLMClient creates a new client with TCP Keep-Alive and infinite streaming timeout
 func NewLLMClient(baseURL string) *LLMClient {
-	apiKey := os.Getenv("OPENROUTER_API_KEY")
-	if apiKey == "" {
-		apiKey = os.Getenv("LLM_API_KEY")
-	}
+	apiKey := ResolveAPIKey(baseURL, "", "default")
 
 	model := os.Getenv("LLM_MODEL")
 	if strings.Contains(baseURL, "openrouter.ai") {
 		if model == "" || model == "local-server" || model == "local_server" {
 			model = "meta-llama/llama-3.3-70b-instruct"
+		}
+	} else if strings.Contains(baseURL, "cerebras.ai") {
+		if model == "" || model == "local-server" || model == "local_server" {
+			model = "qwen-3.8-27b"
 		}
 	} else if model == "" {
 		model = "local-server"
@@ -119,8 +189,9 @@ func NewLLMClient(baseURL string) *LLMClient {
 // NewLLMClientWithKey creates a client with explicit API Key and Model ID
 func NewLLMClientWithKey(baseURL, apiKey, model string) *LLMClient {
 	c := NewLLMClient(baseURL)
-	if apiKey != "" {
-		c.APIKey = apiKey
+	resolvedKey := ResolveAPIKey(baseURL, apiKey, "")
+	if resolvedKey != "" {
+		c.APIKey = resolvedKey
 	}
 	if model != "" {
 		c.Model = model
@@ -260,6 +331,10 @@ func (c *LLMClient) GetTemperature() float32 {
 		}
 	}
 
+	if strings.Contains(strings.ToLower(c.BaseURL), "cerebras.ai") {
+		return 0.0
+	}
+
 	if c.Tier == "fast" {
 		return 0.3
 	}
@@ -314,12 +389,21 @@ func (c *LLMClient) GetTopP() *float32 {
 		}
 	}
 
+	if strings.Contains(strings.ToLower(c.BaseURL), "cerebras.ai") {
+		def := float32(1.0)
+		return &def
+	}
+
 	def := float32(0.95)
 	return &def
 }
 
 // GetRepeatPenalty returns the repeat penalty sampling parameter
 func (c *LLMClient) GetRepeatPenalty() *float32 {
+	if c.isOpenAICompatible() {
+		return nil
+	}
+
 	if c.Tier == "strong" {
 		if val, ok := parseEnvFloat("STRONG_MODEL_REPEATPENALTY", "STRONG_MODEL_REPEAT_PENALTY", "STRONG_MODEL_REPETITION_PENALTY"); ok {
 			return &val
@@ -346,6 +430,10 @@ func (c *LLMClient) GetRepeatPenalty() *float32 {
 
 // GetPresencePenalty returns the presence penalty sampling parameter
 func (c *LLMClient) GetPresencePenalty() *float32 {
+	if c.isOpenAICompatible() {
+		return nil
+	}
+
 	if c.Tier == "strong" {
 		if val, ok := parseEnvFloat("STRONG_MODEL_PRESENCEPENALTY", "STRONG_MODEL_PRESENCE_PENALTY"); ok {
 			return &val
@@ -372,6 +460,10 @@ func (c *LLMClient) GetPresencePenalty() *float32 {
 
 // GetFrequencyPenalty returns the frequency penalty sampling parameter
 func (c *LLMClient) GetFrequencyPenalty() *float32 {
+	if c.isOpenAICompatible() {
+		return nil
+	}
+
 	if c.Tier == "strong" {
 		if val, ok := parseEnvFloat("STRONG_MODEL_FREQUENCYPENALTY", "STRONG_MODEL_FREQUENCY_PENALTY"); ok {
 			return &val
@@ -396,6 +488,51 @@ func (c *LLMClient) GetFrequencyPenalty() *float32 {
 	return &def
 }
 
+// GetReasoningEffort returns the reasoning effort parameter ("none", "low", "medium", "high") if configured
+func (c *LLMClient) GetReasoningEffort() string {
+	if c.ReasoningEffort != "" {
+		return c.ReasoningEffort
+	}
+	if c.Tier == "fast" {
+		if val := os.Getenv("FAST_REASONING_EFFORT"); val != "" {
+			return val
+		}
+	} else if c.Tier == "strong" {
+		if val := os.Getenv("STRONG_REASONING_EFFORT"); val != "" {
+			return val
+		}
+	}
+	if val := os.Getenv("REASONING_EFFORT"); val != "" {
+		return val
+	}
+	if strings.Contains(strings.ToLower(c.BaseURL), "cerebras.ai") {
+		return "none"
+	}
+	return ""
+}
+
+// GetSeed returns deterministic seed integer if configured in environment
+func (c *LLMClient) GetSeed() *int {
+	var valStr string
+	if c.Tier == "fast" {
+		valStr = os.Getenv("FAST_MODEL_SEED")
+	} else if c.Tier == "strong" {
+		valStr = os.Getenv("STRONG_MODEL_SEED")
+	}
+	if valStr == "" {
+		valStr = os.Getenv("GLLAM_SEED")
+	}
+	if valStr == "" {
+		valStr = os.Getenv("LLM_SEED")
+	}
+	if valStr != "" {
+		if s, err := strconv.Atoi(strings.TrimSpace(valStr)); err == nil {
+			return &s
+		}
+	}
+	return nil
+}
+
 // Generate responds to a user prompt given a system prompt context
 func (c *LLMClient) Generate(ctx context.Context, systemPrompt, userPrompt string) (string, error) {
 	return c.GenerateWithFormat(ctx, systemPrompt, userPrompt, nil)
@@ -415,12 +552,12 @@ func (c *LLMClient) adaptResponseFormat(original map[string]interface{}) map[str
 	}
 
 	// Check if this is OpenRouter/OpenAI-compatible and needs standard JSON Schema format
-	isOpenAIOrOpenRouter := strings.Contains(c.BaseURL, "openrouter.ai") || strings.Contains(c.BaseURL, "openai.com")
+	isOpenAICompatible := c.isOpenAICompatible()
 
 	t, okType := original["type"].(string)
 	schema, okSchema := original["schema"]
 
-	if isOpenAIOrOpenRouter && okType && t == "json_object" && okSchema {
+	if isOpenAICompatible && okType && t == "json_object" && okSchema {
 		// Convert to standard OpenAI / OpenRouter json_schema format
 		return map[string]interface{}{
 			"type": "json_schema",
@@ -474,6 +611,27 @@ func (c *LLMClient) GenerateWithFormat(ctx context.Context, systemPrompt, userPr
 	return content, nil
 }
 
+// parseRetryAfter determines the backoff duration from the Retry-After header or default exponential backoff
+func parseRetryAfter(resp *http.Response, attempt int) time.Duration {
+	if resp != nil {
+		if val := resp.Header.Get("Retry-After"); val != "" {
+			if sec, err := strconv.Atoi(strings.TrimSpace(val)); err == nil && sec > 0 {
+				return time.Duration(sec) * time.Second
+			}
+			if t, err := http.ParseTime(val); err == nil {
+				if d := time.Until(t); d > 0 {
+					return d
+				}
+			}
+		}
+	}
+	backoffs := []time.Duration{3 * time.Second, 6 * time.Second, 12 * time.Second, 20 * time.Second, 30 * time.Second}
+	if attempt-1 >= 0 && attempt-1 < len(backoffs) {
+		return backoffs[attempt-1]
+	}
+	return 30 * time.Second
+}
+
 func (c *LLMClient) generateWithFormatNoCache(ctx context.Context, systemPrompt, userPrompt string, responseFormat map[string]interface{}) (string, error) {
 	url := c.resolveChatURL()
 	timeout := c.GetTimeout()
@@ -482,7 +640,9 @@ func (c *LLMClient) generateWithFormatNoCache(ctx context.Context, systemPrompt,
 	// Dynamically calculate maxTokens so prompt + maxTokens never exceeds context window
 	estimatedPromptTokens := (len(systemPrompt) + len(userPrompt)) / 3
 	maxTokens := 16384
-	if ctxSize > 0 && estimatedPromptTokens+maxTokens > ctxSize {
+	if c.MaxTokensOverride > 0 {
+		maxTokens = c.MaxTokensOverride
+	} else if ctxSize > 0 && estimatedPromptTokens+maxTokens > ctxSize {
 		maxTokens = ctxSize - estimatedPromptTokens - 512
 		if maxTokens < 2048 {
 			maxTokens = 2048
@@ -500,15 +660,22 @@ func (c *LLMClient) generateWithFormatNoCache(ctx context.Context, systemPrompt,
 		if maxTokens > maxExtractionCap {
 			maxTokens = maxExtractionCap
 		}
-		isOpenAIOrOpenRouter := strings.Contains(c.BaseURL, "openrouter.ai") || strings.Contains(c.BaseURL, "openai.com")
+		isOpenAICompatible := c.isOpenAICompatible()
 		var chatTemplateKwargs map[string]interface{}
 		var repeatPenalty *float32 = c.GetRepeatPenalty()
-		if !isOpenAIOrOpenRouter {
+		var repetitionPenalty *float32 = c.GetRepeatPenalty()
+		var minP *float32 = c.GetMinP()
+		var cachePrompt bool = true
+		if isOpenAICompatible {
+			chatTemplateKwargs = nil
+			repeatPenalty = nil
+			repetitionPenalty = nil
+			minP = nil
+			cachePrompt = false
+		} else {
 			chatTemplateKwargs = map[string]interface{}{
 				"preserve_thinking": true,
 			}
-		} else {
-			repeatPenalty = nil
 		}
 
 		reqBody := ChatCompletionRequest{
@@ -521,14 +688,16 @@ func (c *LLMClient) generateWithFormatNoCache(ctx context.Context, systemPrompt,
 			ChatTemplateKwargs: chatTemplateKwargs,
 			Temperature:        c.GetTemperature(),
 			TopP:               c.GetTopP(),
-			MinP:               c.GetMinP(),
+			MinP:               minP,
 			RepeatPenalty:      repeatPenalty,
-			RepetitionPenalty:  c.GetRepeatPenalty(),
+			RepetitionPenalty:  repetitionPenalty,
 			PresencePenalty:    c.GetPresencePenalty(),
 			FrequencyPenalty:   c.GetFrequencyPenalty(),
 			Stream:             false,
 			MaxTokens:          maxTokens,
-			CachePrompt:        true,
+			CachePrompt:        cachePrompt,
+			ReasoningEffort:    c.GetReasoningEffort(),
+			Seed:               c.GetSeed(),
 		}
 
 		payload, err := json.Marshal(reqBody)
@@ -536,72 +705,122 @@ func (c *LLMClient) generateWithFormatNoCache(ctx context.Context, systemPrompt,
 			return "", fmt.Errorf("failed to marshal request: %w", err)
 		}
 
-		var reqCtx context.Context
-		var cancel context.CancelFunc
-		if timeout > 0 {
-			reqCtx, cancel = context.WithTimeout(ctx, timeout)
-			defer cancel()
-		} else {
-			reqCtx = ctx
-		}
+		maxAttempts := 6
+		var lastErr error
 
-		req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, url, bytes.NewReader(payload))
-		if err != nil {
-			return "", fmt.Errorf("failed to create request: %w", err)
-		}
-		req.Header.Set("Content-Type", "application/json")
-		if c.APIKey != "" {
-			req.Header.Set("Authorization", "Bearer "+c.APIKey)
-			req.Header.Set("HTTP-Referer", "https://github.com/laurentalsina/gllam")
-			req.Header.Set("X-Title", "GLLAM Memory System")
-		}
-
-		resp, err := c.client.Do(req)
-		if err != nil {
-			return "", fmt.Errorf("request failed: %w", err)
-		}
-		defer resp.Body.Close()
-
-		if resp.StatusCode != http.StatusOK {
-			bodyBytes, _ := io.ReadAll(resp.Body)
-			return "", fmt.Errorf("llm server returned status %d: %s", resp.StatusCode, string(bodyBytes))
-		}
-
-		var chatResp ChatCompletionResponse
-		if err := json.NewDecoder(resp.Body).Decode(&chatResp); err != nil {
-			return "", fmt.Errorf("failed to decode response: %w", err)
-		}
-
-		if len(chatResp.Choices) == 0 {
-			return "", fmt.Errorf("no completion choices returned")
-		}
-
-		choice := chatResp.Choices[0]
-		content := choice.Message.Content
-
-		// Fallback: if Content is empty, recover from ReasoningContent, Reasoning, or Thoughts
-		if strings.TrimSpace(content) == "" {
-			if strings.TrimSpace(choice.Message.ReasoningContent) != "" {
-				content = choice.Message.ReasoningContent
-			} else if strings.TrimSpace(choice.Message.Reasoning) != "" {
-				content = choice.Message.Reasoning
-			} else if strings.TrimSpace(choice.Message.Thoughts) != "" {
-				content = choice.Message.Thoughts
+		for attempt := 1; attempt <= maxAttempts; attempt++ {
+			var reqCtx context.Context
+			var cancel context.CancelFunc
+			if timeout > 0 {
+				reqCtx, cancel = context.WithTimeout(ctx, timeout)
+			} else {
+				reqCtx = ctx
 			}
+
+			req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, url, bytes.NewReader(payload))
+			if err != nil {
+				if cancel != nil {
+					cancel()
+				}
+				return "", fmt.Errorf("failed to create request: %w", err)
+			}
+			req.Header.Set("Content-Type", "application/json")
+			if c.APIKey != "" {
+				req.Header.Set("Authorization", "Bearer "+c.APIKey)
+				req.Header.Set("HTTP-Referer", "https://github.com/laurentalsina/gllam")
+				req.Header.Set("X-Title", "GLLAM Memory System")
+			}
+
+			resp, err := c.client.Do(req)
+			if err != nil {
+				if cancel != nil {
+					cancel()
+				}
+				if ctx.Err() != nil {
+					return "", ctx.Err()
+				}
+				lastErr = fmt.Errorf("request failed: %w", err)
+				if attempt < maxAttempts {
+					time.Sleep(2 * time.Second)
+					continue
+				}
+				return "", lastErr
+			}
+
+			if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == 429 {
+				waitDur := parseRetryAfter(resp, attempt)
+				resp.Body.Close()
+				if cancel != nil {
+					cancel()
+				}
+				fmt.Fprintf(os.Stderr, "   ⏳ [RATE LIMIT 429] %s (token quota). Waiting %v before retry (attempt %d/%d)...\n",
+					c.BaseURL, waitDur.Round(time.Millisecond), attempt, maxAttempts)
+				select {
+				case <-ctx.Done():
+					return "", ctx.Err()
+				case <-time.After(waitDur):
+					continue
+				}
+			}
+
+			if resp.StatusCode != http.StatusOK {
+				bodyBytes, _ := io.ReadAll(resp.Body)
+				resp.Body.Close()
+				if cancel != nil {
+					cancel()
+				}
+				return "", fmt.Errorf("llm server returned status %d: %s", resp.StatusCode, string(bodyBytes))
+			}
+
+			var chatResp ChatCompletionResponse
+			err = json.NewDecoder(resp.Body).Decode(&chatResp)
+			resp.Body.Close()
+			if cancel != nil {
+				cancel()
+			}
+			if err != nil {
+				return "", fmt.Errorf("failed to decode response: %w", err)
+			}
+
+			if len(chatResp.Choices) == 0 {
+				return "", fmt.Errorf("no completion choices returned")
+			}
+
+			choice := chatResp.Choices[0]
+			content := choice.Message.Content
+
+			// Fallback: if Content is empty, recover from ReasoningContent, Reasoning, or Thoughts
+			if strings.TrimSpace(content) == "" {
+				if strings.TrimSpace(choice.Message.ReasoningContent) != "" {
+					content = choice.Message.ReasoningContent
+				} else if strings.TrimSpace(choice.Message.Reasoning) != "" {
+					content = choice.Message.Reasoning
+				} else if strings.TrimSpace(choice.Message.Thoughts) != "" {
+					content = choice.Message.Thoughts
+				}
+			}
+
+			if strings.TrimSpace(content) == "" {
+				return "", fmt.Errorf("llm server returned an empty completion content choice (finish_reason: %q, possibly blocked by content filter or context limit)", choice.FinishReason)
+			}
+
+			return content, nil
 		}
 
-		if strings.TrimSpace(content) == "" {
-			return "", fmt.Errorf("llm server returned an empty completion content choice (finish_reason: %q, possibly blocked by content filter or context limit)", choice.FinishReason)
-		}
-
-		return content, nil
+		return "", fmt.Errorf("exceeded max retry attempts: %w", lastErr)
 	}
 
 	// Default: Streaming generation with automatic non-streaming fallback
-	isOpenAIOrOpenRouter := strings.Contains(c.BaseURL, "openrouter.ai") || strings.Contains(c.BaseURL, "openai.com")
+	isOpenAICompatible := c.isOpenAICompatible()
 	var repeatPenalty *float32 = c.GetRepeatPenalty()
-	if isOpenAIOrOpenRouter {
+	var repetitionPenalty *float32 = c.GetRepeatPenalty()
+	var minP *float32 = c.GetMinP()
+	var cachePrompt bool = true
+	if isOpenAICompatible {
 		repeatPenalty = nil
+		repetitionPenalty = nil
+		minP = nil
+		cachePrompt = false
 	}
 
 	reqBody := ChatCompletionRequest{
@@ -612,14 +831,16 @@ func (c *LLMClient) generateWithFormatNoCache(ctx context.Context, systemPrompt,
 		},
 		Temperature:       c.GetTemperature(),
 		TopP:              c.GetTopP(),
-		MinP:              c.GetMinP(),
+		MinP:              minP,
 		RepeatPenalty:     repeatPenalty,
-		RepetitionPenalty: c.GetRepeatPenalty(),
+		RepetitionPenalty: repetitionPenalty,
 		PresencePenalty:   c.GetPresencePenalty(),
 		FrequencyPenalty:  c.GetFrequencyPenalty(),
 		Stream:            true,
 		MaxTokens:         maxTokens,
-		CachePrompt:       true,
+		CachePrompt:       cachePrompt,
+		ReasoningEffort:   c.GetReasoningEffort(),
+		Seed:              c.GetSeed(),
 	}
 
 	body, err := json.Marshal(reqBody)
@@ -631,7 +852,8 @@ func (c *LLMClient) generateWithFormatNoCache(ctx context.Context, systemPrompt,
 	var lastErr error
 	var streamCancel context.CancelFunc
 
-	for attempt := 1; attempt <= 3; attempt++ {
+	maxStreamAttempts := 6
+	for attempt := 1; attempt <= maxStreamAttempts; attempt++ {
 		var reqCtx context.Context
 		if timeout > 0 {
 			reqCtx, streamCancel = context.WithTimeout(ctx, timeout)
@@ -661,6 +883,20 @@ func (c *LLMClient) generateWithFormatNoCache(ctx context.Context, systemPrompt,
 				streamCancel()
 			}
 			lastErr = fmt.Errorf("LLM server unreachable at %s: %w", url, err)
+		} else if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == 429 {
+			waitDur := parseRetryAfter(resp, attempt)
+			resp.Body.Close()
+			if streamCancel != nil {
+				streamCancel()
+			}
+			fmt.Fprintf(os.Stderr, "   ⏳ [RATE LIMIT 429] %s (token quota). Waiting %v before retry (attempt %d/%d)...\n",
+				c.BaseURL, waitDur.Round(time.Millisecond), attempt, maxStreamAttempts)
+			select {
+			case <-ctx.Done():
+				return "", ctx.Err()
+			case <-time.After(waitDur):
+				continue
+			}
 		} else if resp.StatusCode != http.StatusOK {
 			respBody, _ := io.ReadAll(resp.Body)
 			resp.Body.Close()
@@ -673,7 +909,7 @@ func (c *LLMClient) generateWithFormatNoCache(ctx context.Context, systemPrompt,
 			break
 		}
 
-		if attempt < 3 {
+		if attempt < maxStreamAttempts {
 			time.Sleep(time.Duration(attempt*2) * time.Second)
 		}
 	}

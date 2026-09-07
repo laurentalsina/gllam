@@ -25,7 +25,7 @@ func main() {
 	cacheDB := flag.String("cache-db", "./bench/beam/beam_preprocess_cache.db", "Path to SQLite cache DB")
 	llmServer := flag.String("llm-server", "", "LLM server endpoint (defaults to FAST_TEXT_SERVER or STRONG_TEXT_SERVER)")
 	promptsConfig := flag.String("prompts-config", "config/beam_prompts.json", "Path to prompts config JSON")
-	targetCompression := flag.Int("target-compression", 40, "Target word count as percent of original (default 40)")
+	targetCompression := flag.Int("target-compression", 60, "Target word count as percent of original (default 60)")
 	reductionPercent := flag.Int("reduction-percent", 0, "Target reduction percent (defaults to 100 - target-compression)")
 	minWords := flag.Int("min-words", 15, "Minimum word count to trigger compression (default 15)")
 	concurrency := flag.Int("concurrency", 4, "Number of concurrent workers (default 4)")

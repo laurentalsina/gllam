@@ -33,8 +33,8 @@ type CompressionConfig struct {
 // DefaultCompressionConfig returns baseline compression settings
 func DefaultCompressionConfig() CompressionConfig {
 	return CompressionConfig{
-		TargetCompressionPercent: 40,
-		ReductionPercent:         60,
+		TargetCompressionPercent: 60,
+		ReductionPercent:         40,
 		MinWords:                 15,
 		Concurrency:              4,
 		PromptTemplate:           config.DefaultPreprocessCompressionPrompt,
@@ -238,22 +238,31 @@ func (mc *MessageCompressor) CompressMessage(ctx context.Context, role, text str
 		return text, nil
 	}
 
-	// Build user prompt with appropriate role tag
-	var userPrompt string
 	cleanRole := strings.ToLower(strings.TrimSpace(role))
-	if cleanRole == "user" || strings.HasPrefix(cleanRole, "user") {
-		userPrompt = fmt.Sprintf("<user_message>\n%s\n</user_message>", text)
-	} else {
-		userPrompt = fmt.Sprintf("<assistant_message>\n%s\n</assistant_message>", text)
+	// Never compress user messages: they contain user queries, preferences, and constraints!
+	if cleanRole == "user" || strings.HasPrefix(cleanRole, "user") || cleanRole == "human" {
+		return text, nil
 	}
 
+	userPrompt := fmt.Sprintf("<assistant_message>\n%s\n</assistant_message>", text)
 	systemPrompt := BuildCompressionSystemPrompt(mc.cfg.PromptTemplate, mc.cfg.TargetCompressionPercent, mc.cfg.ReductionPercent)
 
-	// Invoke LLM (non-streaming standard HTTP POST to prevent SSE proxy stream drops)
+	// Cap maxTokens for turn compression based on turn length (never allow runaway generation)
+	turnMaxTokens := origWords + 128
+	if turnMaxTokens < 256 {
+		turnMaxTokens = 256
+	}
+	if turnMaxTokens > 1024 {
+		turnMaxTokens = 1024
+	}
+	clientCopy := *mc.llmClient
+	clientCopy.MaxTokensOverride = turnMaxTokens
+	clientCopy.ReasoningEffort = "none"
+
 	callCtx, cancel := context.WithTimeout(ctx, mc.cfg.Timeout)
 	defer cancel()
 
-	resp, err := mc.llmClient.GenerateNonStreaming(callCtx, systemPrompt, userPrompt)
+	resp, err := clientCopy.GenerateNonStreaming(callCtx, systemPrompt, userPrompt)
 	if err != nil {
 		// On LLM failure, log and fall back safely to original text
 		mc.statsMu.Lock()
@@ -266,18 +275,18 @@ func (mc *MessageCompressor) CompressMessage(ctx context.Context, role, text str
 	}
 
 	cleaned := CleanCompressedText(resp)
-	if cleaned == "" {
-		// Output empty, fall back to original
+	compWords := len(strings.Fields(cleaned))
+
+	// Safety check: if output is empty or somehow expanded the text, reject and preserve original
+	if cleaned == "" || compWords >= origWords {
 		mc.statsMu.Lock()
 		mc.stats.TotalTurns++
-		mc.stats.ErrorTurns++
+		mc.stats.SkippedTurns++
 		mc.stats.OriginalWords += int64(origWords)
 		mc.stats.CompressedWords += int64(origWords)
 		mc.statsMu.Unlock()
 		return text, nil
 	}
-
-	compWords := len(strings.Fields(cleaned))
 
 	// Store in cache
 	if mc.db != nil {
@@ -497,4 +506,53 @@ func (mc *MessageCompressor) PreprocessBeamCorpus(
 	}
 
 	return nil
+}
+
+// DialogueTurn represents a parsed speaker turn with content
+type DialogueTurn struct {
+	Speaker string
+	Content string
+}
+
+var turnHeaderRe = regexp.MustCompile(`^(?i)((?:user|assistant|system|speaker|human|model|agent)(?:[ _-][^:]*)?):\s*(.*)$`)
+
+// ParseTranscriptTurns splits a text transcript into individual dialogue turns
+func ParseTranscriptTurns(transcript string) []DialogueTurn {
+	lines := strings.Split(transcript, "\n")
+	var turns []DialogueTurn
+	var curSpeaker string
+	var curContent strings.Builder
+
+	for _, line := range lines {
+		if m := turnHeaderRe.FindStringSubmatch(line); m != nil {
+			if curSpeaker != "" {
+				turns = append(turns, DialogueTurn{
+					Speaker: curSpeaker,
+					Content: strings.TrimSpace(curContent.String()),
+				})
+				curContent.Reset()
+			}
+			curSpeaker = m[1]
+			curContent.WriteString(m[2])
+		} else if curSpeaker != "" {
+			curContent.WriteString("\n")
+			curContent.WriteString(line)
+		}
+	}
+	if curSpeaker != "" {
+		turns = append(turns, DialogueTurn{
+			Speaker: curSpeaker,
+			Content: strings.TrimSpace(curContent.String()),
+		})
+	}
+	return turns
+}
+
+// AssembleTranscriptTurns formats turns back into a dialogue transcript string
+func AssembleTranscriptTurns(turns []DialogueTurn) string {
+	var sb strings.Builder
+	for _, t := range turns {
+		sb.WriteString(fmt.Sprintf("%s: %s\n", t.Speaker, t.Content))
+	}
+	return sb.String()
 }
