@@ -56,6 +56,7 @@ if [ ! -f "$RESULTS_FILE" ]; then
     exit 1
 fi
 
+RESULTS_DIR=$(dirname "$RESULTS_FILE")
 if [[ "$RESULTS_FILE" == *"selective"* ]]; then
     DEFAULT_GRADE_OUT="${RESULTS_DIR}/beam_final_grade_selective.json"
 else
