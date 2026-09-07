@@ -52,6 +52,11 @@ func TestCleanCompressedText(t *testing.T) {
 			input:    "<assistant_message>Deploy to Render using Gunicorn on port 8000.</assistant_message>",
 			expected: "Deploy to Render using Gunicorn on port 8000.",
 		},
+		{
+			name:     "Conversational prefix",
+			input:    "Here is the compressed text:\n\nProject deadline is September 12.",
+			expected: "Project deadline is September 12.",
+		},
 	}
 
 	for _, tt := range tests {
@@ -61,6 +66,32 @@ func TestCleanCompressedText(t *testing.T) {
 				t.Errorf("CleanCompressedText() = %q, expected %q", actual, tt.expected)
 			}
 		})
+	}
+}
+
+func TestPreambleAndLoopDetection(t *testing.T) {
+	// Monologue leaks
+	leak := "Need calculate original word count to target 60%. Let's approximate. Could use mental? Need maybe produce around 1500 words if original 2500?"
+	if !isPreambleOrMonologue(leak) {
+		t.Errorf("expected isPreambleOrMonologue to return true for leaked thought monologue")
+	}
+
+	validText := "The project will launch on June 10, 2024 with Montserrat and Stephen presiding."
+	if isPreambleOrMonologue(validText) {
+		t.Errorf("expected isPreambleOrMonologue to return false for valid text")
+	}
+
+	// Repetitive paragraph loop
+	para := "Need calculate original word count to target 60%. Let's approximate. Could use mental? Need maybe produce around 1500 words if original 2500? Let's count roughly."
+	loopText := para + "\n\n" + para
+	if !hasRepetitiveLoop(loopText) {
+		t.Errorf("expected hasRepetitiveLoop to detect repeated paragraphs")
+	}
+
+	// Normal text with distinct paragraphs
+	distinctText := "First paragraph discussing the timeline and key stakeholders.\n\nSecond paragraph outlining the deliverable specifications and acceptance criteria."
+	if hasRepetitiveLoop(distinctText) {
+		t.Errorf("expected hasRepetitiveLoop to be false for distinct paragraphs")
 	}
 }
 

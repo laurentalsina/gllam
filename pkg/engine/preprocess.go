@@ -163,6 +163,93 @@ func BuildCompressionSystemPrompt(template string, targetPct, reductionPct int) 
 
 var thinkTagRegex = regexp.MustCompile(`(?s)<think>.*?</think>`)
 
+var conversationalPrefixes = []string{
+	"here is the compressed text:",
+	"here is the compressed message:",
+	"here is the compressed version:",
+	"here is the edited text:",
+	"here is the edited message:",
+	"compressed text:",
+	"compressed message:",
+	"compressed version:",
+}
+
+// isPreambleOrMonologue checks if the output is reasoning/thinking aloud or counting words
+func isPreambleOrMonologue(s string) bool {
+	lower := strings.ToLower(strings.TrimSpace(s))
+	if strings.HasPrefix(lower, "need calculate") ||
+		strings.HasPrefix(lower, "need approximate") ||
+		strings.HasPrefix(lower, "need count") ||
+		strings.HasPrefix(lower, "need preserve") ||
+		strings.HasPrefix(lower, "let's approximate") ||
+		strings.HasPrefix(lower, "let's count") ||
+		strings.HasPrefix(lower, "we need to calculate") ||
+		strings.HasPrefix(lower, "we need to approximate") ||
+		strings.HasPrefix(lower, "thinking process:") ||
+		strings.Contains(lower, "need calculate original word count") ||
+		strings.Contains(lower, "let's approximate. could use mental?") {
+		return true
+	}
+	return false
+}
+
+// hasRepetitiveLoop detects whether the text has degenerated into repeating identical paragraphs, lines, or phrase blocks
+func hasRepetitiveLoop(s string) bool {
+	s = strings.TrimSpace(s)
+	if len(s) < 100 {
+		return false
+	}
+
+	// 1. Check for identical paragraphs (>= 40 chars) appearing multiple times
+	paras := strings.Split(s, "\n\n")
+	if len(paras) >= 2 {
+		seenParas := make(map[string]int)
+		for _, p := range paras {
+			trimmed := strings.TrimSpace(p)
+			if len(trimmed) >= 40 {
+				seenParas[trimmed]++
+				if seenParas[trimmed] >= 2 {
+					return true
+				}
+			}
+		}
+	}
+
+	// 2. Check for identical consecutive lines (>= 20 chars) repeated 3+ times
+	lines := strings.Split(s, "\n")
+	if len(lines) >= 3 {
+		consecCount := 1
+		lastLine := ""
+		for _, l := range lines {
+			trimmed := strings.TrimSpace(l)
+			if len(trimmed) >= 20 && trimmed == lastLine {
+				consecCount++
+				if consecCount >= 3 {
+					return true
+				}
+			} else {
+				consecCount = 1
+				lastLine = trimmed
+			}
+		}
+	}
+
+	// 3. Check for consecutive identical blocks of text (40 to 250 characters)
+	textLen := len(s)
+	for window := 40; window <= 240; window += 20 {
+		if textLen < window*2 {
+			break
+		}
+		for i := 0; i+2*window <= textLen; i += window {
+			if s[i:i+window] == s[i+window:i+2*window] {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
 // CleanCompressedText strips extraneous reasoning, code block formatting, and echoed message tags
 func CleanCompressedText(s string) string {
 	s = strings.TrimSpace(s)
@@ -184,6 +271,15 @@ func CleanCompressedText(s string) string {
 	s = strings.TrimPrefix(s, "<assistant_message>")
 	s = strings.TrimSuffix(s, "</user_message>")
 	s = strings.TrimSuffix(s, "</assistant_message>")
+	s = strings.TrimSpace(s)
+
+	// Strip conversational preamble prefixes
+	for _, p := range conversationalPrefixes {
+		if strings.HasPrefix(strings.ToLower(s), p) {
+			s = strings.TrimSpace(s[len(p):])
+			break
+		}
+	}
 
 	return strings.TrimSpace(s)
 }
@@ -248,12 +344,12 @@ func (mc *MessageCompressor) CompressMessage(ctx context.Context, role, text str
 	systemPrompt := BuildCompressionSystemPrompt(mc.cfg.PromptTemplate, mc.cfg.TargetCompressionPercent, mc.cfg.ReductionPercent)
 
 	// Cap maxTokens for turn compression based on turn length (never allow runaway generation)
-	turnMaxTokens := origWords + 128
+	turnMaxTokens := origWords + 256
 	if turnMaxTokens < 256 {
 		turnMaxTokens = 256
 	}
-	if turnMaxTokens > 1024 {
-		turnMaxTokens = 1024
+	if turnMaxTokens > 4096 {
+		turnMaxTokens = 4096
 	}
 	clientCopy := *mc.llmClient
 	clientCopy.MaxTokensOverride = turnMaxTokens
@@ -277,8 +373,8 @@ func (mc *MessageCompressor) CompressMessage(ctx context.Context, role, text str
 	cleaned := CleanCompressedText(resp)
 	compWords := len(strings.Fields(cleaned))
 
-	// Safety check: if output is empty or somehow expanded the text, reject and preserve original
-	if cleaned == "" || compWords >= origWords {
+	// Safety check: reject degenerate output (empty, expanded text, thinking monologue, or repetition loops)
+	if cleaned == "" || compWords >= origWords || isPreambleOrMonologue(cleaned) || hasRepetitiveLoop(cleaned) {
 		mc.statsMu.Lock()
 		mc.stats.TotalTurns++
 		mc.stats.SkippedTurns++
