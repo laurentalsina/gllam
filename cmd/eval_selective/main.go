@@ -1187,6 +1187,14 @@ func splitTranscriptInHalf(text string) (string, string) {
 	return part1, part2
 }
 
+func cleanNodeIdentifier(s string) string {
+	s = strings.TrimSpace(s)
+	s = strings.TrimPrefix(s, ">>")
+	s = strings.TrimSuffix(s, "<<")
+	s = strings.Trim(s, "<>\"'` ")
+	return strings.TrimSpace(s)
+}
+
 func ingestExtraction(
 	ctx context.Context,
 	gllam *engine.GllamEngine,
@@ -1201,6 +1209,20 @@ func ingestExtraction(
 	nodeIDMapping map[string]string,
 ) (int, int, []string) {
 	var canonicalizationLogs []string
+
+	// Sanitize raw identifiers to strip prompt formatting brackets
+	for i := range extraction.Nodes {
+		extraction.Nodes[i].ID = cleanNodeIdentifier(extraction.Nodes[i].ID)
+		extraction.Nodes[i].Name = cleanNodeIdentifier(extraction.Nodes[i].Name)
+	}
+	for i := range extraction.Links {
+		extraction.Links[i].SourceID = cleanNodeIdentifier(extraction.Links[i].SourceID)
+		extraction.Links[i].TargetID = cleanNodeIdentifier(extraction.Links[i].TargetID)
+		extraction.Links[i].OriginID = cleanNodeIdentifier(extraction.Links[i].OriginID)
+		if extraction.Links[i].Temporal != nil {
+			extraction.Links[i].Temporal.TemporalAnchorID = cleanNodeIdentifier(extraction.Links[i].Temporal.TemporalAnchorID)
+		}
+	}
 
 	scopeID := func(rawID string) string {
 		if rawID == "" {
@@ -1310,6 +1332,29 @@ func ingestExtraction(
 		link.ContextSiloID = sourceName
 		canonicalLinks = append(canonicalLinks, link)
 	}
+
+	// Prune isolated orphan nodes (nodes with 0 links in this extraction and 0 existing links in DB)
+	connectedInLinks := make(map[string]bool)
+	for _, l := range canonicalLinks {
+		connectedInLinks[l.SourceID] = true
+		connectedInLinks[l.TargetID] = true
+	}
+
+	var connectedNodes []memory.SemanticNode
+	for _, node := range canonicalNodes {
+		if connectedInLinks[node.ID] {
+			connectedNodes = append(connectedNodes, node)
+			continue
+		}
+		var hasEdge int
+		_ = gllam.DB().QueryRowContext(ctx, "SELECT 1 FROM semantic_links WHERE source_id = ? OR target_id = ? LIMIT 1", node.ID, node.ID).Scan(&hasEdge)
+		if hasEdge == 1 {
+			connectedNodes = append(connectedNodes, node)
+		} else {
+			canonicalizationLogs = append(canonicalizationLogs, fmt.Sprintf("✂️ Pruned isolated orphan node '%s' (0 relationships)", node.ID))
+		}
+	}
+	canonicalNodes = connectedNodes
 
 	// Ingest into SQLite
 	_, _ = gllam.DB().ExecContext(ctx, "BEGIN IMMEDIATE")

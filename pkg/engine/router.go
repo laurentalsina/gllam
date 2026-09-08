@@ -159,7 +159,7 @@ func (e *GllamEngine) RouteAndAssembleWithSilo(ctx context.Context, userPrompt s
             if siloID != "" {
                 var filteredNodes []memory.SemanticNode
                 for _, n := range ctxResult.SemanticNodes {
-                    if n.ContextSiloID == "" || n.ContextSiloID == siloID {
+                    if n.ContextSiloID == siloID || (n.ContextSiloID == "" && strings.Contains(n.ID, siloID)) {
                         filteredNodes = append(filteredNodes, n)
                     }
                 }
@@ -167,11 +167,27 @@ func (e *GllamEngine) RouteAndAssembleWithSilo(ctx context.Context, userPrompt s
 
                 var filteredLinks []memory.SemanticLink
                 for _, l := range ctxResult.SemanticLinks {
-                    if l.ContextSiloID == "" || l.ContextSiloID == siloID {
+                    if l.ContextSiloID == siloID || (l.ContextSiloID == "" && strings.Contains(l.SourceID, siloID)) {
                         filteredLinks = append(filteredLinks, l)
                     }
                 }
                 ctxResult.SemanticLinks = filteredLinks
+            }
+
+            // Prune orphan nodes (nodes that have 0 connections in the retrieved sub-graph)
+            if len(ctxResult.SemanticLinks) > 0 {
+                linkedIDs := make(map[string]bool)
+                for _, l := range ctxResult.SemanticLinks {
+                    linkedIDs[l.SourceID] = true
+                    linkedIDs[l.TargetID] = true
+                }
+                var connectedNodes []memory.SemanticNode
+                for _, n := range ctxResult.SemanticNodes {
+                    if linkedIDs[n.ID] {
+                        connectedNodes = append(connectedNodes, n)
+                    }
+                }
+                ctxResult.SemanticNodes = connectedNodes
             }
 
             // Cap expanded graph to top 150 nodes and 300 links to prevent prompt payload explosion
@@ -315,7 +331,7 @@ func (e *GllamEngine) RouteAndAssembleWithSilo(ctx context.Context, userPrompt s
     }
 
     // Also include active global/contextual constraints
-    globalConstraints, err := e.GetActiveConstraintsForSource(ctx, "", "global")
+    globalConstraints, err := e.GetActiveConstraintsForSourceInSilo(ctx, "", "global", siloID)
     if err == nil && len(globalConstraints) > 0 {
         existingKeys := make(map[string]bool)
         for _, l := range ctxResult.SemanticLinks {

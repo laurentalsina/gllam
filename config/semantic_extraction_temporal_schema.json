@@ -46,6 +46,7 @@
                 },
                 "temporal_note": { "type": "string" }
               },
+              "required": ["temporal_relation"],
               "additionalProperties": false
             }
           },

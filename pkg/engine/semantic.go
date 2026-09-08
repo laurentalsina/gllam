@@ -217,42 +217,47 @@ func (e *GllamEngine) AddEdge(ctx context.Context, link memory.SemanticLink) err
 
 	var temporalLinkID sql.NullString
 	if link.Temporal != nil {
-		tID := fmt.Sprintf("temp-%s-%s-%s", link.SourceID, link.TargetID, link.Relationship)
-		temporalLinkID = sql.NullString{String: tID, Valid: true}
+		hasContent := link.Temporal.ValidFrom != "" || link.Temporal.ValidUntil != "" ||
+			link.Temporal.TemporalAnchorID != "" || link.Temporal.TemporalRelation != "" ||
+			link.Temporal.TemporalNote != ""
+		if hasContent {
+			tID := fmt.Sprintf("temp-%s-%s-%s", link.SourceID, link.TargetID, link.Relationship)
+			temporalLinkID = sql.NullString{String: tID, Valid: true}
 
-		insertTempQuery := `
-			INSERT INTO semantic_temporal_links (id, context_silo_id, valid_from, valid_until, temporal_anchor_id, temporal_relation, temporal_note)
-			VALUES (?, ?, ?, ?, ?, ?, ?)
-			ON CONFLICT(id) DO UPDATE SET
-				context_silo_id = CASE WHEN excluded.context_silo_id != '' THEN excluded.context_silo_id ELSE semantic_temporal_links.context_silo_id END,
-				valid_from = excluded.valid_from,
-				valid_until = excluded.valid_until,
-				temporal_anchor_id = excluded.temporal_anchor_id,
-				temporal_relation = excluded.temporal_relation,
-				temporal_note = excluded.temporal_note`
+			insertTempQuery := `
+				INSERT INTO semantic_temporal_links (id, context_silo_id, valid_from, valid_until, temporal_anchor_id, temporal_relation, temporal_note)
+				VALUES (?, ?, ?, ?, ?, ?, ?)
+				ON CONFLICT(id) DO UPDATE SET
+					context_silo_id = CASE WHEN excluded.context_silo_id != '' THEN excluded.context_silo_id ELSE semantic_temporal_links.context_silo_id END,
+					valid_from = excluded.valid_from,
+					valid_until = excluded.valid_until,
+					temporal_anchor_id = excluded.temporal_anchor_id,
+					temporal_relation = excluded.temporal_relation,
+					temporal_note = excluded.temporal_note`
 
-		var anchorID sql.NullString
-		if link.Temporal.TemporalAnchorID != "" {
-			anchorID = sql.NullString{String: link.Temporal.TemporalAnchorID, Valid: true}
-			// Ensure anchor node exists in semantic_nodes to satisfy foreign key constraint
-			var exists int
-			_ = e.db.QueryRowContext(ctx, "SELECT 1 FROM semantic_nodes WHERE id = ?", link.Temporal.TemporalAnchorID).Scan(&exists)
-			if exists == 0 {
-				_ = e.UpsertNode(ctx, memory.SemanticNode{
-					ID:            link.Temporal.TemporalAnchorID,
-					Name:          link.Temporal.TemporalAnchorID,
-					Type:          "event",
-					ContextSiloID: link.ContextSiloID,
-					CreatedFrom:   "anchor_inference",
-				})
+			var anchorID sql.NullString
+			if link.Temporal.TemporalAnchorID != "" {
+				anchorID = sql.NullString{String: link.Temporal.TemporalAnchorID, Valid: true}
+				// Ensure anchor node exists in semantic_nodes to satisfy foreign key constraint
+				var exists int
+				_ = e.db.QueryRowContext(ctx, "SELECT 1 FROM semantic_nodes WHERE id = ?", link.Temporal.TemporalAnchorID).Scan(&exists)
+				if exists == 0 {
+					_ = e.UpsertNode(ctx, memory.SemanticNode{
+						ID:            link.Temporal.TemporalAnchorID,
+						Name:          link.Temporal.TemporalAnchorID,
+						Type:          "event",
+						ContextSiloID: link.ContextSiloID,
+						CreatedFrom:   "anchor_inference",
+					})
+				}
 			}
-		}
 
-		_, tErr := e.db.ExecContext(ctx, insertTempQuery,
-			tID, link.ContextSiloID, link.Temporal.ValidFrom, link.Temporal.ValidUntil,
-			anchorID, link.Temporal.TemporalRelation, link.Temporal.TemporalNote)
-		if tErr != nil {
-			return fmt.Errorf("failed to save semantic temporal attributes: %w", tErr)
+			_, tErr := e.db.ExecContext(ctx, insertTempQuery,
+				tID, link.ContextSiloID, link.Temporal.ValidFrom, link.Temporal.ValidUntil,
+				anchorID, link.Temporal.TemporalRelation, link.Temporal.TemporalNote)
+			if tErr != nil {
+				return fmt.Errorf("failed to save semantic temporal attributes: %w", tErr)
+			}
 		}
 	}
 
@@ -873,6 +878,11 @@ func (e *GllamEngine) ExpandTemporalNeighborsInSiloAndTime(ctx context.Context, 
 
 // GetActiveConstraintsForSource retrieves active rules, preferences, and constraints for a given source_id or targetContext
 func (e *GllamEngine) GetActiveConstraintsForSource(ctx context.Context, sourceID string, targetContext string) ([]memory.SemanticLink, error) {
+	return e.GetActiveConstraintsForSourceInSilo(ctx, sourceID, targetContext, "")
+}
+
+// GetActiveConstraintsForSourceInSilo retrieves active rules, preferences, and constraints isolated to a specific silo (or global)
+func (e *GllamEngine) GetActiveConstraintsForSourceInSilo(ctx context.Context, sourceID string, targetContext string, siloID string) ([]memory.SemanticLink, error) {
 	query := `
 		SELECT 
 			d.source_id, d.target_id, d.relationship, d.caveats, d.modality, d.origin_id, 
@@ -887,10 +897,18 @@ func (e *GllamEngine) GetActiveConstraintsForSource(ctx context.Context, sourceI
 		  AND NOT EXISTS (
 		      SELECT 1 FROM semantic_links s 
 		      WHERE s.relationship = 'supersedes_rule' AND s.target_id = d.target_id
-		  )
-		ORDER BY d.rowid ASC`
+		  )`
 
-	rows, err := e.dbRO.QueryContext(ctx, query, sourceID, targetContext, sourceID)
+	var args []interface{}
+	args = append(args, sourceID, targetContext, sourceID)
+	if siloID != "" {
+		query += ` AND (d.context_silo_id = ? OR d.context_silo_id = 'global' OR (d.context_silo_id = '' AND (d.source_id LIKE ? OR d.target_id LIKE ?)))`
+		siloPattern := "%" + siloID + "%"
+		args = append(args, siloID, siloPattern, siloPattern)
+	}
+	query += ` ORDER BY d.rowid ASC`
+
+	rows, err := e.dbRO.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query active constraints for source %s: %w", sourceID, err)
 	}
