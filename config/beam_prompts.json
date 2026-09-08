@@ -132,9 +132,9 @@
   ],
   "conflict_warning_prompt": "⚠️ Warning: The semantic graph contains unresolved conflicts. Please ask the user to clarify which conflicting claim is correct.",
   "lineage_citations_prompt": [
-    "## Source Lineage Provenance",
+    "## Strict Source Lineage Citations",
     "",
-    "Ground your factual statements in the following verified source document lineage:"
+    "Ground your factual statements in the following verified source document lineage (cite URIs if requested):"
   ],
   "response_guidelines": [
     "## Response Guidelines",
