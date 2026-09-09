@@ -69,6 +69,7 @@ echo "📊 Grading BEAM Results"
 echo "   ├─ Results: $RESULTS_FILE"
 echo "   ├─ Fast Text Server: ${FAST_TEXT_SERVER:-<not set>}"
 echo "   ├─ Strong Text Server: ${STRONG_TEXT_SERVER:-<not set>}"
+echo "   ├─ BENCH_RESULT_EVALUATION: ${BENCH_RESULT_EVALUATION:-<default: FAST_TEXT_SERVER>}"
 echo "   ├─ Output: $GRADE_OUT"
 echo "======================================================="
 

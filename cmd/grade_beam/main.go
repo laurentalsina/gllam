@@ -78,6 +78,15 @@ func main() {
 		taskTier = "FAST_TEXT_SERVER"
 	}
 
+	fmt.Println("=======================================================")
+	fmt.Println("📊 Starting BEAM Results Grading")
+	fmt.Printf("   ├─ Results: %s\n", *resultsPath)
+	fmt.Printf("   ├─ Fast Text Server: %s\n", fastServerEnv)
+	fmt.Printf("   ├─ Strong Text Server: %s\n", strongServerEnv)
+	fmt.Printf("   ├─ BENCH_RESULT_EVALUATION: %s\n", taskTier)
+	fmt.Printf("   ├─ Output: %s\n", *outputPath)
+	fmt.Println("=======================================================")
+
 	var llmClient *engine.LLMClient
 	if taskTier == "STRONG_TEXT_SERVER" && strongServerEnv != "" {
 		llmClient = engine.NewLLMClientWithKey(strongServerEnv, os.Getenv("OPENROUTER_API_KEY"), strongModelEnv)

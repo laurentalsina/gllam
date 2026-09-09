@@ -80,6 +80,15 @@ func main() {
 		os.Exit(1)
 	}
 
+	fmt.Println("Task Routing Environment Tiers:")
+	fmt.Printf("   ├─ SEMANTIC_EXTRACTION: %s\n", getEnv("SEMANTIC_EXTRACTION", "FAST_TEXT_SERVER"))
+	fmt.Printf("   ├─ SEARCH_CANDIDATES: %s\n", getEnv("SEARCH_CANDIDATES", "FAST_TEXT_SERVER"))
+	fmt.Printf("   ├─ QUERY_DECOMPOSITION: %s\n", getEnv("QUERY_DECOMPOSITION", "FAST_TEXT_SERVER"))
+	fmt.Printf("   ├─ ZERO_SHOT_ANSWER: %s\n", getEnv("ZERO_SHOT_ANSWER", "STRONG_TEXT_SERVER"))
+	fmt.Printf("   ├─ FINAL_ANSWER: %s\n", getEnv("FINAL_ANSWER", "STRONG_TEXT_SERVER"))
+	fmt.Printf("   ├─ FALLBACK_ANSWER: %s\n", getEnv("FALLBACK_ANSWER", "FAST_TEXT_SERVER"))
+	fmt.Printf("   └─ BENCH_RESULT_EVALUATION: %s\n", getEnv("BENCH_RESULT_EVALUATION", "FAST_TEXT_SERVER"))
+
 	file, err := os.Open(*qaPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to open qa file: %v\n", err)

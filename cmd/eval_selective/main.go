@@ -126,11 +126,12 @@ type MainLogInstance struct {
 }
 
 type MainLogConfig struct {
-	UseUtterancesVectors bool `json:"use_utterances_vectors"`
-	UseTermsVectors      bool `json:"use_terms_vectors"`
-	BypassTemporal       bool `json:"bypass_temporal"`
-	BypassSemantic       bool `json:"bypass_semantic"`
-	TopKMatches          int  `json:"top_k_matches"`
+	UseUtterancesVectors bool              `json:"use_utterances_vectors"`
+	UseTermsVectors      bool              `json:"use_terms_vectors"`
+	BypassTemporal       bool              `json:"bypass_temporal"`
+	BypassSemantic       bool              `json:"bypass_semantic"`
+	TopKMatches          int               `json:"top_k_matches"`
+	TaskRouting          map[string]string `json:"task_routing"`
 }
 
 type MainLogPhaseDurations struct {
@@ -311,6 +312,16 @@ func main() {
 		fmt.Print(msg)
 	}
 
+	taskRoutingMap := map[string]string{
+		"SEMANTIC_EXTRACTION":     getEnv("SEMANTIC_EXTRACTION", "FAST_TEXT_SERVER"),
+		"SEARCH_CANDIDATES":       getEnv("SEARCH_CANDIDATES", "FAST_TEXT_SERVER"),
+		"QUERY_DECOMPOSITION":     getEnv("QUERY_DECOMPOSITION", "FAST_TEXT_SERVER"),
+		"ZERO_SHOT_ANSWER":        getEnv("ZERO_SHOT_ANSWER", "STRONG_TEXT_SERVER"),
+		"FINAL_ANSWER":            getEnv("FINAL_ANSWER", "STRONG_TEXT_SERVER"),
+		"FALLBACK_ANSWER":         getEnv("FALLBACK_ANSWER", "FAST_TEXT_SERVER"),
+		"BENCH_RESULT_EVALUATION": getEnv("BENCH_RESULT_EVALUATION", "FAST_TEXT_SERVER"),
+	}
+
 	var mainLog MainLogStructure
 	mainLog.Timestamp = time.Now().Format(time.RFC3339)
 	mainLog.Config = MainLogConfig{
@@ -319,6 +330,7 @@ func main() {
 		BypassTemporal:       *bypassTemporal,
 		BypassSemantic:       *bypassSemantic,
 		TopKMatches:          *topKMatches,
+		TaskRouting:          taskRoutingMap,
 	}
 
 	logMain("DEBUG: use-utterances-vectors=%v, use-terms-vectors=%v, bypass-temporal=%v, bypass-semantic=%v, top-k=%d\n", *useUtterancesVectors, *useTermsVectors, *bypassTemporal, *bypassSemantic, *topKMatches)
@@ -436,6 +448,15 @@ func main() {
 		fmt.Fprintf(os.Stderr, "❌ Error: Neither STRONG_TEXT_SERVER nor FAST_TEXT_SERVER is set in the environment!\n")
 		os.Exit(1)
 	}
+
+	logMain("Task Routing Environment Tiers:\n")
+	logMain("   ├─ SEMANTIC_EXTRACTION: %s\n", taskRoutingMap["SEMANTIC_EXTRACTION"])
+	logMain("   ├─ SEARCH_CANDIDATES: %s\n", taskRoutingMap["SEARCH_CANDIDATES"])
+	logMain("   ├─ QUERY_DECOMPOSITION: %s\n", taskRoutingMap["QUERY_DECOMPOSITION"])
+	logMain("   ├─ ZERO_SHOT_ANSWER: %s\n", taskRoutingMap["ZERO_SHOT_ANSWER"])
+	logMain("   ├─ FINAL_ANSWER: %s\n", taskRoutingMap["FINAL_ANSWER"])
+	logMain("   ├─ FALLBACK_ANSWER: %s\n", taskRoutingMap["FALLBACK_ANSWER"])
+	logMain("   └─ BENCH_RESULT_EVALUATION: %s\n", taskRoutingMap["BENCH_RESULT_EVALUATION"])
 
 	var compressor *engine.MessageCompressor
 	if *preprocessDataFlag {
@@ -843,6 +864,7 @@ func main() {
 			cleanedDirect := stripThinkingTags(directAnswer)
 			isTemporal := strings.HasPrefix(strings.ToUpper(cleanedDirect), "TEMPORAL") || (qa.Category == "temporal_reasoning" || qa.Category == "event_ordering")
 			isNotFound := strings.ToUpper(cleanedDirect) == "ANSWER_NOT_FOUND"
+			isMonologue := isPureMonologue(cleanedDirect)
 
 			structuredLog.FirstPassDirectQA = FirstPassDirectQAInfo{
 				Attempted:    true,
@@ -854,7 +876,11 @@ func main() {
 				Error:        errStr,
 			}
 
-			if err == nil && !isTemporal && !isNotFound && cleanedDirect != "" {
+			if isMonologue {
+				logMain("   ├─ ⚠️ Direct QA produced a scratchpad monologue without a final answer. Falling back to semantic extraction...\n")
+			}
+
+			if err == nil && !isTemporal && !isNotFound && !isMonologue && cleanedDirect != "" {
 				answer = cleanedDirect
 				logMain("   ├─ ✅ First-pass Direct QA succeeded.\n")
 				structuredLog.FinalQA = FinalQAInfo{
@@ -1815,6 +1841,86 @@ func matchesAnySpeaker(speakerID string, targets []string) bool {
 	return false
 }
 
+var monologueLineRe = regexp.MustCompile(`(?i)^(\s*[-*•]?\s*)?(need\s+[a-z]+|we\s+need\s+answer|first\s+inside|strict\s+constraint\s+verification|let's\s+(construct|double|quickly|ensure)|format\s+required\s+in\s+final\s+output|i\s+will\s+(state|write|output)|no\s+conversational\s+filler|dates\s*:|calculation\s*:)`)
+
+func isMonologueLine(line string) bool {
+	trimmed := strings.TrimSpace(line)
+	if trimmed == "" {
+		return false
+	}
+	return monologueLineRe.MatchString(trimmed)
+}
+
+func isPureMonologue(s string) bool {
+	lines := strings.Split(s, "\n")
+	var nonEmpty int
+	var monoCount int
+	for _, l := range lines {
+		trimmed := strings.TrimSpace(l)
+		if trimmed == "" {
+			continue
+		}
+		nonEmpty++
+		if isMonologueLine(trimmed) {
+			monoCount++
+		}
+	}
+	if nonEmpty == 0 {
+		return false
+	}
+	if float64(monoCount)/float64(nonEmpty) >= 0.35 || (monoCount >= 3 && nonEmpty-monoCount <= 3) {
+		return true
+	}
+	return false
+}
+
+func cleanTelegraphicMonologue(s string) string {
+	if idx := strings.Index(s, "tags and output only the direct factual answer.\""); idx != -1 {
+		s = strings.TrimSpace(s[idx+len("tags and output only the direct factual answer.\""):])
+	}
+	if idx := strings.Index(s, "tags and output only the direct factual answer."); idx != -1 {
+		s = strings.TrimSpace(s[idx+len("tags and output only the direct factual answer."):])
+	}
+
+	markers := []string{
+		"I will output the direct factual answer.",
+		"I will output the direct factual answer:",
+		"I will output the final factual answer.",
+		"I will output the final factual answer:",
+		"I will write:",
+		"Final Answer:",
+		"Final Answer :",
+		"Final response:",
+		"Final response :",
+	}
+	for _, m := range markers {
+		if idx := strings.LastIndex(s, m); idx != -1 {
+			candidate := strings.TrimSpace(s[idx+len(m):])
+			if candidate != "" && !isPureMonologue(candidate) {
+				return candidate
+			}
+		}
+	}
+
+	lines := strings.Split(s, "\n")
+	if len(lines) > 0 && isMonologueLine(lines[0]) {
+		lastMonoIdx := -1
+		for i := 0; i < len(lines); i++ {
+			if isMonologueLine(lines[i]) {
+				lastMonoIdx = i
+			}
+		}
+		if lastMonoIdx != -1 && lastMonoIdx < len(lines)-1 {
+			candidate := strings.TrimSpace(strings.Join(lines[lastMonoIdx+1:], "\n"))
+			if len(candidate) > 20 && !isPureMonologue(candidate) {
+				return candidate
+			}
+		}
+	}
+
+	return s
+}
+
 func stripThinkingTags(s string) string {
 	tags := []struct{ open, close string }{
 		{"<think>", "</think>"},
@@ -1842,6 +1948,7 @@ func stripThinkingTags(s string) string {
 	for _, closeTag := range []string{"</think>", "</thinking>", "</THINK>", "</THINKING>"} {
 		s = strings.ReplaceAll(s, closeTag, "")
 	}
+	s = cleanTelegraphicMonologue(s)
 	return strings.TrimSpace(s)
 }
 

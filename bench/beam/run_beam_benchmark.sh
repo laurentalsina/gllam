@@ -57,7 +57,15 @@ echo "   ├─ Preprocess Concurrency: $PREPROCESS_CONCURRENCY"
 fi
 echo "   ├─ Concurrency: $CONCURRENCY"
 echo "   ├─ Fast Timeout: $FAST_MODEL_TIMEOUT"
-echo "   └─ Strong Timeout: $STRONG_MODEL_TIMEOUT"
+echo "   ├─ Strong Timeout: $STRONG_MODEL_TIMEOUT"
+echo "   ├─ Task Routing Tiers:"
+echo "   │  ├─ SEMANTIC_EXTRACTION: ${SEMANTIC_EXTRACTION:-<default: FAST_TEXT_SERVER>}"
+echo "   │  ├─ SEARCH_CANDIDATES: ${SEARCH_CANDIDATES:-<default: FAST_TEXT_SERVER>}"
+echo "   │  ├─ QUERY_DECOMPOSITION: ${QUERY_DECOMPOSITION:-<default: FAST_TEXT_SERVER>}"
+echo "   │  ├─ ZERO_SHOT_ANSWER: ${ZERO_SHOT_ANSWER:-<default: STRONG_TEXT_SERVER>}"
+echo "   │  ├─ FINAL_ANSWER: ${FINAL_ANSWER:-<default: STRONG_TEXT_SERVER>}"
+echo "   │  ├─ FALLBACK_ANSWER: ${FALLBACK_ANSWER:-<default: FAST_TEXT_SERVER>}"
+echo "   │  └─ BENCH_RESULT_EVALUATION: ${BENCH_RESULT_EVALUATION:-<default: FAST_TEXT_SERVER>}"
 echo "======================================================="
 
 # Step 0: Pre-processing (Dialogue Turn Compression)
