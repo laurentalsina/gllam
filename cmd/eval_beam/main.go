@@ -137,6 +137,16 @@ func main() {
 		}
 
 		fmt.Printf("Evaluating [%s] Category: %s\n", qa.InstanceID, qa.Category)
+		fmt.Printf("   ├─ Query: %s\n", qa.Query)
+		if qa.GroundTruth != "" {
+			fmt.Printf("   ├─ Ground Truth: %s\n", qa.GroundTruth)
+		}
+		if len(qa.Rubric) > 0 {
+			fmt.Printf("   ├─ Evaluation Criteria (Rubric):\n")
+			for _, r := range qa.Rubric {
+				fmt.Printf("   │  • %s\n", r)
+			}
+		}
 		
 		strongServerEnv := getEnv("STRONG_TEXT_SERVER", "")
 		strongModelEnv := getEnv("STRONG_LLM_MODEL", "")

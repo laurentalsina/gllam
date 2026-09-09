@@ -99,7 +99,10 @@ type FinalQAInfo struct {
 
 type StructuredDetailsLog struct {
 	InstanceID          string                 `json:"instance_id"`
+	Category            string                 `json:"category,omitempty"`
 	Query               string                 `json:"query"`
+	GroundTruth         string                 `json:"ground_truth,omitempty"`
+	EvaluationCriteria  []string               `json:"evaluation_criteria,omitempty"`
 	DecomposedQueries   []string               `json:"decomposed_queries"`
 	SearchTerms         []string               `json:"search_terms"`
 	RetrievedCandidates []CandidateInfo        `json:"retrieved_candidates"`
@@ -116,13 +119,14 @@ type MainLogInstanceEvent struct {
 }
 
 type MainLogInstance struct {
-	InstanceID  string                 `json:"instance_id"`
-	Category    string                 `json:"category"`
-	Query       string                 `json:"query"`
-	Timestamp   string                 `json:"timestamp"`
-	Events      []MainLogInstanceEvent `json:"events"`
-	ModelAnswer string                 `json:"model_answer"`
-	GroundTruth string                 `json:"ground_truth"`
+	InstanceID         string                 `json:"instance_id"`
+	Category           string                 `json:"category"`
+	Query              string                 `json:"query"`
+	GroundTruth        string                 `json:"ground_truth"`
+	EvaluationCriteria []string               `json:"evaluation_criteria,omitempty"`
+	Timestamp          string                 `json:"timestamp"`
+	Events             []MainLogInstanceEvent `json:"events"`
+	ModelAnswer        string                 `json:"model_answer"`
 }
 
 type MainLogConfig struct {
@@ -554,14 +558,17 @@ func main() {
 
 
 
+		gtAnswer := getGroundTruthAnswer(qa.GroundTruth)
+
 		logInstance := MainLogInstance{
-			InstanceID:  qa.InstanceID,
-			Category:    qa.Category,
-			Query:       qa.Query,
-			Timestamp:   time.Now().Format(time.RFC3339),
-			Events:      []MainLogInstanceEvent{},
-			ModelAnswer: "",
-			GroundTruth: getGroundTruthAnswer(qa.GroundTruth),
+			InstanceID:         qa.InstanceID,
+			Category:           qa.Category,
+			Query:              qa.Query,
+			GroundTruth:        gtAnswer,
+			EvaluationCriteria: qa.Rubric,
+			Timestamp:          time.Now().Format(time.RFC3339),
+			Events:             []MainLogInstanceEvent{},
+			ModelAnswer:        "",
 		}
 
 		addEvent := func(msg string) {
@@ -577,14 +584,26 @@ func main() {
 		}
 
 		structuredLog := StructuredDetailsLog{
-			InstanceID:     qa.InstanceID,
-			Query:          qa.Query,
-			SearchTerms:    []string{},
-			JITExtractions: []JITExtractionEvent{},
+			InstanceID:         qa.InstanceID,
+			Category:           qa.Category,
+			Query:              qa.Query,
+			GroundTruth:        gtAnswer,
+			EvaluationCriteria: qa.Rubric,
+			SearchTerms:        []string{},
+			JITExtractions:     []JITExtractionEvent{},
 		}
 
 		logMain("%s\n", strings.Repeat("=", 100))
 		logMain("Processing [%s]: %s\n", qa.InstanceID, qa.Query)
+		if gtAnswer != "" {
+			logMain("   ├─ Ground Truth: %s\n", gtAnswer)
+		}
+		if len(qa.Rubric) > 0 {
+			logMain("   ├─ Evaluation Criteria (Rubric):\n")
+			for _, criterion := range qa.Rubric {
+				logMain("   │  • %s\n", criterion)
+			}
+		}
 		logMain("   ├─ Processing Details Log: %s/processing_details_%s.log\n", runLogDir, qa.InstanceID)
 
 		// 1. Context Silo Isolation (partitioning semantic graphs per conversation to allow persistent reuse)
