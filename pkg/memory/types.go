@@ -42,6 +42,115 @@ type ProceduralKnowledge struct {
     UpdatedAt         time.Time `json:"updated_at"`
 }
 
+// Procedural Action Types
+const (
+	ProceduralActionComposite    = "composite"
+	ProceduralActionToolCall     = "tool_call"
+	ProceduralActionLLMReasoning = "llm_reasoning"
+	ProceduralActionTerminal     = "terminal"
+)
+
+// Procedural Link Relation Types
+const (
+	ProceduralRelationNext              = "next"
+	ProceduralRelationSubprocedure      = "subprocedure"
+	ProceduralRelationConditionalBranch = "conditional_branch"
+	ProceduralRelationOnFailure         = "on_failure"
+	ProceduralRelationCompensates       = "compensates"
+)
+
+// Procedural Trace Statuses
+const (
+	ProceduralStatusPending    = "pending"
+	ProceduralStatusInProgress = "in_progress"
+	ProceduralStatusCompleted  = "completed"
+	ProceduralStatusFailed     = "failed"
+	ProceduralStatusPaused     = "paused"
+)
+
+// Procedural Step Run Statuses
+const (
+	ProceduralStepSuccess     = "success"
+	ProceduralStepFailed      = "failed"
+	ProceduralStepSkipped     = "skipped"
+	ProceduralStepCompensated = "compensated"
+)
+
+// ProceduralNode represents a discrete action or composite workflow container.
+type ProceduralNode struct {
+	ID           string `json:"id"`
+	Name         string `json:"name"`
+	Description  string `json:"description"`
+	ActionType   string `json:"action_type"`
+	InputSchema  string `json:"input_schema,omitempty"`
+	OutputSchema string `json:"output_schema,omitempty"`
+	IsIdempotent bool   `json:"is_idempotent"`
+	Metadata     string `json:"metadata,omitempty"` // Arbitrary JSON
+	CreatedAt    int64  `json:"created_at"`         // Unix epoch
+	UpdatedAt    int64  `json:"updated_at"`         // Unix epoch
+}
+
+// ProceduralLink represents a directed transition between procedures.
+type ProceduralLink struct {
+	ID                string  `json:"id"`
+	SourceProcedureID string  `json:"source_procedure_id"`
+	TargetProcedureID string  `json:"target_procedure_id"`
+	RelationType      string  `json:"relation_type"`
+	ConditionExpr     string  `json:"condition_expr,omitempty"`
+	Weight            float64 `json:"weight"`
+	Ordering          int     `json:"ordering"`
+	Metadata          string  `json:"metadata,omitempty"` // JSON string for parameter mapping
+	CreatedAt         int64   `json:"created_at"`
+}
+
+// ProceduralExecutionTrace represents the runtime execution context and state of a procedure instance.
+type ProceduralExecutionTrace struct {
+	ID              string `json:"id"`
+	RootProcedureID string `json:"root_procedure_id"`
+	CurrentNodeID   string `json:"current_node_id,omitempty"`
+	Status          string `json:"status"`
+	ContextState    string `json:"context_state"` // JSON string
+	ErrorDetails    string `json:"error_details,omitempty"`
+	StartedAt       int64  `json:"started_at"`
+	FinishedAt      *int64 `json:"finished_at,omitempty"`
+}
+
+// ProceduralStepRun represents an executed step in a procedural trace.
+type ProceduralStepRun struct {
+	ID            string `json:"id"`
+	TraceID       string `json:"trace_id"`
+	NodeID        string `json:"node_id"`
+	StepNumber    int    `json:"step_number"`
+	InputPayload  string `json:"input_payload,omitempty"`
+	OutputPayload string `json:"output_payload,omitempty"`
+	Status        string `json:"status"`
+	ErrorMessage  string `json:"error_message,omitempty"`
+	DurationMs    int64  `json:"duration_ms"`
+	ExecutedAt    int64  `json:"executed_at"`
+}
+
+// ProceduralNextStep represents a resolved reachable next step with its transition edge and target node.
+type ProceduralNextStep struct {
+	EdgeID            string         `json:"edge_id"`
+	SourceProcedureID string         `json:"source_procedure_id"`
+	TargetProcedureID string         `json:"target_procedure_id"`
+	RelationType      string         `json:"relation_type"`
+	ConditionExpr     string         `json:"condition_expr,omitempty"`
+	Ordering          int            `json:"ordering"`
+	MappingRules      string         `json:"mapping_rules,omitempty"`
+	TargetNode        ProceduralNode `json:"target_node"`
+	Depth             int            `json:"depth"`
+}
+
+// ProceduralCompensationStep represents a compensation step to rollback side effects in reverse Saga order.
+type ProceduralCompensationStep struct {
+	ExecutedNodeID     string         `json:"executed_node_id"`
+	ExecutedStepNumber int            `json:"executed_step_number"`
+	ExecutedOutput     string         `json:"executed_output,omitempty"`
+	CompensationNode   ProceduralNode `json:"compensation_node"`
+	MappingRules       string         `json:"mapping_rules,omitempty"`
+}
+
 
 type SemanticNode struct {
 	ID            string `json:"id"`

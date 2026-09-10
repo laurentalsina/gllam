@@ -29,6 +29,71 @@ CREATE TABLE IF NOT EXISTS procedural_knowledge (
     updated_at TEXT NOT NULL    -- RFC3339 timestamp
 );
 
+-- 2b. PROCEDURAL GRAPH (State-Machine Workflows, Subprocedures & Traces)
+CREATE TABLE IF NOT EXISTS procedural_nodes (
+    id                  TEXT PRIMARY KEY,            -- e.g. "proc_auth_refresh", UUID, or semantic slug
+    name                TEXT NOT NULL,
+    description         TEXT NOT NULL,
+    action_type         TEXT NOT NULL,               -- 'composite', 'tool_call', 'llm_reasoning', 'terminal'
+    input_schema        TEXT,                        -- JSON Schema defining expected parameters
+    output_schema       TEXT,                        -- JSON Schema defining return payload
+    is_idempotent       INTEGER NOT NULL DEFAULT 0,  -- 0 = False, 1 = True (safety/retry policy)
+    metadata            TEXT DEFAULT '{}',           -- Arbitrary JSON for engine-specific flags
+    created_at          INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
+    updated_at          INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
+);
+
+CREATE TABLE IF NOT EXISTS procedural_links (
+    id                  TEXT PRIMARY KEY,
+    source_procedure_id TEXT NOT NULL,
+    target_procedure_id TEXT NOT NULL,
+    relation_type       TEXT NOT NULL,               -- 'next', 'subprocedure', 'conditional_branch', 'on_failure', 'compensates'
+    condition_expr      TEXT,                        -- Evaluation logic against runtime context
+    weight              REAL NOT NULL DEFAULT 1.0,   -- Priority/likelihood weight if probabilistic
+    ordering            INTEGER NOT NULL DEFAULT 0,  -- Sort order when multiple child/next edges exist
+    metadata            TEXT DEFAULT '{}',           -- JSON for parameter mapping (source.output -> target.input)
+    created_at          INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
+
+    FOREIGN KEY (source_procedure_id) REFERENCES procedural_nodes(id) ON DELETE CASCADE,
+    FOREIGN KEY (target_procedure_id) REFERENCES procedural_nodes(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_proc_links_source ON procedural_links(source_procedure_id, relation_type);
+CREATE INDEX IF NOT EXISTS idx_proc_links_target ON procedural_links(target_procedure_id, relation_type);
+
+CREATE TABLE IF NOT EXISTS procedural_execution_traces (
+    id                  TEXT PRIMARY KEY,
+    root_procedure_id   TEXT NOT NULL,
+    current_node_id     TEXT,
+    status              TEXT NOT NULL,               -- 'pending', 'in_progress', 'completed', 'failed', 'paused'
+    context_state       TEXT NOT NULL DEFAULT '{}',  -- JSON object storing runtime state and outputs
+    error_details       TEXT,
+    started_at          INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
+    finished_at         INTEGER,
+
+    FOREIGN KEY (root_procedure_id) REFERENCES procedural_nodes(id),
+    FOREIGN KEY (current_node_id) REFERENCES procedural_nodes(id)
+);
+
+CREATE TABLE IF NOT EXISTS procedural_step_runs (
+    id                  TEXT PRIMARY KEY,
+    trace_id            TEXT NOT NULL,
+    node_id             TEXT NOT NULL,
+    step_number         INTEGER NOT NULL,
+    input_payload       TEXT DEFAULT '{}',
+    output_payload      TEXT DEFAULT '{}',
+    status              TEXT NOT NULL,               -- 'success', 'failed', 'skipped', 'compensated'
+    error_message       TEXT,
+    duration_ms         INTEGER DEFAULT 0,
+    executed_at         INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
+
+    FOREIGN KEY (trace_id) REFERENCES procedural_execution_traces(id) ON DELETE CASCADE,
+    FOREIGN KEY (node_id) REFERENCES procedural_nodes(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_proc_step_runs_trace ON procedural_step_runs(trace_id, step_number);
+CREATE INDEX IF NOT EXISTS idx_proc_step_runs_node ON procedural_step_runs(trace_id, node_id, status);
+
 -- 3. SEMANTIC NODES (Grounded entities & taxonomy categories)
 CREATE TABLE IF NOT EXISTS semantic_nodes (
     id TEXT PRIMARY KEY,
