@@ -560,6 +560,30 @@ func EvaluateCondition(conditionExpr string, contextMap map[string]interface{}) 
 		return true, nil
 	}
 
+	// Support compound conjunctions (expr1 && expr2)
+	if strings.Contains(conditionExpr, "&&") {
+		parts := strings.Split(conditionExpr, "&&")
+		for _, part := range parts {
+			ok, err := EvaluateCondition(part, contextMap)
+			if err != nil || !ok {
+				return false, err
+			}
+		}
+		return true, nil
+	}
+
+	// Support compound disjunctions (expr1 || expr2)
+	if strings.Contains(conditionExpr, "||") {
+		parts := strings.Split(conditionExpr, "||")
+		for _, part := range parts {
+			ok, err := EvaluateCondition(part, contextMap)
+			if err == nil && ok {
+				return true, nil
+			}
+		}
+		return false, nil
+	}
+
 	// Operators to check in order
 	operators := []string{"==", "!=", ">=", "<=", ">", "<"}
 	var op string

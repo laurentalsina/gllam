@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/laurentalsina/gllam/pkg/memory"
@@ -153,8 +154,8 @@ func TestProceduralNodeAndLinkCRUD(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to list nodes: %v", err)
 	}
-	if len(nodes) != 2 {
-		t.Errorf("Expected 2 nodes, got %d", len(nodes))
+	if len(nodes) < 2 {
+		t.Errorf("Expected at least 2 nodes, got %d", len(nodes))
 	}
 
 	// 4. Create link
@@ -430,3 +431,157 @@ func TestProceduralSagaCompensations(t *testing.T) {
 		t.Errorf("Expected second compensation to be proc_destroy_vpc, got %s", compensations[1].CompensationNode.ID)
 	}
 }
+
+func TestBootstrapProceduralMemory(t *testing.T) {
+	tempDir := t.TempDir()
+	dbPath := filepath.Join(tempDir, "test_proc_bootstrap.db")
+
+	gllam, err := NewGllamEngine(dbPath, nil)
+	if err != nil {
+		t.Fatalf("Failed to create engine: %v", err)
+	}
+	defer gllam.Close()
+
+	if err := gllam.InitSchema(); err != nil {
+		t.Fatalf("Failed to init schema and bootstrap: %v", err)
+	}
+
+	ctx := context.Background()
+
+	// 1. Verify all 27 nodes were bootstrapped into procedural_nodes
+	nodes, err := gllam.ListProceduralNodes(ctx)
+	if err != nil {
+		t.Fatalf("Failed to list procedural nodes: %v", err)
+	}
+	if len(nodes) != 27 {
+		t.Errorf("Expected 27 bootstrapped nodes, got %d", len(nodes))
+	}
+
+	// 2. Verify links were seeded
+	var linkCount int
+	err = gllam.dbRO.QueryRowContext(ctx, "SELECT count(*) FROM procedural_links").Scan(&linkCount)
+	if err != nil || linkCount != 36 {
+		t.Errorf("Expected 36 bootstrapped links, got %d (err: %v)", linkCount, err)
+	}
+
+	// 3. Verify Prompt Extraction from Procedural Nodes
+	directQAPrompt, err := gllam.GetProceduralPrompt(ctx, "proc_first_pass_direct_qa", "system_prompt")
+	if err != nil || directQAPrompt == "" {
+		t.Fatalf("Failed to retrieve direct QA prompt: %v", err)
+	}
+	if !strings.Contains(directQAPrompt, "CRITICAL EXECUTION CONSTRAINTS") {
+		t.Errorf("Direct QA prompt missing execution constraints: %s", directQAPrompt)
+	}
+
+	// 4. Verify Engine's SystemPrompts were populated dynamically from Procedural Memory
+	if gllam.SystemPrompts == nil {
+		t.Fatalf("SystemPrompts is nil after bootstrapping")
+	}
+	if gllam.SystemPrompts.DirectQAPrompt == "" {
+		t.Errorf("SystemPrompts.DirectQAPrompt not synced from procedural memory")
+	}
+	if gllam.SystemPrompts.SimpleTemporalRetrieval == "" {
+		t.Errorf("SystemPrompts.SimpleTemporalRetrieval not synced from procedural memory")
+	}
+	if gllam.SystemPrompts.PreprocessCompressionPrompt == "" {
+		t.Errorf("SystemPrompts.PreprocessCompressionPrompt not synced from procedural memory")
+	}
+	if len(gllam.SystemPrompts.CustomCategoryPrompts) == 0 {
+		t.Errorf("SystemPrompts.CustomCategoryPrompts not synced from procedural memory")
+	}
+
+	// 5. Test Workflow Traversal of the bootstrapped BEAM Pipeline
+	trace, err := gllam.StartProceduralTrace(ctx, "workflow_beam_selective_pipeline", map[string]interface{}{
+		"query": "How many days between event A and event B?",
+		"category": "temporal_reasoning",
+	})
+	if err != nil {
+		t.Fatalf("Failed to start trace on bootstrapped workflow: %v", err)
+	}
+
+	// Entry step into composite workflow should be proc_query_decomposition (subprocedure ordering = 0)
+	nextSteps, err := gllam.ResolveNextSteps(ctx, trace.ID)
+	if err != nil {
+		t.Fatalf("Failed to resolve next steps: %v", err)
+	}
+	if len(nextSteps) != 1 || nextSteps[0].TargetNode.ID != "proc_query_decomposition" {
+		t.Fatalf("Expected entry step proc_query_decomposition, got: %+v", nextSteps)
+	}
+
+	// Simulate Step 1 (Decomposition)
+	_ = gllam.RecordStepExecution(ctx, trace.ID, "proc_query_decomposition", nil, map[string]interface{}{
+		"sub_queries": []string{"event A date", "event B date"},
+	}, memory.ProceduralStepSuccess, "", 200)
+
+	// Step 2 should be proc_candidate_retrieval
+	nextSteps, err = gllam.ResolveNextSteps(ctx, trace.ID)
+	if err != nil || len(nextSteps) != 1 || nextSteps[0].TargetNode.ID != "proc_candidate_retrieval" {
+		t.Fatalf("Expected proc_candidate_retrieval, got: %+v (err: %v)", nextSteps, err)
+	}
+
+	// Advance trace to proc_first_pass_direct_qa
+	_ = gllam.RecordStepExecution(ctx, trace.ID, "proc_candidate_retrieval", nil, nil, memory.ProceduralStepSuccess, "", 100)
+	_ = gllam.RecordStepExecution(ctx, trace.ID, "proc_context_expansion", nil, nil, memory.ProceduralStepSuccess, "", 50)
+	_ = gllam.RecordStepExecution(ctx, trace.ID, "proc_chunk_pruning", nil, nil, memory.ProceduralStepSuccess, "", 30)
+	_ = gllam.RecordStepExecution(ctx, trace.ID, "proc_jit_turn_compression", nil, nil, memory.ProceduralStepSuccess, "", 500)
+
+	// Verify next step is proc_first_pass_direct_qa
+	nextSteps, err = gllam.ResolveNextSteps(ctx, trace.ID)
+	if err != nil || len(nextSteps) != 1 || nextSteps[0].TargetNode.ID != "proc_first_pass_direct_qa" {
+		t.Fatalf("Expected proc_first_pass_direct_qa, got: %+v (err: %v)", nextSteps, err)
+	}
+
+	// Branch Test A: Direct QA succeeds -> should transition directly to proc_finish_answer (terminal)
+	traceSuccess, _ := gllam.StartProceduralTrace(ctx, "workflow_beam_selective_pipeline", nil)
+	_ = gllam.RecordStepExecution(ctx, traceSuccess.ID, "proc_first_pass_direct_qa", nil, map[string]interface{}{
+		"direct_qa_success": true,
+		"answer": "The answer is 42.",
+	}, memory.ProceduralStepSuccess, "", 400)
+
+	nextSteps, err = gllam.ResolveNextSteps(ctx, traceSuccess.ID)
+	if err != nil || len(nextSteps) != 1 || nextSteps[0].TargetNode.ID != "proc_finish_answer" {
+		t.Fatalf("Expected proc_finish_answer on direct_qa_success, got: %+v (err: %v)", nextSteps, err)
+	}
+
+	// Branch Test B: Temporal question with bypass_temporal = false -> should branch to proc_pddl_temporal_planner
+	tracePDDL, _ := gllam.StartProceduralTrace(ctx, "workflow_beam_selective_pipeline", map[string]interface{}{
+		"bypass_temporal": false,
+		"bypass_semantic": false,
+	})
+	_ = gllam.RecordStepExecution(ctx, tracePDDL.ID, "proc_first_pass_direct_qa", nil, map[string]interface{}{
+		"direct_qa_success": false,
+		"is_temporal": true,
+	}, memory.ProceduralStepSuccess, "", 400)
+
+	nextSteps, err = gllam.ResolveNextSteps(ctx, tracePDDL.ID)
+	if err != nil || len(nextSteps) != 1 || nextSteps[0].TargetNode.ID != "proc_pddl_temporal_planner" {
+		t.Fatalf("Expected proc_pddl_temporal_planner for temporal question, got: %+v (err: %v)", nextSteps, err)
+	}
+
+	// Branch Test C: PDDL Planner succeeds -> should branch to proc_final_qa
+	_ = gllam.RecordStepExecution(ctx, tracePDDL.ID, "proc_pddl_temporal_planner", nil, map[string]interface{}{
+		"plan_solved": true,
+		"verified_plan": "A -> B",
+	}, memory.ProceduralStepSuccess, "", 300)
+
+	nextSteps, err = gllam.ResolveNextSteps(ctx, tracePDDL.ID)
+	if err != nil || len(nextSteps) != 1 || nextSteps[0].TargetNode.ID != "proc_final_qa" {
+		t.Fatalf("Expected proc_final_qa after plan_solved, got: %+v (err: %v)", nextSteps, err)
+	}
+
+	// Branch Test D: Direct QA fails and not temporal -> should branch to proc_jit_semantic_extraction
+	traceSemantic, _ := gllam.StartProceduralTrace(ctx, "workflow_beam_selective_pipeline", map[string]interface{}{
+		"bypass_temporal": false,
+		"bypass_semantic": false,
+	})
+	_ = gllam.RecordStepExecution(ctx, traceSemantic.ID, "proc_first_pass_direct_qa", nil, map[string]interface{}{
+		"direct_qa_success": false,
+		"is_temporal": false,
+	}, memory.ProceduralStepSuccess, "", 400)
+
+	nextSteps, err = gllam.ResolveNextSteps(ctx, traceSemantic.ID)
+	if err != nil || len(nextSteps) != 1 || nextSteps[0].TargetNode.ID != "proc_jit_semantic_extraction" {
+		t.Fatalf("Expected proc_jit_semantic_extraction, got: %+v (err: %v)", nextSteps, err)
+	}
+}
+

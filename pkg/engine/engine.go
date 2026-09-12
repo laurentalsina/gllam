@@ -310,5 +310,11 @@ func (e *GllamEngine) InitSchema() error {
 	_, _ = e.db.Exec("CREATE INDEX IF NOT EXISTS idx_semantic_links_silo ON semantic_links(context_silo_id)")
 	_, _ = e.db.Exec("CREATE INDEX IF NOT EXISTS idx_semantic_temporal_links_silo ON semantic_temporal_links(context_silo_id)")
 
+	// Bootstrap procedural memory workflows, action nodes, and execution paths from fixtures
+	if err := e.EnsureProceduralMemoryBootstrapped(context.Background()); err != nil {
+		fmt.Printf("   ⚠️ Note: procedural memory bootstrapping skipped: %v\n", err)
+	}
+	_ = e.SyncSystemPromptsFromProceduralMemory(context.Background())
+
 	return nil
 }
