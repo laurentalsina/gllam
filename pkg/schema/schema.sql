@@ -39,6 +39,10 @@ CREATE TABLE IF NOT EXISTS procedural_nodes (
     output_schema       TEXT,                        -- JSON Schema defining return payload
     is_idempotent       INTEGER NOT NULL DEFAULT 0,  -- 0 = False, 1 = True (safety/retry policy)
     metadata            TEXT DEFAULT '{}',           -- Arbitrary JSON for engine-specific flags
+    user_feedback_modified INTEGER NOT NULL DEFAULT 0,  -- 0 = Pristine fixture, 1 = Modified by user feedback
+    user_feedback_rules    TEXT DEFAULT '',             -- Feedback constraints or operational directives
+    times_applied          INTEGER NOT NULL DEFAULT 0,  -- Execution/usage counter
+    is_highly_helpful      INTEGER NOT NULL DEFAULT 0,  -- Golden standard helpfulness flag
     created_at          INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
     updated_at          INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
 );
@@ -52,6 +56,8 @@ CREATE TABLE IF NOT EXISTS procedural_links (
     weight              REAL NOT NULL DEFAULT 1.0,   -- Priority/likelihood weight if probabilistic
     ordering            INTEGER NOT NULL DEFAULT 0,  -- Sort order when multiple child/next edges exist
     metadata            TEXT DEFAULT '{}',           -- JSON for parameter mapping (source.output -> target.input)
+    user_feedback_modified INTEGER NOT NULL DEFAULT 0,  -- 0 = Pristine fixture, 1 = Weight/condition tuned by user feedback
+    times_traversed        INTEGER NOT NULL DEFAULT 0,  -- Traversal/reinforcement counter
     created_at          INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
 
     FOREIGN KEY (source_procedure_id) REFERENCES procedural_nodes(id) ON DELETE CASCADE,

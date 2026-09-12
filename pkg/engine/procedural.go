@@ -268,6 +268,7 @@ func nullIfEmpty(s string) sql.NullString {
 }
 
 // UpsertProceduralNode creates or updates a discrete procedural node.
+// It preserves user_feedback_modified and feedback rules if already present or set.
 func (e *GllamEngine) UpsertProceduralNode(ctx context.Context, node memory.ProceduralNode) error {
 	now := time.Now().Unix()
 	createdAt := node.CreatedAt
@@ -280,9 +281,22 @@ func (e *GllamEngine) UpsertProceduralNode(ctx context.Context, node memory.Proc
 		metadata = "{}"
 	}
 
+	userModInt := 0
+	if node.UserFeedbackModified || node.UserFeedbackRules != "" || node.TimesApplied > 0 || node.IsHighlyHelpful {
+		userModInt = 1
+	}
+	isHelpfulInt := 0
+	if node.IsHighlyHelpful {
+		isHelpfulInt = 1
+	}
+
 	query := `
-		INSERT INTO procedural_nodes (id, name, description, action_type, input_schema, output_schema, is_idempotent, metadata, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO procedural_nodes (
+			id, name, description, action_type, input_schema, output_schema,
+			is_idempotent, metadata, user_feedback_modified, user_feedback_rules,
+			times_applied, is_highly_helpful, created_at, updated_at
+		)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			name = excluded.name,
 			description = excluded.description,
@@ -291,7 +305,64 @@ func (e *GllamEngine) UpsertProceduralNode(ctx context.Context, node memory.Proc
 			output_schema = excluded.output_schema,
 			is_idempotent = excluded.is_idempotent,
 			metadata = excluded.metadata,
+			user_feedback_modified = CASE WHEN excluded.user_feedback_modified = 1 THEN 1 ELSE procedural_nodes.user_feedback_modified END,
+			user_feedback_rules = CASE WHEN excluded.user_feedback_rules != '' THEN excluded.user_feedback_rules ELSE procedural_nodes.user_feedback_rules END,
+			times_applied = CASE WHEN excluded.times_applied > 0 THEN excluded.times_applied ELSE procedural_nodes.times_applied END,
+			is_highly_helpful = CASE WHEN excluded.is_highly_helpful = 1 THEN 1 ELSE procedural_nodes.is_highly_helpful END,
 			updated_at = excluded.updated_at`
+
+	isIdempotentInt := 0
+	if node.IsIdempotent {
+		isIdempotentInt = 1
+	}
+
+	_, err := e.db.ExecContext(ctx, query,
+		node.ID, node.Name, node.Description, node.ActionType,
+		nullIfEmpty(node.InputSchema), nullIfEmpty(node.OutputSchema),
+		isIdempotentInt, metadata, userModInt, node.UserFeedbackRules,
+		node.TimesApplied, isHelpfulInt, createdAt, updatedAt,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to upsert procedural node %s: %w", node.ID, err)
+	}
+	return nil
+}
+
+// SeedProceduralNode inserts or updates a procedural node from fixtures.
+// Crucially, it skips updating any node that has been modified or adapted by user feedback
+// (e.g., user_feedback_modified != 0, custom feedback rules, times_applied > 0, or is_highly_helpful = 1).
+func (e *GllamEngine) SeedProceduralNode(ctx context.Context, node memory.ProceduralNode) error {
+	now := time.Now().Unix()
+	createdAt := node.CreatedAt
+	if createdAt == 0 {
+		createdAt = now
+	}
+	updatedAt := now
+	metadata := node.Metadata
+	if metadata == "" {
+		metadata = "{}"
+	}
+
+	query := `
+		INSERT INTO procedural_nodes (
+			id, name, description, action_type, input_schema, output_schema,
+			is_idempotent, metadata, user_feedback_modified, user_feedback_rules,
+			times_applied, is_highly_helpful, created_at, updated_at
+		)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, '', 0, 0, ?, ?)
+		ON CONFLICT(id) DO UPDATE SET
+			name = excluded.name,
+			description = excluded.description,
+			action_type = excluded.action_type,
+			input_schema = excluded.input_schema,
+			output_schema = excluded.output_schema,
+			is_idempotent = excluded.is_idempotent,
+			metadata = excluded.metadata,
+			updated_at = excluded.updated_at
+		WHERE procedural_nodes.user_feedback_modified = 0
+		  AND (procedural_nodes.user_feedback_rules IS NULL OR procedural_nodes.user_feedback_rules = '')
+		  AND procedural_nodes.times_applied = 0
+		  AND procedural_nodes.is_highly_helpful = 0`
 
 	isIdempotentInt := 0
 	if node.IsIdempotent {
@@ -304,7 +375,7 @@ func (e *GllamEngine) UpsertProceduralNode(ctx context.Context, node memory.Proc
 		isIdempotentInt, metadata, createdAt, updatedAt,
 	)
 	if err != nil {
-		return fmt.Errorf("failed to upsert procedural node %s: %w", node.ID, err)
+		return fmt.Errorf("failed to seed procedural node %s: %w", node.ID, err)
 	}
 	return nil
 }
@@ -312,21 +383,27 @@ func (e *GllamEngine) UpsertProceduralNode(ctx context.Context, node memory.Proc
 // GetProceduralNode fetches a procedural node by its primary ID.
 func (e *GllamEngine) GetProceduralNode(ctx context.Context, id string) (*memory.ProceduralNode, error) {
 	query := `
-		SELECT id, name, description, action_type, COALESCE(input_schema, ''), COALESCE(output_schema, ''), is_idempotent, COALESCE(metadata, '{}'), created_at, updated_at
+		SELECT id, name, description, action_type, COALESCE(input_schema, ''), COALESCE(output_schema, ''),
+		       is_idempotent, COALESCE(metadata, '{}'), user_feedback_modified,
+		       COALESCE(user_feedback_rules, ''), times_applied, is_highly_helpful,
+		       created_at, updated_at
 		FROM procedural_nodes
 		WHERE id = ?`
 
 	var node memory.ProceduralNode
-	var isIdempotentInt int
+	var isIdempotentInt, userModInt, isHelpfulInt int
 	err := e.dbRO.QueryRowContext(ctx, query, id).Scan(
 		&node.ID, &node.Name, &node.Description, &node.ActionType,
 		&node.InputSchema, &node.OutputSchema, &isIdempotentInt,
-		&node.Metadata, &node.CreatedAt, &node.UpdatedAt,
+		&node.Metadata, &userModInt, &node.UserFeedbackRules,
+		&node.TimesApplied, &isHelpfulInt, &node.CreatedAt, &node.UpdatedAt,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get procedural node %s: %w", id, err)
 	}
 	node.IsIdempotent = (isIdempotentInt == 1)
+	node.UserFeedbackModified = (userModInt == 1)
+	node.IsHighlyHelpful = (isHelpfulInt == 1)
 	return &node, nil
 }
 
@@ -342,7 +419,10 @@ func (e *GllamEngine) DeleteProceduralNode(ctx context.Context, id string) error
 // ListProceduralNodes retrieves all registered procedural nodes.
 func (e *GllamEngine) ListProceduralNodes(ctx context.Context) ([]memory.ProceduralNode, error) {
 	query := `
-		SELECT id, name, description, action_type, COALESCE(input_schema, ''), COALESCE(output_schema, ''), is_idempotent, COALESCE(metadata, '{}'), created_at, updated_at
+		SELECT id, name, description, action_type, COALESCE(input_schema, ''), COALESCE(output_schema, ''),
+		       is_idempotent, COALESCE(metadata, '{}'), user_feedback_modified,
+		       COALESCE(user_feedback_rules, ''), times_applied, is_highly_helpful,
+		       created_at, updated_at
 		FROM procedural_nodes
 		ORDER BY name ASC`
 
@@ -355,15 +435,18 @@ func (e *GllamEngine) ListProceduralNodes(ctx context.Context) ([]memory.Procedu
 	var nodes []memory.ProceduralNode
 	for rows.Next() {
 		var n memory.ProceduralNode
-		var isIdempotentInt int
+		var isIdempotentInt, userModInt, isHelpfulInt int
 		if err := rows.Scan(
 			&n.ID, &n.Name, &n.Description, &n.ActionType,
 			&n.InputSchema, &n.OutputSchema, &isIdempotentInt,
-			&n.Metadata, &n.CreatedAt, &n.UpdatedAt,
+			&n.Metadata, &userModInt, &n.UserFeedbackRules,
+			&n.TimesApplied, &isHelpfulInt, &n.CreatedAt, &n.UpdatedAt,
 		); err != nil {
 			return nil, fmt.Errorf("failed to scan procedural node: %w", err)
 		}
 		n.IsIdempotent = (isIdempotentInt == 1)
+		n.UserFeedbackModified = (userModInt == 1)
+		n.IsHighlyHelpful = (isHelpfulInt == 1)
 		nodes = append(nodes, n)
 	}
 	return nodes, rows.Err()
@@ -385,9 +468,18 @@ func (e *GllamEngine) UpsertProceduralLink(ctx context.Context, link memory.Proc
 		weight = 1.0
 	}
 
+	userModInt := 0
+	if link.UserFeedbackModified || link.TimesTraversed > 0 {
+		userModInt = 1
+	}
+
 	query := `
-		INSERT INTO procedural_links (id, source_procedure_id, target_procedure_id, relation_type, condition_expr, weight, ordering, metadata, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO procedural_links (
+			id, source_procedure_id, target_procedure_id, relation_type,
+			condition_expr, weight, ordering, metadata, user_feedback_modified,
+			times_traversed, created_at
+		)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			source_procedure_id = excluded.source_procedure_id,
 			target_procedure_id = excluded.target_procedure_id,
@@ -395,14 +487,62 @@ func (e *GllamEngine) UpsertProceduralLink(ctx context.Context, link memory.Proc
 			condition_expr = excluded.condition_expr,
 			weight = excluded.weight,
 			ordering = excluded.ordering,
-			metadata = excluded.metadata`
+			metadata = excluded.metadata,
+			user_feedback_modified = CASE WHEN excluded.user_feedback_modified = 1 THEN 1 ELSE procedural_links.user_feedback_modified END,
+			times_traversed = CASE WHEN excluded.times_traversed > 0 THEN excluded.times_traversed ELSE procedural_links.times_traversed END`
+
+	_, err := e.db.ExecContext(ctx, query,
+		link.ID, link.SourceProcedureID, link.TargetProcedureID, link.RelationType,
+		nullIfEmpty(link.ConditionExpr), weight, link.Ordering, metadata,
+		userModInt, link.TimesTraversed, createdAt,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to upsert procedural link %s: %w", link.ID, err)
+	}
+	return nil
+}
+
+// SeedProceduralLink inserts or safely updates a procedural link from fixtures,
+// skipping update if the link has been modified or traversed by user feedback.
+func (e *GllamEngine) SeedProceduralLink(ctx context.Context, link memory.ProceduralLink) error {
+	now := time.Now().Unix()
+	createdAt := link.CreatedAt
+	if createdAt == 0 {
+		createdAt = now
+	}
+	metadata := link.Metadata
+	if metadata == "" {
+		metadata = "{}"
+	}
+	weight := link.Weight
+	if weight == 0 {
+		weight = 1.0
+	}
+
+	query := `
+		INSERT INTO procedural_links (
+			id, source_procedure_id, target_procedure_id, relation_type,
+			condition_expr, weight, ordering, metadata, user_feedback_modified,
+			times_traversed, created_at
+		)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?)
+		ON CONFLICT(id) DO UPDATE SET
+			source_procedure_id = excluded.source_procedure_id,
+			target_procedure_id = excluded.target_procedure_id,
+			relation_type = excluded.relation_type,
+			condition_expr = excluded.condition_expr,
+			weight = excluded.weight,
+			ordering = excluded.ordering,
+			metadata = excluded.metadata
+		WHERE procedural_links.user_feedback_modified = 0
+		  AND procedural_links.times_traversed = 0`
 
 	_, err := e.db.ExecContext(ctx, query,
 		link.ID, link.SourceProcedureID, link.TargetProcedureID, link.RelationType,
 		nullIfEmpty(link.ConditionExpr), weight, link.Ordering, metadata, createdAt,
 	)
 	if err != nil {
-		return fmt.Errorf("failed to upsert procedural link %s: %w", link.ID, err)
+		return fmt.Errorf("failed to seed procedural link %s: %w", link.ID, err)
 	}
 	return nil
 }
@@ -419,7 +559,9 @@ func (e *GllamEngine) DeleteProceduralLink(ctx context.Context, id string) error
 // GetProceduralLinksForNode returns all incoming or outgoing links for a given procedure node.
 func (e *GllamEngine) GetProceduralLinksForNode(ctx context.Context, nodeID string) ([]memory.ProceduralLink, error) {
 	query := `
-		SELECT id, source_procedure_id, target_procedure_id, relation_type, COALESCE(condition_expr, ''), weight, ordering, COALESCE(metadata, '{}'), created_at
+		SELECT id, source_procedure_id, target_procedure_id, relation_type,
+		       COALESCE(condition_expr, ''), weight, ordering, COALESCE(metadata, '{}'),
+		       user_feedback_modified, times_traversed, created_at
 		FROM procedural_links
 		WHERE source_procedure_id = ? OR target_procedure_id = ?
 		ORDER BY ordering ASC`
@@ -433,15 +575,96 @@ func (e *GllamEngine) GetProceduralLinksForNode(ctx context.Context, nodeID stri
 	var links []memory.ProceduralLink
 	for rows.Next() {
 		var l memory.ProceduralLink
+		var userModInt int
 		if err := rows.Scan(
 			&l.ID, &l.SourceProcedureID, &l.TargetProcedureID, &l.RelationType,
-			&l.ConditionExpr, &l.Weight, &l.Ordering, &l.Metadata, &l.CreatedAt,
+			&l.ConditionExpr, &l.Weight, &l.Ordering, &l.Metadata,
+			&userModInt, &l.TimesTraversed, &l.CreatedAt,
 		); err != nil {
 			return nil, fmt.Errorf("failed to scan procedural link: %w", err)
 		}
+		l.UserFeedbackModified = (userModInt == 1)
 		links = append(links, l)
 	}
 	return links, rows.Err()
+}
+
+// GetProceduralLink retrieves a specific link by its ID.
+func (e *GllamEngine) GetProceduralLink(ctx context.Context, linkID string) (*memory.ProceduralLink, error) {
+	query := `
+		SELECT id, source_procedure_id, target_procedure_id, relation_type,
+		       COALESCE(condition_expr, ''), weight, ordering, COALESCE(metadata, '{}'),
+		       user_feedback_modified, times_traversed, created_at
+		FROM procedural_links
+		WHERE id = ?`
+
+	var l memory.ProceduralLink
+	var userModInt int
+	err := e.dbRO.QueryRowContext(ctx, query, linkID).Scan(
+		&l.ID, &l.SourceProcedureID, &l.TargetProcedureID, &l.RelationType,
+		&l.ConditionExpr, &l.Weight, &l.Ordering, &l.Metadata,
+		&userModInt, &l.TimesTraversed, &l.CreatedAt,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get procedural link %s: %w", linkID, err)
+	}
+	l.UserFeedbackModified = (userModInt == 1)
+	return &l, nil
+}
+
+// RecordProceduralNodeFeedback records user feedback rules or helpfulness rating on a node,
+// marking it as user_feedback_modified to prevent fixture clobbering.
+func (e *GllamEngine) RecordProceduralNodeFeedback(ctx context.Context, nodeID string, feedbackRules string, isHelpful bool) error {
+	now := time.Now().Unix()
+	isHelpfulInt := 0
+	if isHelpful {
+		isHelpfulInt = 1
+	}
+
+	query := `
+		UPDATE procedural_nodes
+		SET user_feedback_rules = CASE WHEN ? != '' THEN ? ELSE user_feedback_rules END,
+		    is_highly_helpful = CASE WHEN ? = 1 THEN 1 ELSE is_highly_helpful END,
+		    times_applied = times_applied + 1,
+		    user_feedback_modified = 1,
+		    updated_at = ?
+		WHERE id = ?`
+
+	res, err := e.db.ExecContext(ctx, query, feedbackRules, feedbackRules, isHelpfulInt, now, nodeID)
+	if err != nil {
+		return fmt.Errorf("failed to record node feedback on %s: %w", nodeID, err)
+	}
+	rows, _ := res.RowsAffected()
+	if rows == 0 {
+		return fmt.Errorf("procedural node %s not found", nodeID)
+	}
+	return nil
+}
+
+// RecordProceduralLinkFeedback applies reinforcement weighting or feedback to a transition link,
+// marking it as user_feedback_modified.
+func (e *GllamEngine) RecordProceduralLinkFeedback(ctx context.Context, linkID string, weightDelta float64, userModified bool) error {
+	userModInt := 0
+	if userModified {
+		userModInt = 1
+	}
+
+	query := `
+		UPDATE procedural_links
+		SET weight = MAX(0.01, weight + ?),
+		    times_traversed = times_traversed + 1,
+		    user_feedback_modified = CASE WHEN ? = 1 THEN 1 ELSE user_feedback_modified END
+		WHERE id = ?`
+
+	res, err := e.db.ExecContext(ctx, query, weightDelta, userModInt, linkID)
+	if err != nil {
+		return fmt.Errorf("failed to record link feedback on %s: %w", linkID, err)
+	}
+	rows, _ := res.RowsAffected()
+	if rows == 0 {
+		return fmt.Errorf("procedural link %s not found", linkID)
+	}
+	return nil
 }
 
 // StartProceduralTrace initializes a new runtime trace instance for executing a root procedure workflow.
@@ -750,6 +973,10 @@ func (e *GllamEngine) queryReachableSteps(ctx context.Context, sourceID string, 
 				COALESCE(p.output_schema, '') AS target_output_schema,
 				p.is_idempotent AS target_is_idempotent,
 				COALESCE(p.metadata, '{}') AS target_metadata,
+				p.user_feedback_modified AS target_user_feedback_modified,
+				COALESCE(p.user_feedback_rules, '') AS target_user_feedback_rules,
+				p.times_applied AS target_times_applied,
+				p.is_highly_helpful AS target_is_highly_helpful,
 				p.created_at AS target_created_at,
 				p.updated_at AS target_updated_at,
 				1 AS depth
@@ -779,6 +1006,10 @@ func (e *GllamEngine) queryReachableSteps(ctx context.Context, sourceID string, 
 				COALESCE(p2.output_schema, ''),
 				p2.is_idempotent,
 				COALESCE(p2.metadata, '{}'),
+				p2.user_feedback_modified,
+				COALESCE(p2.user_feedback_rules, ''),
+				p2.times_applied,
+				p2.is_highly_helpful,
 				p2.created_at,
 				p2.updated_at,
 				ns.depth + 1
@@ -793,7 +1024,9 @@ func (e *GllamEngine) queryReachableSteps(ctx context.Context, sourceID string, 
 		       COALESCE(condition_expr, ''), ordering, COALESCE(mapping_rules, '{}'),
 		       target_id, target_name, target_description, target_action_type,
 		       target_input_schema, target_output_schema, target_is_idempotent,
-		       target_metadata, target_created_at, target_updated_at, depth
+		       target_metadata, target_user_feedback_modified, target_user_feedback_rules,
+		       target_times_applied, target_is_highly_helpful,
+		       target_created_at, target_updated_at, depth
 		FROM next_steps
 		ORDER BY depth ASC, ordering ASC`
 
@@ -806,17 +1039,21 @@ func (e *GllamEngine) queryReachableSteps(ctx context.Context, sourceID string, 
 	var steps []memory.ProceduralNextStep
 	for rows.Next() {
 		var s memory.ProceduralNextStep
-		var isIdempotentInt int
+		var isIdempotentInt, userModInt, isHelpfulInt int
 		if err := rows.Scan(
 			&s.EdgeID, &s.SourceProcedureID, &s.TargetProcedureID, &s.RelationType,
 			&s.ConditionExpr, &s.Ordering, &s.MappingRules,
 			&s.TargetNode.ID, &s.TargetNode.Name, &s.TargetNode.Description, &s.TargetNode.ActionType,
 			&s.TargetNode.InputSchema, &s.TargetNode.OutputSchema, &isIdempotentInt,
-			&s.TargetNode.Metadata, &s.TargetNode.CreatedAt, &s.TargetNode.UpdatedAt, &s.Depth,
+			&s.TargetNode.Metadata, &userModInt, &s.TargetNode.UserFeedbackRules,
+			&s.TargetNode.TimesApplied, &isHelpfulInt,
+			&s.TargetNode.CreatedAt, &s.TargetNode.UpdatedAt, &s.Depth,
 		); err != nil {
 			return nil, fmt.Errorf("failed to scan reachable step: %w", err)
 		}
 		s.TargetNode.IsIdempotent = (isIdempotentInt == 1)
+		s.TargetNode.UserFeedbackModified = (userModInt == 1)
+		s.TargetNode.IsHighlyHelpful = (isHelpfulInt == 1)
 		steps = append(steps, s)
 	}
 	return steps, rows.Err()
@@ -1124,7 +1361,10 @@ func (e *GllamEngine) ResolveCompensations(ctx context.Context, traceID string) 
 		       COALESCE(l.metadata, '{}'),
 		       p.id, p.name, p.description, p.action_type,
 		       COALESCE(p.input_schema, ''), COALESCE(p.output_schema, ''),
-		       p.is_idempotent, COALESCE(p.metadata, '{}'), p.created_at, p.updated_at
+		       p.is_idempotent, COALESCE(p.metadata, '{}'),
+		       p.user_feedback_modified, COALESCE(p.user_feedback_rules, ''),
+		       p.times_applied, p.is_highly_helpful,
+		       p.created_at, p.updated_at
 		FROM procedural_step_runs sr
 		JOIN procedural_links l ON l.source_procedure_id = sr.node_id AND l.relation_type = 'compensates'
 		JOIN procedural_nodes p ON l.target_procedure_id = p.id
@@ -1140,17 +1380,22 @@ func (e *GllamEngine) ResolveCompensations(ctx context.Context, traceID string) 
 	var compensations []memory.ProceduralCompensationStep
 	for rows.Next() {
 		var step memory.ProceduralCompensationStep
-		var isIdempotentInt int
+		var isIdempotentInt, userModInt, isHelpfulInt int
 		if err := rows.Scan(
 			&step.ExecutedNodeID, &step.ExecutedStepNumber, &step.ExecutedOutput,
 			&step.MappingRules,
 			&step.CompensationNode.ID, &step.CompensationNode.Name, &step.CompensationNode.Description,
 			&step.CompensationNode.ActionType, &step.CompensationNode.InputSchema, &step.CompensationNode.OutputSchema,
-			&isIdempotentInt, &step.CompensationNode.Metadata, &step.CompensationNode.CreatedAt, &step.CompensationNode.UpdatedAt,
+			&isIdempotentInt, &step.CompensationNode.Metadata,
+			&userModInt, &step.CompensationNode.UserFeedbackRules,
+			&step.CompensationNode.TimesApplied, &isHelpfulInt,
+			&step.CompensationNode.CreatedAt, &step.CompensationNode.UpdatedAt,
 		); err != nil {
 			return nil, fmt.Errorf("failed to scan compensation step: %w", err)
 		}
 		step.CompensationNode.IsIdempotent = (isIdempotentInt == 1)
+		step.CompensationNode.UserFeedbackModified = (userModInt == 1)
+		step.CompensationNode.IsHighlyHelpful = (isHelpfulInt == 1)
 		compensations = append(compensations, step)
 	}
 	return compensations, rows.Err()

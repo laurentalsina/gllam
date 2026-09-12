@@ -302,6 +302,27 @@ func (e *GllamEngine) InitSchema() error {
 		return err
 	}
 
+	// Procedural memory user-feedback preservation columns
+	if err := ensureColumnExists("procedural_nodes", "user_feedback_modified", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
+	if err := ensureColumnExists("procedural_nodes", "user_feedback_rules", "TEXT DEFAULT ''"); err != nil {
+		return err
+	}
+	if err := ensureColumnExists("procedural_nodes", "times_applied", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
+	if err := ensureColumnExists("procedural_nodes", "is_highly_helpful", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
+
+	if err := ensureColumnExists("procedural_links", "user_feedback_modified", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
+	if err := ensureColumnExists("procedural_links", "times_traversed", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
+
 	if _, err := e.db.Exec(string(schemaBytes)); err != nil {
 		return fmt.Errorf("failed to execute schema.sql: %w", err)
 	}

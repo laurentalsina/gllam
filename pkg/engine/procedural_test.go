@@ -585,3 +585,182 @@ func TestBootstrapProceduralMemory(t *testing.T) {
 	}
 }
 
+func TestInitSchemaNonDestructiveWithUserFeedback(t *testing.T) {
+	tempDir := t.TempDir()
+	dbPath := filepath.Join(tempDir, "test_nondestructive_schema.db")
+
+	gllam, err := NewGllamEngine(dbPath, nil)
+	if err != nil {
+		t.Fatalf("Failed to create engine: %v", err)
+	}
+	defer gllam.Close()
+
+	ctx := context.Background()
+
+	// 1. Initial schema initialization & fixture bootstrap
+	if err := gllam.InitSchema(); err != nil {
+		t.Fatalf("First InitSchema failed: %v", err)
+	}
+
+	initialNodes, err := gllam.ListProceduralNodes(ctx)
+	if err != nil {
+		t.Fatalf("Failed to list procedural nodes: %v", err)
+	}
+	if len(initialNodes) != 27 {
+		t.Fatalf("Expected 27 initial nodes, got %d", len(initialNodes))
+	}
+
+	// 2. Simulate User Feedback Modifications
+	// (a) User updates prompt on proc_first_pass_direct_qa
+	customPrompt := "CUSTOM USER FEEDBACK DIRECT QA PROMPT: Be extremely concise."
+	if err := gllam.UpdateProceduralPrompt(ctx, "proc_first_pass_direct_qa", "system_prompt", customPrompt); err != nil {
+		t.Fatalf("Failed to update prompt with user feedback: %v", err)
+	}
+	if gllam.SystemPrompts.DirectQAPrompt != customPrompt {
+		t.Fatalf("Expected DirectQAPrompt to be %q, got %q", customPrompt, gllam.SystemPrompts.DirectQAPrompt)
+	}
+
+	// (b) User adds feedback rules and flags helpfulness on proc_chunk_pruning
+	feedbackRules := "Do not prune chunks that contain numerical measurements or dates"
+	if err := gllam.RecordProceduralNodeFeedback(ctx, "proc_chunk_pruning", feedbackRules, true); err != nil {
+		t.Fatalf("Failed to record node feedback: %v", err)
+	}
+
+	// (c) User reinforcement modifies link weight on link_direct_qa_success
+	linkBefore, err := gllam.GetProceduralLink(ctx, "link_direct_qa_success")
+	if err != nil {
+		t.Fatalf("Failed to get link: %v", err)
+	}
+	if err := gllam.RecordProceduralLinkFeedback(ctx, "link_direct_qa_success", -0.3, true); err != nil {
+		t.Fatalf("Failed to record link feedback: %v", err)
+	}
+
+	// (d) Legacy procedural_knowledge entry added with user feedback
+	legacyPK := memory.ProceduralKnowledge{
+		ID:                "proc_legacy_backup_routine",
+		TaskType:          "backup_postgres_database",
+		Scope:             "external",
+		Instructions:      "Step 1: run pg_dump. Step 2: gzip.",
+		UserFeedbackRules: "Always specify --format=custom --no-owner",
+		TimesApplied:      4,
+		IsHighlyHelpful:   true,
+	}
+	if err := gllam.UpsertProceduralKnowledge(ctx, legacyPK); err != nil {
+		t.Fatalf("Failed to upsert legacy procedural knowledge: %v", err)
+	}
+
+	// (e) Brand new custom user procedural node not present in fixtures
+	customUserNode := memory.ProceduralNode{
+		ID:                   "proc_user_custom_validator",
+		Name:                 "Custom Validator",
+		Description:          "Validates schema consistency against external API",
+		ActionType:           memory.ProceduralActionToolCall,
+		UserFeedbackModified: true,
+	}
+	if err := gllam.UpsertProceduralNode(ctx, customUserNode); err != nil {
+		t.Fatalf("Failed to insert custom user node: %v", err)
+	}
+
+	// 3. CALL InitSchema() AGAIN (Simulating application restart or re-initialization)
+	if err := gllam.InitSchema(); err != nil {
+		t.Fatalf("Subsequent InitSchema failed: %v", err)
+	}
+
+	// 4. VERIFY STRICT PRESERVATION OF USER ADAPTATIONS & FEEDBACK
+
+	// (a) Custom prompt must NOT be overwritten by fixture defaults
+	nodeQA, err := gllam.GetProceduralNode(ctx, "proc_first_pass_direct_qa")
+	if err != nil {
+		t.Fatalf("Failed to get node: %v", err)
+	}
+	if !nodeQA.UserFeedbackModified {
+		t.Errorf("Expected nodeQA.UserFeedbackModified == true")
+	}
+	qaPrompt, err := gllam.GetProceduralPrompt(ctx, "proc_first_pass_direct_qa", "system_prompt")
+	if err != nil {
+		t.Fatalf("Failed to get prompt: %v", err)
+	}
+	if qaPrompt != customPrompt {
+		t.Errorf("Custom prompt was overwritten by InitSchema! Expected %q, got %q", customPrompt, qaPrompt)
+	}
+	if gllam.SystemPrompts.DirectQAPrompt != customPrompt {
+		t.Errorf("SystemPrompts.DirectQAPrompt was overwritten! Expected %q, got %q", customPrompt, gllam.SystemPrompts.DirectQAPrompt)
+	}
+
+	// (b) Node feedback rules & helpfulness must be strictly preserved
+	nodePruning, err := gllam.GetProceduralNode(ctx, "proc_chunk_pruning")
+	if err != nil {
+		t.Fatalf("Failed to get node: %v", err)
+	}
+	if !nodePruning.UserFeedbackModified {
+		t.Errorf("Expected nodePruning.UserFeedbackModified == true")
+	}
+	if nodePruning.UserFeedbackRules != feedbackRules {
+		t.Errorf("UserFeedbackRules overwritten! Expected %q, got %q", feedbackRules, nodePruning.UserFeedbackRules)
+	}
+	if !nodePruning.IsHighlyHelpful {
+		t.Errorf("IsHighlyHelpful flag was lost")
+	}
+	if nodePruning.TimesApplied != 1 {
+		t.Errorf("TimesApplied expected 1, got %d", nodePruning.TimesApplied)
+	}
+
+	// (c) Link weight & feedback must be preserved
+	linkAfter, err := gllam.GetProceduralLink(ctx, "link_direct_qa_success")
+	if err != nil {
+		t.Fatalf("Failed to get link: %v", err)
+	}
+	expectedWeight := linkBefore.Weight - 0.3
+	if linkAfter.Weight != expectedWeight {
+		t.Errorf("Link weight was overwritten! Expected %f, got %f", expectedWeight, linkAfter.Weight)
+	}
+	if !linkAfter.UserFeedbackModified {
+		t.Errorf("Expected linkAfter.UserFeedbackModified == true")
+	}
+	if linkAfter.TimesTraversed != 1 {
+		t.Errorf("TimesTraversed expected 1, got %d", linkAfter.TimesTraversed)
+	}
+
+	// (d) Legacy procedural_knowledge was preserved and migrated into procedural_nodes
+	legacyInNode, err := gllam.GetProceduralNode(ctx, "proc_legacy_backup_routine")
+	if err != nil {
+		t.Fatalf("Expected legacy procedural entry to be migrated into procedural_nodes: %v", err)
+	}
+	if legacyInNode.UserFeedbackRules != legacyPK.UserFeedbackRules {
+		t.Errorf("Legacy feedback rules not migrated! Expected %q, got %q", legacyPK.UserFeedbackRules, legacyInNode.UserFeedbackRules)
+	}
+	if !legacyInNode.UserFeedbackModified {
+		t.Errorf("Expected legacy node UserFeedbackModified == true")
+	}
+	if legacyInNode.TimesApplied != 4 {
+		t.Errorf("Expected legacy TimesApplied == 4, got %d", legacyInNode.TimesApplied)
+	}
+
+	// Verify legacy table still intact
+	retrievedPK, err := gllam.RetrieveProcedure(ctx, "backup_postgres_database")
+	if err != nil {
+		t.Fatalf("Legacy procedural_knowledge entry missing: %v", err)
+	}
+	if retrievedPK.UserFeedbackRules != legacyPK.UserFeedbackRules {
+		t.Errorf("Legacy procedural_knowledge was modified unexpectedly: %v", retrievedPK)
+	}
+
+	// (e) Custom user node still exists
+	customNode, err := gllam.GetProceduralNode(ctx, "proc_user_custom_validator")
+	if err != nil {
+		t.Fatalf("Custom user node was deleted by InitSchema: %v", err)
+	}
+	if customNode.Name != "Custom Validator" {
+		t.Errorf("Custom user node damaged: %+v", customNode)
+	}
+
+	// (f) Pristine fixture nodes remain pristine and intact
+	nodeDecomp, err := gllam.GetProceduralNode(ctx, "proc_query_decomposition")
+	if err != nil {
+		t.Fatalf("Fixture node missing: %v", err)
+	}
+	if nodeDecomp.UserFeedbackModified {
+		t.Errorf("Expected pristine node to have UserFeedbackModified == false")
+	}
+}
+

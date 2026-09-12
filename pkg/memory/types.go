@@ -78,29 +78,35 @@ const (
 
 // ProceduralNode represents a discrete action or composite workflow container.
 type ProceduralNode struct {
-	ID           string `json:"id"`
-	Name         string `json:"name"`
-	Description  string `json:"description"`
-	ActionType   string `json:"action_type"`
-	InputSchema  string `json:"input_schema,omitempty"`
-	OutputSchema string `json:"output_schema,omitempty"`
-	IsIdempotent bool   `json:"is_idempotent"`
-	Metadata     string `json:"metadata,omitempty"` // Arbitrary JSON
-	CreatedAt    int64  `json:"created_at"`         // Unix epoch
-	UpdatedAt    int64  `json:"updated_at"`         // Unix epoch
+	ID                   string `json:"id"`
+	Name                 string `json:"name"`
+	Description          string `json:"description"`
+	ActionType           string `json:"action_type"`
+	InputSchema          string `json:"input_schema,omitempty"`
+	OutputSchema         string `json:"output_schema,omitempty"`
+	IsIdempotent         bool   `json:"is_idempotent"`
+	Metadata             string `json:"metadata,omitempty"` // Arbitrary JSON
+	UserFeedbackModified bool   `json:"user_feedback_modified"`
+	UserFeedbackRules    string `json:"user_feedback_rules,omitempty"`
+	TimesApplied         int    `json:"times_applied"`
+	IsHighlyHelpful      bool   `json:"is_highly_helpful"`
+	CreatedAt            int64  `json:"created_at"` // Unix epoch
+	UpdatedAt            int64  `json:"updated_at"` // Unix epoch
 }
 
 // ProceduralLink represents a directed transition between procedures.
 type ProceduralLink struct {
-	ID                string  `json:"id"`
-	SourceProcedureID string  `json:"source_procedure_id"`
-	TargetProcedureID string  `json:"target_procedure_id"`
-	RelationType      string  `json:"relation_type"`
-	ConditionExpr     string  `json:"condition_expr,omitempty"`
-	Weight            float64 `json:"weight"`
-	Ordering          int     `json:"ordering"`
-	Metadata          string  `json:"metadata,omitempty"` // JSON string for parameter mapping
-	CreatedAt         int64   `json:"created_at"`
+	ID                   string  `json:"id"`
+	SourceProcedureID    string  `json:"source_procedure_id"`
+	TargetProcedureID    string  `json:"target_procedure_id"`
+	RelationType         string  `json:"relation_type"`
+	ConditionExpr        string  `json:"condition_expr,omitempty"`
+	Weight               float64 `json:"weight"`
+	Ordering             int     `json:"ordering"`
+	Metadata             string  `json:"metadata,omitempty"` // JSON string for parameter mapping
+	UserFeedbackModified bool    `json:"user_feedback_modified"`
+	TimesTraversed       int     `json:"times_traversed"`
+	CreatedAt            int64   `json:"created_at"`
 }
 
 // ProceduralExecutionTrace represents the runtime execution context and state of a procedure instance.

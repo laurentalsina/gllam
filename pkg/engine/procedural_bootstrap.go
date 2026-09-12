@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/laurentalsina/gllam/pkg/config"
 	"github.com/laurentalsina/gllam/pkg/memory"
@@ -105,7 +106,8 @@ func findFixturesPath(customPath string) (string, error) {
 	return "", fmt.Errorf("procedural_fixtures.json not found in any standard path")
 }
 
-// BootstrapProceduralMemory reads the fixtures file and seeds or updates procedural_nodes and procedural_links.
+// BootstrapProceduralMemory reads the fixtures file and non-destructively seeds or updates procedural_nodes and procedural_links.
+// Any node or link modified by user feedback or reinforced through usage is strictly preserved.
 func (e *GllamEngine) BootstrapProceduralMemory(ctx context.Context, fixturesPath string) error {
 	resolvedPath, err := findFixturesPath(fixturesPath)
 	if err != nil {
@@ -122,7 +124,10 @@ func (e *GllamEngine) BootstrapProceduralMemory(ctx context.Context, fixturesPat
 		return fmt.Errorf("failed to parse procedural fixtures: %w", err)
 	}
 
-	// 1. Upsert Nodes
+	// 1. Non-destructively bridge legacy procedural_knowledge entries if any exist
+	_ = e.MigrateLegacyProceduralKnowledge(ctx)
+
+	// 2. Non-destructively Seed Nodes (preserves user_feedback_modified and feedback rules)
 	for _, n := range fixtures.Nodes {
 		node := memory.ProceduralNode{
 			ID:           n.ID,
@@ -136,12 +141,12 @@ func (e *GllamEngine) BootstrapProceduralMemory(ctx context.Context, fixturesPat
 			CreatedAt:    n.CreatedAt,
 			UpdatedAt:    n.UpdatedAt,
 		}
-		if err := e.UpsertProceduralNode(ctx, node); err != nil {
-			return fmt.Errorf("failed to bootstrap node %s: %w", n.ID, err)
+		if err := e.SeedProceduralNode(ctx, node); err != nil {
+			return fmt.Errorf("failed to seed procedural node %s: %w", n.ID, err)
 		}
 	}
 
-	// 2. Upsert Links
+	// 3. Non-destructively Seed Links (preserves user_feedback_modified and traversed weights)
 	for _, l := range fixtures.Links {
 		weight := l.Weight
 		if weight == 0 {
@@ -158,26 +163,153 @@ func (e *GllamEngine) BootstrapProceduralMemory(ctx context.Context, fixturesPat
 			Metadata:          toJSONString(l.Metadata),
 			CreatedAt:         l.CreatedAt,
 		}
-		if err := e.UpsertProceduralLink(ctx, link); err != nil {
-			return fmt.Errorf("failed to bootstrap link %s: %w", l.ID, err)
+		if err := e.SeedProceduralLink(ctx, link); err != nil {
+			return fmt.Errorf("failed to seed procedural link %s: %w", l.ID, err)
 		}
 	}
 
 	return nil
 }
 
-// EnsureProceduralMemoryBootstrapped verifies if procedural_nodes contains records; if empty, it triggers bootstrapping.
-func (e *GllamEngine) EnsureProceduralMemoryBootstrapped(ctx context.Context) error {
-	var count int
-	err := e.dbRO.QueryRowContext(ctx, "SELECT count(*) FROM procedural_nodes").Scan(&count)
-	if err != nil {
-		// Table might not exist yet if schema was not run
+// MigrateLegacyProceduralKnowledge safely bridges any legacy procedural_knowledge records
+// into procedural_nodes without destroying existing nodes or overwriting adaptations.
+func (e *GllamEngine) MigrateLegacyProceduralKnowledge(ctx context.Context) error {
+	var tableExists int
+	_ = e.dbRO.QueryRowContext(ctx, "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='procedural_knowledge'").Scan(&tableExists)
+	if tableExists == 0 {
 		return nil
 	}
-	if count == 0 {
-		return e.BootstrapProceduralMemory(ctx, "")
+
+	type legacyRecord struct {
+		id             string
+		taskType       string
+		scope          string
+		triggerContext string
+		instructions   string
+		feedbackRules  string
+		timesApplied   int
+		isHelpful      bool
+	}
+
+	rows, err := e.dbRO.QueryContext(ctx, `
+		SELECT id, task_type, scope, COALESCE(trigger_context, ''), instructions,
+		       COALESCE(user_feedback_rules, ''), times_applied, COALESCE(is_highly_helpful, 0)
+		FROM procedural_knowledge
+	`)
+	if err != nil {
+		return fmt.Errorf("failed to query legacy procedural_knowledge: %w", err)
+	}
+
+	var records []legacyRecord
+	for rows.Next() {
+		var r legacyRecord
+		var isHelpfulVal interface{}
+		if err := rows.Scan(&r.id, &r.taskType, &r.scope, &r.triggerContext, &r.instructions, &r.feedbackRules, &r.timesApplied, &isHelpfulVal); err != nil {
+			rows.Close()
+			return fmt.Errorf("failed to scan legacy procedural_knowledge row: %w", err)
+		}
+		switch v := isHelpfulVal.(type) {
+		case bool:
+			r.isHelpful = v
+		case int64:
+			r.isHelpful = (v != 0)
+		case int:
+			r.isHelpful = (v != 0)
+		}
+		records = append(records, r)
+	}
+	rows.Close()
+
+	for _, r := range records {
+		hasFeedback := (r.feedbackRules != "" || r.timesApplied > 0 || r.isHelpful)
+		feedbackMod := 0
+		if hasFeedback {
+			feedbackMod = 1
+		}
+		isHelpfulInt := 0
+		if r.isHelpful {
+			isHelpfulInt = 1
+		}
+
+		var existingID, existingFeedbackRules string
+		_ = e.dbRO.QueryRowContext(ctx, "SELECT id, user_feedback_rules FROM procedural_nodes WHERE id = ? OR id = ?", r.id, r.taskType).Scan(&existingID, &existingFeedbackRules)
+
+		if existingID == "" {
+			metaMap := map[string]interface{}{
+				"legacy_scope":           r.scope,
+				"legacy_trigger_context": r.triggerContext,
+			}
+			metaBytes, _ := json.Marshal(metaMap)
+
+			_, err := e.db.ExecContext(ctx, `
+				INSERT INTO procedural_nodes (
+					id, name, description, action_type, input_schema, output_schema,
+					is_idempotent, metadata, user_feedback_modified, user_feedback_rules,
+					times_applied, is_highly_helpful, created_at, updated_at
+				) VALUES (?, ?, ?, 'composite', NULL, NULL, 0, ?, ?, ?, ?, ?, strftime('%s', 'now'), strftime('%s', 'now'))
+			`, r.id, r.taskType, r.instructions, string(metaBytes), feedbackMod, r.feedbackRules, r.timesApplied, isHelpfulInt)
+			if err != nil {
+				return fmt.Errorf("failed to migrate legacy procedural node %s: %w", r.id, err)
+			}
+		} else if hasFeedback && existingFeedbackRules == "" {
+			_, err := e.db.ExecContext(ctx, `
+				UPDATE procedural_nodes
+				SET user_feedback_rules = ?,
+				    user_feedback_modified = 1,
+				    times_applied = MAX(times_applied, ?),
+				    is_highly_helpful = MAX(is_highly_helpful, ?),
+				    updated_at = strftime('%s', 'now')
+				WHERE id = ?
+			`, r.feedbackRules, r.timesApplied, isHelpfulInt, existingID)
+			if err != nil {
+				return fmt.Errorf("failed to update procedural node with legacy feedback: %w", err)
+			}
+		}
 	}
 	return nil
+}
+
+// EnsureProceduralMemoryBootstrapped verifies and seeds procedural fixtures non-destructively,
+// guaranteeing that any existing user feedback or adaptations are strictly preserved.
+func (e *GllamEngine) EnsureProceduralMemoryBootstrapped(ctx context.Context) error {
+	return e.BootstrapProceduralMemory(ctx, "")
+}
+
+// UpdateProceduralPrompt updates a prompt stored in a node's metadata, stamps user_feedback_modified = true,
+// and synchronizes the change to e.SystemPrompts.
+func (e *GllamEngine) UpdateProceduralPrompt(ctx context.Context, nodeID string, promptKey string, newPrompt string) error {
+	node, err := e.GetProceduralNode(ctx, nodeID)
+	if err != nil {
+		return fmt.Errorf("failed to get node %s: %w", nodeID, err)
+	}
+
+	var meta map[string]interface{}
+	if node.Metadata == "" || node.Metadata == "{}" {
+		meta = make(map[string]interface{})
+	} else {
+		if err := json.Unmarshal([]byte(node.Metadata), &meta); err != nil {
+			meta = make(map[string]interface{})
+		}
+	}
+
+	if promptKey == "" {
+		promptKey = "system_prompt"
+	}
+	meta[promptKey] = newPrompt
+	metaBytes, err := json.Marshal(meta)
+	if err != nil {
+		return fmt.Errorf("failed to marshal metadata: %w", err)
+	}
+
+	node.Metadata = string(metaBytes)
+	node.UserFeedbackModified = true
+	node.UpdatedAt = time.Now().Unix()
+
+	if err := e.UpsertProceduralNode(ctx, *node); err != nil {
+		return fmt.Errorf("failed to update node %s: %w", nodeID, err)
+	}
+
+	return e.SyncSystemPromptsFromProceduralMemory(ctx)
 }
 
 // GetProceduralPrompt extracts a prompt template or guideline string stored in a procedural node's metadata.
