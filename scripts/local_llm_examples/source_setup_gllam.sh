@@ -8,7 +8,7 @@ export TYPESAFE="Jev,https://api.typesafe.ai/v1/systemone,apikey4242424242424242
 export OPENROUTER="google/gemini-3.7-flash,https://openrouter.ai/api/v1,sk4242424242424242424242424242424242424242424242424242424242"-
 # very fast and often good enough text model
 export CEREBRAS="qwen-3.8-27b,https://api.cerebras.ai/v1/chat/completions,csk-42424242424242424242424242424242424242424242424242424242"
-# lemonade's llama.cpp, bypassing lemonade's hardcoded timeout as the lemonade wrapper hardcodes a 10 minutes timeout on llama.cpp
+# lemonade's llama.cpp, lemond to bypass lemonade's 10 minutes hardcoded timeout on llama.cpp
 export LEMOND="Qwen3.8-27B-UD-Q8_K_XL,http://127.0.0.1:8001,"
 #export LLAMACPP="Qwen3.8-27B-UD-Q8_K_XL,http://100.96.179.19:8888," (slower build of llama.cpp than AMD's lemond)
 
