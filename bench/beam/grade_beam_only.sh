@@ -7,10 +7,10 @@ set -e
 export CGO_ENABLED=1
 export CGO_CFLAGS="-I/home/laurent/vllm/.venv/lib/python3.13/site-packages/_rocm_sdk_devel/lib/rocm_sysdeps/include"
 
-if [ -z "$FAST_TEXT_SERVER" ] && [ -z "$STRONG_TEXT_SERVER" ]; then
-    echo "❌ ERROR: Neither FAST_TEXT_SERVER nor STRONG_TEXT_SERVER is set!" >&2
-    echo "Please source your environment configuration (e.g. source scripts/local_llm_examples/source_setup_gllam.sh)." >&2
-    exit 1
+if [ -z "$LEMOND" ] && [ -z "$CEREBRAS" ] && [ -z "$OPENROUTER" ] && [ -z "$FAST_TEXT_SERVER" ] && [ -z "$STRONG_TEXT_SERVER" ]; then
+    if [ -f "scripts/local_llm_examples/source_setup_gllam.sh" ]; then
+        source scripts/local_llm_examples/source_setup_gllam.sh
+    fi
 fi
 # Resolve the default results input file using the latest run logs directory
 DEFAULT_RESULTS="./bench/beam/beam_100k_results_selective.jsonl"

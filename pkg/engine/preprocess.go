@@ -353,7 +353,6 @@ func (mc *MessageCompressor) CompressMessage(ctx context.Context, role, text str
 	}
 	clientCopy := *mc.llmClient
 	clientCopy.MaxTokensOverride = turnMaxTokens
-	clientCopy.ReasoningEffort = "none"
 
 	callCtx, cancel := context.WithTimeout(ctx, mc.cfg.Timeout)
 	defer cancel()

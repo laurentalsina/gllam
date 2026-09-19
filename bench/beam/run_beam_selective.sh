@@ -8,59 +8,16 @@ export CGO_ENABLED=1
 export CGO_CFLAGS="-I/home/laurent/vllm/.venv/lib/python3.13/site-packages/_rocm_sdk_devel/lib/rocm_sysdeps/include"
 export GLLAM_PLANNER_EXECUTABLE_PATH="/home/laurent/Projects/downward/fast-downward.py"
 
-# Model Context Window & Timeout Environment Variables
-export STRONG_MODEL_CONTEXT="${STRONG_MODEL_CONTEXT:-131072}"
-export FAST_MODEL_CONTEXT="${FAST_MODEL_CONTEXT:-65536}"
-export STRONG_MODEL_TIMEOUT="${STRONG_MODEL_TIMEOUT:-300}"
-export FAST_MODEL_TIMEOUT="${FAST_MODEL_TIMEOUT:-360}"
+# Auto-source multi-provider configuration if not already present in environment
+if [ -z "$CEREBRAS" ] && [ -z "$OPENROUTER" ] && [ -z "$LEMOND" ] && [ -z "$TYPESAFE" ] && [ -z "$FAST_TEXT_SERVER" ] && [ -z "$STRONG_TEXT_SERVER" ]; then
+    if [ -f "scripts/local_llm_examples/source_setup_gllam.sh" ]; then
+        echo "ℹ️ Auto-sourcing scripts/local_llm_examples/source_setup_gllam.sh..."
+        source scripts/local_llm_examples/source_setup_gllam.sh
+    fi
+fi
+
+export EMBEDDINGS_SERVER="${EMBEDDINGS_SERVER:-http://127.0.0.1:8800}"
 export MAX_EXTRACTION_TOKENS="${MAX_EXTRACTION_TOKENS:-8192}"
-
-# Sampling Environment Variables (Penalties & Anti-Repetition)
-if [[ "$FAST_TEXT_SERVER" == *"cerebras.ai"* ]]; then
-    export FAST_MODEL_TEMPERATURE="${FAST_MODEL_TEMPERATURE:-0.0}"
-    export FAST_MODEL_TOPP="${FAST_MODEL_TOPP:-1.0}"
-    export FAST_MODEL_PRESENCEPENALTY="0.0"
-    export FAST_MODEL_FREQUENCYPENALTY="0.0"
-elif [[ "$FAST_TEXT_SERVER" == *"openrouter.ai"* ]]; then
-    export FAST_MODEL_TEMPERATURE="${FAST_MODEL_TEMPERATURE:-0.1}"
-    export FAST_MODEL_TOPP="${FAST_MODEL_TOPP:-0.95}"
-    export FAST_MODEL_PRESENCEPENALTY="0.0"
-    export FAST_MODEL_FREQUENCYPENALTY="0.0"
-else
-    export FAST_MODEL_TEMPERATURE="${FAST_MODEL_TEMPERATURE:-0.3}"
-    export FAST_MODEL_MINP="${FAST_MODEL_MINP:-0.05}"
-    export FAST_MODEL_TOPP="${FAST_MODEL_TOPP:-0.95}"
-    export FAST_MODEL_REPEATPENALTY="${FAST_MODEL_REPEATPENALTY:-1.1}"
-    export FAST_MODEL_PRESENCEPENALTY="${FAST_MODEL_PRESENCEPENALTY:-0.3}"
-    export FAST_MODEL_FREQUENCYPENALTY="${FAST_MODEL_FREQUENCYPENALTY:-0.3}"
-fi
-
-if [[ "$STRONG_TEXT_SERVER" == *"openrouter.ai"* ]] || [[ "$STRONG_TEXT_SERVER" == *"cerebras.ai"* ]]; then
-    export STRONG_MODEL_TEMPERATURE="${STRONG_MODEL_TEMPERATURE:-0.1}"
-    export STRONG_MODEL_TOPP="${STRONG_MODEL_TOPP:-0.95}"
-    export STRONG_MODEL_PRESENCEPENALTY="0.0"
-    export STRONG_MODEL_FREQUENCYPENALTY="0.0"
-else
-    export STRONG_MODEL_TEMPERATURE="${STRONG_MODEL_TEMPERATURE:-0.3}"
-    export STRONG_MODEL_MINP="${STRONG_MODEL_MINP:-0.05}"
-    export STRONG_MODEL_TOPP="${STRONG_MODEL_TOPP:-0.95}"
-    export STRONG_MODEL_REPEATPENALTY="${STRONG_MODEL_REPEATPENALTY:-1.1}"
-    export STRONG_MODEL_PRESENCEPENALTY="${STRONG_MODEL_PRESENCEPENALTY:-0.3}"
-    export STRONG_MODEL_FREQUENCYPENALTY="${STRONG_MODEL_FREQUENCYPENALTY:-0.3}"
-fi
-
-# Validate required server endpoints
-if [ -z "$FAST_TEXT_SERVER" ] && [ -z "$STRONG_TEXT_SERVER" ]; then
-    echo "❌ ERROR: Neither FAST_TEXT_SERVER nor STRONG_TEXT_SERVER is set!" >&2
-    echo "Please source your environment configuration (e.g. source scripts/local_llm_examples/source_setup_gllam.sh)." >&2
-    exit 1
-fi
-
-if [ -z "$EMBEDDINGS_SERVER" ]; then
-    echo "❌ ERROR: EMBEDDINGS_SERVER environment variable is not set!" >&2
-    echo "Please export EMBEDDINGS_SERVER before running this benchmark." >&2
-    exit 1
-fi
 DB_PATH="./bench/gllam_data_selective_beam.db"
 
 BEAM_CORPUS="/home/laurent/Projects/agentic_benchmarks/beam_100k_conversations.jsonl"
@@ -180,10 +137,12 @@ fi
 echo "======================================================="
 echo "🚀 Starting BEAM 100k Dynamic Selective Benchmark"
 echo "   ├─ DB: $DB_PATH"
-echo "   ├─ Fast Text Server: ${FAST_TEXT_SERVER:-<not set>}"
-[ -n "$FAST_LLM_MODEL" ] && echo "   ├─ Fast Model: $FAST_LLM_MODEL"
-echo "   ├─ Strong Text Server: ${STRONG_TEXT_SERVER:-<not set>}"
-[ -n "$STRONG_LLM_MODEL" ] && echo "   ├─ Strong Model: $STRONG_LLM_MODEL"
+[ -n "$TYPESAFE" ] && echo "   ├─ TypeSafe (STRUCT): $TYPESAFE"
+[ -n "$CEREBRAS" ] && echo "   ├─ Cerebras (TEXT): $CEREBRAS"
+[ -n "$OPENROUTER" ] && echo "   ├─ OpenRouter (TEXT): $OPENROUTER"
+[ -n "$LEMOND" ] && echo "   ├─ Lemond (TEXT): $LEMOND"
+[ -n "$FAST_TEXT_SERVER" ] && echo "   ├─ Fast Text Server: $FAST_TEXT_SERVER"
+[ -n "$STRONG_TEXT_SERVER" ] && echo "   ├─ Strong Text Server: $STRONG_TEXT_SERVER"
 echo "   ├─ Embeddings Server: $EMBEDDINGS_SERVER"
 echo "   ├─ Planner: $GLLAM_PLANNER_EXECUTABLE_PATH"
 echo "   ├─ Debug Mode: $DEBUG_FLAG"
@@ -197,14 +156,14 @@ echo "   ├─ Target Compression: ${TARGET_COMPRESSION}% (Reduction: $((100 - 
 echo "   ├─ Preprocess Concurrency: $PREPROCESS_CONCURRENCY"
 fi
 echo "   ├─ Max Extraction Tokens: $MAX_EXTRACTION_TOKENS"
-echo "   ├─ Task Routing Tiers:"
-echo "   │  ├─ SEMANTIC_EXTRACTION: ${SEMANTIC_EXTRACTION:-<default: FAST_TEXT_SERVER>}"
-echo "   │  ├─ SEARCH_CANDIDATES: ${SEARCH_CANDIDATES:-<default: FAST_TEXT_SERVER>}"
-echo "   │  ├─ QUERY_DECOMPOSITION: ${QUERY_DECOMPOSITION:-<default: FAST_TEXT_SERVER>}"
-echo "   │  ├─ ZERO_SHOT_ANSWER: ${ZERO_SHOT_ANSWER:-<default: STRONG_TEXT_SERVER>}"
-echo "   │  ├─ FINAL_ANSWER: ${FINAL_ANSWER:-<default: STRONG_TEXT_SERVER>}"
-echo "   │  ├─ FALLBACK_ANSWER: ${FALLBACK_ANSWER:-<default: FAST_TEXT_SERVER>}"
-echo "   │  └─ BENCH_RESULT_EVALUATION: ${BENCH_RESULT_EVALUATION:-<default: FAST_TEXT_SERVER>}"
+echo "   ├─ Task Routing:"
+echo "   │  ├─ SEMANTIC_EXTRACTION: ${SEMANTIC_EXTRACTION:-<default: TYPESAFE>}"
+echo "   │  ├─ SEARCH_CANDIDATES: ${SEARCH_CANDIDATES:-<default: TYPESAFE>}"
+echo "   │  ├─ QUERY_DECOMPOSITION: ${QUERY_DECOMPOSITION:-<default: TYPESAFE>}"
+echo "   │  ├─ ZERO_SHOT_ANSWER: ${ZERO_SHOT_ANSWER:-<default: CEREBRAS>}"
+echo "   │  ├─ FINAL_ANSWER: ${FINAL_ANSWER:-<default: CEREBRAS>}"
+echo "   │  ├─ FALLBACK_ANSWER: ${FALLBACK_ANSWER:-<default: OPENROUTER>}"
+echo "   │  └─ BENCH_RESULT_EVALUATION: ${BENCH_RESULT_EVALUATION:-<default: LEMOND>}"
 if [ ! -z "$CATEGORIES" ]; then
 echo "   ├─ Target Categories: $CATEGORIES"
 fi

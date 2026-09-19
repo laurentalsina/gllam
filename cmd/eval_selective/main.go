@@ -266,6 +266,8 @@ func clearSemanticTables(ctx context.Context, db *sql.DB) {
 	_, _ = db.ExecContext(ctx, "DELETE FROM document_versions")
 }
 
+var providerReg *engine.ProviderRegistry
+
 func main() {
 	dbPath := flag.String("dbpath", getEnv("DATABASE_PATH", "./bench/gllam_data.db"), "Path to SQLite database")
 	embeddingsServer := flag.String("embeddings-server", getEnv("EMBEDDINGS_SERVER", ""), "Embeddings server endpoint")
@@ -316,6 +318,8 @@ func main() {
 		fmt.Print(msg)
 	}
 
+	providerReg = engine.NewProviderRegistryFromEnv()
+
 	taskRoutingMap := map[string]string{
 		"SEMANTIC_EXTRACTION":     getEnv("SEMANTIC_EXTRACTION", "FAST_TEXT_SERVER"),
 		"SEARCH_CANDIDATES":       getEnv("SEARCH_CANDIDATES", "FAST_TEXT_SERVER"),
@@ -324,6 +328,9 @@ func main() {
 		"FINAL_ANSWER":            getEnv("FINAL_ANSWER", "STRONG_TEXT_SERVER"),
 		"FALLBACK_ANSWER":         getEnv("FALLBACK_ANSWER", "FAST_TEXT_SERVER"),
 		"BENCH_RESULT_EVALUATION": getEnv("BENCH_RESULT_EVALUATION", "FAST_TEXT_SERVER"),
+	}
+	for k, v := range providerReg.TaskRouting() {
+		taskRoutingMap[k] = v
 	}
 
 	var mainLog MainLogStructure
@@ -438,6 +445,10 @@ func main() {
 		strongKey := engine.ResolveAPIKey(strongServerEnv, "", "strong")
 		strongClient = engine.NewLLMClientWithKey(strongServerEnv, strongKey, strongModelEnv)
 		strongClient.Tier = "strong"
+	} else if c, err := providerReg.GetTextClient("STRONG_TEXT_SERVER"); err == nil {
+		strongClient = c
+	} else if c, err := providerReg.GetTextClient("OPENROUTER"); err == nil {
+		strongClient = c
 	}
 
 	var fastClient *engine.LLMClient
@@ -445,12 +456,30 @@ func main() {
 		fastKey := engine.ResolveAPIKey(fastServerEnv, "", "fast")
 		fastClient = engine.NewLLMClientWithKey(fastServerEnv, fastKey, fastModelEnv)
 		fastClient.Tier = "fast"
+	} else if c, err := providerReg.GetTextClient("FAST_TEXT_SERVER"); err == nil {
+		fastClient = c
+	} else if c, err := providerReg.GetTextClient("CEREBRAS"); err == nil {
+		fastClient = c
 	}
 
 	var defaultClient *engine.LLMClient
 	if strongClient == nil && fastClient == nil {
-		fmt.Fprintf(os.Stderr, "❌ Error: Neither STRONG_TEXT_SERVER nor FAST_TEXT_SERVER is set in the environment!\n")
-		os.Exit(1)
+		hasText := false
+		for _, p := range providerReg.Providers() {
+			if p.Kind == engine.ProviderKindText {
+				hasText = true
+				break
+			}
+		}
+		if !hasText {
+			fmt.Fprintf(os.Stderr, "❌ Error: Neither STRONG_TEXT_SERVER nor FAST_TEXT_SERVER is set in the environment, and no text provider is registered!\n")
+			os.Exit(1)
+		}
+	}
+
+	logMain("Registered Providers:\n")
+	for pName, pCfg := range providerReg.Providers() {
+		logMain("   ├─ %s [%s]: model=%s, baseURL=%s\n", pName, pCfg.Kind, pCfg.Model, pCfg.BaseURL)
 	}
 
 	logMain("Task Routing Environment Tiers:\n")
@@ -622,7 +651,16 @@ func main() {
 		var subQueries []string
 		if *decomposeQueryFlag {
 			logTimestamp("query decomposition")
-			subQueries = decomposeQuery(ctx, getClientForTask("QUERY_DECOMPOSITION", "STRONG_TEXT_SERVER", strongClient, fastClient, defaultClient), qa.Query)
+			decomposeStructClient, _ := providerReg.GetStructClientForTask("QUERY_DECOMPOSITION", "")
+			decomposeTextClient := getClientForTask("QUERY_DECOMPOSITION", "STRONG_TEXT_SERVER", strongClient, fastClient, defaultClient)
+
+			if decomposeStructClient != nil {
+				subQueries = decomposeQueryWithTypeSafe(ctx, decomposeStructClient, qa.Query)
+			} else if decomposeTextClient != nil {
+				subQueries = decomposeQuery(ctx, decomposeTextClient, qa.Query)
+			} else {
+				subQueries = []string{qa.Query}
+			}
 			logMain("   ├─ Decomposed query into sub-queries: %q\n", subQueries)
 			structuredLog.DecomposedQueries = subQueries
 		} else {
@@ -644,7 +682,9 @@ func main() {
 			} else {
 				logMain("   ├─ Retrieving top-%d matching paragraphs via TF-IDF for: %q...\n", *topKMatches, sq)
 			}
-			sqCandidates, sqTerms := retrieveCandidatesForQuery(ctx, sq, targetSpeakers, idx, embedder, gllam, *topKMatches, *useUtterancesVectors, *useTermsVectors, qa.ConversationID, getClientForTask("SEARCH_CANDIDATES", "FAST_TEXT_SERVER", strongClient, fastClient, defaultClient))
+			searchStructClient, _ := providerReg.GetStructClientForTask("SEARCH_CANDIDATES", "")
+			searchClient := getClientForTask("SEARCH_CANDIDATES", "FAST_TEXT_SERVER", strongClient, fastClient, defaultClient)
+			sqCandidates, sqTerms := retrieveCandidatesForQuery(ctx, sq, targetSpeakers, idx, embedder, gllam, *topKMatches, *useUtterancesVectors, *useTermsVectors, qa.ConversationID, searchClient, searchStructClient)
 			subQueryCandidates[sqIdx] = sqCandidates
 
 			for _, term := range sqTerms {
@@ -2344,9 +2384,77 @@ Key Search Directives:
 		return []string{query}
 	}
 	if len(subQueries) > 4 {
-	subQueries = subQueries[:4]
+		subQueries = subQueries[:4]
 	}
 	return subQueries
+}
+
+func decomposeQueryWithTypeSafe(ctx context.Context, tsClient *engine.TypeSafeClient, query string) []string {
+	// Candidate sub-queries derived from conjunctions and question boundaries
+	delimiters := []string{" and ", " but ", " while ", " as well as ", "; ", "? "}
+	candidates := []string{query}
+	for _, d := range delimiters {
+		var next []string
+		for _, c := range candidates {
+			parts := strings.Split(c, d)
+			for _, p := range parts {
+				p = strings.TrimSpace(p)
+				if len(p) > 3 {
+					next = append(next, p)
+				}
+			}
+		}
+		if len(next) > len(candidates) && len(next) <= 4 {
+			candidates = next
+		}
+	}
+
+	if len(candidates) <= 1 {
+		return []string{query}
+	}
+
+	primitive := strings.ToLower(strings.TrimSpace(os.Getenv("TYPESAFE_PRIMITIVE")))
+	if primitive == "" {
+		primitive = strings.ToLower(strings.TrimSpace(os.Getenv("QUERY_DECOMPOSITION_PRIMITIVE")))
+	}
+	if primitive == "" {
+		primitive = "choice" // Default to choice; noul preserved as option
+	}
+
+	var selected []string
+	for _, cand := range candidates {
+		state := map[string]string{
+			"query":              query,
+			"candidate_subquery": cand,
+		}
+
+		if primitive == "noul" {
+			instructions := "In a conversational dialogue search, is this candidate sub-query a distinct, necessary search focus to locate the complete answer to the user question?"
+			score, err := tsClient.EvaluateNoul(ctx, state, instructions, nil)
+			if err != nil {
+				fmt.Printf("   ⚠️ Warning: TypeSafe EvaluateNoul error for query candidate %q: %v\n", cand, err)
+			} else if score >= 0.50 {
+				selected = append(selected, cand)
+			}
+		} else { // "choice" (default)
+			instructions := "Determine if this extracted clause represents a distinct, necessary search aspect to answer the user question:"
+			criteria := map[string]string{
+				"distinct_aspect":     "A distinct entity, event, or factual topic requiring separate retrieval",
+				"redundant_or_filler": "Filler, conversational framing, or redundant with another aspect",
+			}
+			choice, _, _, err := tsClient.EvaluateChoice(ctx, state, instructions, criteria)
+			if err != nil {
+				fmt.Printf("   ⚠️ Warning: TypeSafe EvaluateChoice error for query candidate %q: %v\n", cand, err)
+			} else if choice == "distinct_aspect" {
+				selected = append(selected, cand)
+			}
+		}
+	}
+
+	if len(selected) > 0 {
+		return selected
+	}
+	return []string{query}
 }
 
 func isCleanNaturalWord(w string) bool {
@@ -2381,7 +2489,7 @@ func isCleanPhrase(phrase string) bool {
 	return true
 }
 
-func retrieveCandidatesForQuery(ctx context.Context, query string, targetSpeakers []string, idx *engine.InvertedIndex, embedder engine.Embedder, gllam *engine.GllamEngine, topK int, useUtterancesVectors, useTermsVectors bool, conversationID string, llmClient *engine.LLMClient) ([]string, []string) {
+func retrieveCandidatesForQuery(ctx context.Context, query string, targetSpeakers []string, idx *engine.InvertedIndex, embedder engine.Embedder, gllam *engine.GllamEngine, topK int, useUtterancesVectors, useTermsVectors bool, conversationID string, llmClient *engine.LLMClient, structClient *engine.TypeSafeClient) ([]string, []string) {
 	var unigramTerms []string
 	var bigramPhrases []string
 
@@ -2435,10 +2543,17 @@ func retrieveCandidatesForQuery(ctx context.Context, query string, targetSpeaker
 		}
 	}
 
-	if llmClient != nil {
-		var combinedCandidates []string
-		combinedCandidates = append(combinedCandidates, unigramTerms...)
-		combinedCandidates = append(combinedCandidates, bigramPhrases...)
+	var combinedCandidates []string
+	combinedCandidates = append(combinedCandidates, unigramTerms...)
+	combinedCandidates = append(combinedCandidates, bigramPhrases...)
+
+	if structClient != nil {
+		tsUnigrams, tsPhrases := filterTermsWithTypeSafe(ctx, structClient, query, combinedCandidates)
+		if len(tsUnigrams) > 0 || len(tsPhrases) > 0 {
+			unigramTerms = tsUnigrams
+			bigramPhrases = tsPhrases
+		}
+	} else if llmClient != nil {
 		llmUnigrams, llmPhrases := filterTermsWithLLM(ctx, llmClient, query, combinedCandidates)
 		if len(llmUnigrams) > 0 || len(llmPhrases) > 0 {
 			unigramTerms = llmUnigrams
@@ -2757,7 +2872,133 @@ CRITICAL RETRIEVAL PRINCIPLES:
 	return fallbackUnigrams, fallbackPhrases
 }
 
+func filterTermsWithTypeSafe(ctx context.Context, tsClient *engine.TypeSafeClient, query string, candidateTerms []string) ([]string, []string) {
+	if len(candidateTerms) == 0 && strings.TrimSpace(query) == "" {
+		return candidateTerms, nil
+	}
+
+	if len(candidateTerms) > 40 {
+		candidateTerms = candidateTerms[:40]
+	}
+
+	type scoreResult struct {
+		term  string
+		score float64
+	}
+
+	primitive := strings.ToLower(strings.TrimSpace(os.Getenv("TYPESAFE_PRIMITIVE")))
+	if primitive == "" {
+		primitive = strings.ToLower(strings.TrimSpace(os.Getenv("SEARCH_CANDIDATES_PRIMITIVE")))
+	}
+	if primitive == "" {
+		primitive = "choice" // Default to choice; noul preserved as option
+	}
+
+	results := make([]scoreResult, len(candidateTerms))
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, 8) // max 8 concurrent requests
+
+	for i, term := range candidateTerms {
+		wg.Add(1)
+		go func(idx int, t string) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			state := map[string]string{
+				"query":          query,
+				"candidate_term": t,
+			}
+
+			var score float64
+			var err error
+
+			if primitive == "noul" {
+				instructions := "In a dialogue search, does this candidate term or phrase specifically identify factual information, entities, or answers to the user question (rather than conversational filler or request meta-words)?"
+				score, err = tsClient.EvaluateNoul(ctx, state, instructions, nil)
+				if err != nil {
+					fmt.Printf("   ⚠️ Warning: TypeSafe EvaluateNoul error for %q: %v\n", t, err)
+					score = 0.5 // neutral on error
+				}
+			} else { // "choice" (default)
+				instructions := "Classify whether this candidate search term specifically identifies factual information, entities, or answers to the user question:"
+				criteria := map[string]string{
+					"answer_bearing":        "Specific entity, topic, or factual clue needed to find the answer",
+					"conversational_filler": "Greeting, conversational filler, or request meta-word",
+				}
+				choice, probs, _, cErr := tsClient.EvaluateChoice(ctx, state, instructions, criteria)
+				err = cErr
+				if err != nil {
+					fmt.Printf("   ⚠️ Warning: TypeSafe EvaluateChoice error for %q: %v\n", t, err)
+					score = 0.5 // neutral on error
+				} else if choice == "answer_bearing" {
+					score = 1.0
+					if p, ok := probs["answer_bearing"]; ok {
+						score = p
+					}
+				} else {
+					score = 0.0
+					if p, ok := probs["answer_bearing"]; ok {
+						score = p
+					}
+				}
+			}
+			results[idx] = scoreResult{term: t, score: score}
+		}(i, term)
+	}
+
+	wg.Wait()
+
+	var unigrams []string
+	var phrases []string
+	seenU := make(map[string]bool)
+	seenP := make(map[string]bool)
+
+	for _, res := range results {
+		if res.score >= 0.50 {
+			t := strings.ToLower(strings.TrimSpace(res.term))
+			if strings.Contains(t, " ") {
+				if isCleanPhrase(t) && !seenP[t] {
+					seenP[t] = true
+					phrases = append(phrases, t)
+				}
+			} else {
+				if isCleanNaturalWord(t) && !metaRequestWords[t] && !stopWords[t] && !seenU[t] {
+					seenU[t] = true
+					unigrams = append(unigrams, t)
+				}
+			}
+		}
+	}
+
+	if len(unigrams) > 0 || len(phrases) > 0 {
+		var allFilt []string
+		allFilt = append(allFilt, unigrams...)
+		allFilt = append(allFilt, phrases...)
+		origJSON, _ := json.Marshal(candidateTerms)
+		filtJSON, _ := json.Marshal(allFilt)
+		fmt.Printf("   ├─ TypeSafe identified answer search terms: original %d %s -> answer terms %d %s\n", len(candidateTerms), string(origJSON), len(allFilt), string(filtJSON))
+		return unigrams, phrases
+	}
+
+	var fallbackUnigrams []string
+	var fallbackPhrases []string
+	for _, t := range candidateTerms {
+		if strings.Contains(t, " ") {
+			fallbackPhrases = append(fallbackPhrases, t)
+		} else {
+			fallbackUnigrams = append(fallbackUnigrams, t)
+		}
+	}
+	return fallbackUnigrams, fallbackPhrases
+}
+
 func getClientForTask(taskName string, defaultTier string, strongClient, fastClient, defaultClient *engine.LLMClient) *engine.LLMClient {
+	if providerReg != nil {
+		if client, err := providerReg.GetTextClientForTask(taskName, defaultTier); err == nil && client != nil {
+			return client
+		}
+	}
 	tier := getEnv(taskName, defaultTier)
 	if tier == "STRONG_TEXT_SERVER" && strongClient != nil {
 		return strongClient

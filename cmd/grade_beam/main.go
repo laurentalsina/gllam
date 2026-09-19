@@ -56,15 +56,7 @@ func main() {
 	outputPath := flag.String("output", "", "Path to output JSON file (prints to stdout if empty)")
 	flag.Parse()
 
-	strongServerEnv := os.Getenv("STRONG_TEXT_SERVER")
-	strongModelEnv := os.Getenv("STRONG_LLM_MODEL")
-	fastServerEnv := os.Getenv("FAST_TEXT_SERVER")
-	fastModelEnv := os.Getenv("FAST_LLM_MODEL")
-
-	if strongServerEnv == "" && fastServerEnv == "" {
-		fmt.Fprintf(os.Stderr, "❌ Error: Neither STRONG_TEXT_SERVER nor FAST_TEXT_SERVER is set in the environment!\n")
-		os.Exit(1)
-	}
+	providerReg := engine.NewProviderRegistryFromEnv()
 
 	file, err := os.Open(*resultsPath)
 	if err != nil {
@@ -75,29 +67,36 @@ func main() {
 
 	taskTier := os.Getenv("BENCH_RESULT_EVALUATION")
 	if taskTier == "" {
-		taskTier = "FAST_TEXT_SERVER"
+		taskTier = "LEMOND"
+	}
+
+	llmClient, err := providerReg.GetTextClientForTask("BENCH_RESULT_EVALUATION", "LEMOND")
+	if err != nil {
+		// Legacy fallbacks
+		strongServerEnv := os.Getenv("STRONG_TEXT_SERVER")
+		strongModelEnv := os.Getenv("STRONG_LLM_MODEL")
+		fastServerEnv := os.Getenv("FAST_TEXT_SERVER")
+		fastModelEnv := os.Getenv("FAST_LLM_MODEL")
+
+		if strongServerEnv != "" {
+			llmClient = engine.NewLLMClientWithKey(strongServerEnv, os.Getenv("OPENROUTER_API_KEY"), strongModelEnv)
+			llmClient.Tier = "strong"
+		} else if fastServerEnv != "" {
+			llmClient = engine.NewLLMClientWithKey(fastServerEnv, "", fastModelEnv)
+			llmClient.Tier = "fast"
+		} else {
+			fmt.Fprintf(os.Stderr, "❌ Error: No text model provider available for BENCH_RESULT_EVALUATION: %v\n", err)
+			os.Exit(1)
+		}
 	}
 
 	fmt.Println("=======================================================")
 	fmt.Println("📊 Starting BEAM Results Grading")
 	fmt.Printf("   ├─ Results: %s\n", *resultsPath)
-	fmt.Printf("   ├─ Fast Text Server: %s\n", fastServerEnv)
-	fmt.Printf("   ├─ Strong Text Server: %s\n", strongServerEnv)
+	fmt.Printf("   ├─ Grader Model: %s (BaseURL: %s)\n", llmClient.Model, llmClient.BaseURL)
 	fmt.Printf("   ├─ BENCH_RESULT_EVALUATION: %s\n", taskTier)
 	fmt.Printf("   ├─ Output: %s\n", *outputPath)
 	fmt.Println("=======================================================")
-
-	var llmClient *engine.LLMClient
-	if taskTier == "STRONG_TEXT_SERVER" && strongServerEnv != "" {
-		llmClient = engine.NewLLMClientWithKey(strongServerEnv, os.Getenv("OPENROUTER_API_KEY"), strongModelEnv)
-		llmClient.Tier = "strong"
-	} else if fastServerEnv != "" {
-		llmClient = engine.NewLLMClientWithKey(fastServerEnv, "", fastModelEnv)
-		llmClient.Tier = "fast"
-	} else {
-		llmClient = engine.NewLLMClientWithKey(strongServerEnv, os.Getenv("OPENROUTER_API_KEY"), strongModelEnv)
-		llmClient.Tier = "strong"
-	}
 
 	ctx := context.Background()
 

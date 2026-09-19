@@ -27,6 +27,10 @@ type ChatMessage struct {
 	Reasoning        string `json:"reasoning,omitempty"`
 }
 
+type ReasoningConfig struct {
+	Effort string `json:"effort,omitempty"`
+}
+
 type ChatCompletionRequest struct {
 	Model              string                 `json:"model,omitempty"`
 	Messages           []ChatMessage          `json:"messages"`
@@ -43,6 +47,7 @@ type ChatCompletionRequest struct {
 	MaxTokens          int                    `json:"max_tokens,omitempty"`
 	CachePrompt        bool                   `json:"cache_prompt,omitempty"`
 	ReasoningEffort    string                 `json:"reasoning_effort,omitempty"`
+	Reasoning          *ReasoningConfig       `json:"reasoning,omitempty"`
 	Seed               *int                   `json:"seed,omitempty"`
 }
 
@@ -72,14 +77,24 @@ type ChatCompletionResponse struct {
 
 // LLMClient interacts with a text-to-text generation API (OpenAI / OpenRouter / llama.cpp compatible)
 type LLMClient struct {
-	BaseURL string
-	APIKey  string
+	BaseURL           string
+	APIKey            string
 	Model             string
 	Tier              string // "strong", "fast", or "default"
 	NonStreaming      bool
 	MaxTokensOverride int
 	ReasoningEffort   string // override reasoning effort ("none", "low", "medium", "high")
 	client            *http.Client
+
+	// Overrides from ProviderConfig
+	TimeoutOverride          *time.Duration
+	ContextOverride          *int
+	TemperatureOverride      *float32
+	TopPOverride             *float32
+	MinPOverride             *float32
+	RepeatPenaltyOverride    *float32
+	PresencePenaltyOverride  *float32
+	FrequencyPenaltyOverride *float32
 }
 
 // ResolveAPIKey determines the appropriate API key for a given base URL, tier, and explicit override.
@@ -215,6 +230,10 @@ func (c *LLMClient) resolveChatURL() string {
 
 // GetTimeout returns the configured timeout duration based on the client's Tier and environment variables
 func (c *LLMClient) GetTimeout() time.Duration {
+	if c.TimeoutOverride != nil && *c.TimeoutOverride > 0 {
+		return *c.TimeoutOverride
+	}
+
 	// 1. Check tier-specific environment variables
 	if c.Tier == "strong" {
 		if tStr := os.Getenv("STRONG_MODEL_TIMEOUT"); tStr != "" {
@@ -261,6 +280,10 @@ func (c *LLMClient) GetTimeout() time.Duration {
 
 // GetContextSize returns the configured context window token limit based on client Tier and environment variables
 func (c *LLMClient) GetContextSize() int {
+	if c.ContextOverride != nil && *c.ContextOverride > 0 {
+		return *c.ContextOverride
+	}
+
 	if c.Tier == "strong" {
 		if cStr := os.Getenv("STRONG_MODEL_CONTEXT"); cStr != "" {
 			if tokens, err := strconv.Atoi(cStr); err == nil && tokens > 0 {
@@ -309,6 +332,10 @@ func parseEnvFloat(keys ...string) (float32, bool) {
 
 // GetTemperature returns the sampling temperature based on client Tier and environment variables
 func (c *LLMClient) GetTemperature() float32 {
+	if c.TemperatureOverride != nil {
+		return *c.TemperatureOverride
+	}
+
 	if c.Tier == "strong" {
 		if val, ok := parseEnvFloat("STRONG_MODEL_TEMPERATURE", "STRONG_TEMPERATURE"); ok {
 			return val
@@ -343,6 +370,10 @@ func (c *LLMClient) GetTemperature() float32 {
 
 // GetMinP returns the min_p sampling parameter
 func (c *LLMClient) GetMinP() *float32 {
+	if c.MinPOverride != nil {
+		return c.MinPOverride
+	}
+
 	if c.Tier == "strong" {
 		if val, ok := parseEnvFloat("STRONG_MODEL_MINP", "STRONG_MODEL_MIN_P", "STRONG_MINP"); ok {
 			return &val
@@ -369,6 +400,10 @@ func (c *LLMClient) GetMinP() *float32 {
 
 // GetTopP returns the top_p sampling parameter
 func (c *LLMClient) GetTopP() *float32 {
+	if c.TopPOverride != nil {
+		return c.TopPOverride
+	}
+
 	if c.Tier == "strong" {
 		if val, ok := parseEnvFloat("STRONG_MODEL_TOPP", "STRONG_MODEL_TOP_P", "STRONG_TOPP"); ok {
 			return &val
@@ -400,6 +435,10 @@ func (c *LLMClient) GetTopP() *float32 {
 
 // GetRepeatPenalty returns the repeat penalty sampling parameter
 func (c *LLMClient) GetRepeatPenalty() *float32 {
+	if c.RepeatPenaltyOverride != nil {
+		return c.RepeatPenaltyOverride
+	}
+
 	if c.isOpenAICompatible() {
 		return nil
 	}
@@ -430,6 +469,10 @@ func (c *LLMClient) GetRepeatPenalty() *float32 {
 
 // GetPresencePenalty returns the presence penalty sampling parameter
 func (c *LLMClient) GetPresencePenalty() *float32 {
+	if c.PresencePenaltyOverride != nil {
+		return c.PresencePenaltyOverride
+	}
+
 	if c.isOpenAICompatible() {
 		return nil
 	}
@@ -460,6 +503,10 @@ func (c *LLMClient) GetPresencePenalty() *float32 {
 
 // GetFrequencyPenalty returns the frequency penalty sampling parameter
 func (c *LLMClient) GetFrequencyPenalty() *float32 {
+	if c.FrequencyPenaltyOverride != nil {
+		return c.FrequencyPenaltyOverride
+	}
+
 	if c.isOpenAICompatible() {
 		return nil
 	}
@@ -696,8 +743,15 @@ func (c *LLMClient) generateWithFormatNoCache(ctx context.Context, systemPrompt,
 			Stream:             false,
 			MaxTokens:          maxTokens,
 			CachePrompt:        cachePrompt,
-			ReasoningEffort:    c.GetReasoningEffort(),
 			Seed:               c.GetSeed(),
+		}
+
+		if effort := c.GetReasoningEffort(); effort != "" {
+			if strings.Contains(strings.ToLower(c.BaseURL), "openrouter.ai") {
+				reqBody.Reasoning = &ReasoningConfig{Effort: effort}
+			} else {
+				reqBody.ReasoningEffort = effort
+			}
 		}
 
 		payload, err := json.Marshal(reqBody)
@@ -839,8 +893,15 @@ func (c *LLMClient) generateWithFormatNoCache(ctx context.Context, systemPrompt,
 		Stream:            true,
 		MaxTokens:         maxTokens,
 		CachePrompt:       cachePrompt,
-		ReasoningEffort:   c.GetReasoningEffort(),
 		Seed:              c.GetSeed(),
+	}
+
+	if effort := c.GetReasoningEffort(); effort != "" {
+		if strings.Contains(strings.ToLower(c.BaseURL), "openrouter.ai") {
+			reqBody.Reasoning = &ReasoningConfig{Effort: effort}
+		} else {
+			reqBody.ReasoningEffort = effort
+		}
 	}
 
 	body, err := json.Marshal(reqBody)

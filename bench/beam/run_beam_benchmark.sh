@@ -19,18 +19,14 @@ PREPROCESS_DATA="${PREPROCESS_DATA:-true}"
 TARGET_COMPRESSION="${TARGET_COMPRESSION:-60}"
 PREPROCESS_CONCURRENCY="${PREPROCESS_CONCURRENCY:-4}"
 
-# Validate required server endpoints
-if [ -z "$FAST_TEXT_SERVER" ] && [ -z "$STRONG_TEXT_SERVER" ]; then
-    echo "❌ ERROR: Neither FAST_TEXT_SERVER nor STRONG_TEXT_SERVER is set!" >&2
-    echo "Please source your environment configuration (e.g. source scripts/local_llm_examples/source_setup_gllam.sh)." >&2
-    exit 1
+# Auto-source multi-provider configuration if not already present in environment
+if [ -z "$CEREBRAS" ] && [ -z "$OPENROUTER" ] && [ -z "$LEMOND" ] && [ -z "$TYPESAFE" ] && [ -z "$FAST_TEXT_SERVER" ] && [ -z "$STRONG_TEXT_SERVER" ]; then
+    if [ -f "scripts/local_llm_examples/source_setup_gllam.sh" ]; then
+        source scripts/local_llm_examples/source_setup_gllam.sh
+    fi
 fi
 
-if [ -z "$EMBEDDINGS_SERVER" ]; then
-    echo "❌ ERROR: EMBEDDINGS_SERVER environment variable is not set!" >&2
-    echo "Please export EMBEDDINGS_SERVER before running this benchmark." >&2
-    exit 1
-fi
+export EMBEDDINGS_SERVER="${EMBEDDINGS_SERVER:-http://127.0.0.1:8800}"
 DB_PATH="./bench/gllam_data_beam_test.db"
 
 BEAM_CONVERSATIONS="/home/laurent/Projects/agentic_benchmarks/beam_100k_conversations.jsonl"

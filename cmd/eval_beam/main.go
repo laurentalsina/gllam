@@ -73,11 +73,22 @@ func main() {
 		gllam.SetPlannerExecutablePath(plannerPath)
 	}
 
+	providerReg = engine.NewProviderRegistryFromEnv()
+
 	strongServerEnv := getEnv("STRONG_TEXT_SERVER", "")
 	fastServerEnv := getEnv("FAST_TEXT_SERVER", "")
 	if strongServerEnv == "" && fastServerEnv == "" {
-		fmt.Fprintf(os.Stderr, "❌ Error: Neither STRONG_TEXT_SERVER nor FAST_TEXT_SERVER is set in the environment!\n")
-		os.Exit(1)
+		hasText := false
+		for _, p := range providerReg.Providers() {
+			if p.Kind == engine.ProviderKindText {
+				hasText = true
+				break
+			}
+		}
+		if !hasText {
+			fmt.Fprintf(os.Stderr, "❌ Error: Neither STRONG_TEXT_SERVER nor FAST_TEXT_SERVER is set in the environment, and no text provider is registered!\n")
+			os.Exit(1)
+		}
 	}
 
 	fmt.Println("Task Routing Environment Tiers:")
@@ -208,7 +219,14 @@ func main() {
 	fmt.Printf("Completed %d BEAM evaluations. Results saved to %s\n", count, *outPath)
 }
 
+var providerReg *engine.ProviderRegistry
+
 func getClientForTask(taskName string, defaultTier string, strongClient, fastClient, defaultClient *engine.LLMClient) *engine.LLMClient {
+	if providerReg != nil {
+		if client, err := providerReg.GetTextClientForTask(taskName, defaultTier); err == nil && client != nil {
+			return client
+		}
+	}
 	tier := getEnv(taskName, defaultTier)
 	if tier == "STRONG_TEXT_SERVER" && strongClient != nil {
 		return strongClient
